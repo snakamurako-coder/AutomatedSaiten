@@ -1122,38 +1122,44 @@ var BatchProcessor = (function() {
 
     var base64, studentId, skipSaveWarped = false, warpedFileId = file.warpedFileId || '';
     var ocrOnly = file.stage === 'ocr_only' || !!warpedFileId;
+    var fields = (typeof appState !== 'undefined' && appState.fields) ? appState.fields : [];
+    var needsClientWarpImage = fieldsNeedPerCropOcr(fields);
 
     if (!ocrOnly) {
       tracker.stepKey = 'load_warped';
-      var existingWarp = await gasRun('getExistingWarpedForFile', file.id || '', file.name);
-      if (existingWarp && existingWarp.warpedFileId) {
+      var existingWarp = await gasRun('loadWarpedImageForOcr', file.id || '', file.name, warpedFileId || '', false);
+      if (existingWarp && existingWarp.success && existingWarp.warpedFileId) {
         ocrOnly = true;
         warpedFileId = existingWarp.warpedFileId;
+        if (existingWarp.studentId) studentId = existingWarp.studentId;
       }
     }
 
     if (ocrOnly) {
       tracker.stepKey = 'load_warped';
-      if (!warpedFileId) {
-        var ew = await gasRun('getExistingWarpedForFile', file.id || '', file.name);
-        warpedFileId = ew && ew.warpedFileId ? ew.warpedFileId : '';
-      }
-      if (!warpedFileId) {
-        reportFileFailure(file, 'load_warped', '補正画像が見つかりません（OCRのみ再実行）');
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'load_warped' });
+      var needImageNow = needsClientWarpImage || !studentId;
+      var warpLoad = await gasRun('loadWarpedImageForOcr', file.id || '', file.name, warpedFileId || '', needImageNow);
+      if (!warpLoad || !warpLoad.success) {
+        reportFileFailure(file, 'load_warped', (warpLoad && warpLoad.error) || '補正画像の読込に失敗しました');
         return;
       }
-      var wdata = await gasRun('getDriveFileBase64', warpedFileId);
-      base64 = 'data:image/jpeg;base64,' + wdata.base64;
-      var warpInfo = await gasRun('getExistingWarpedForFile', file.id || '', file.name);
-      studentId = (warpInfo && warpInfo.studentId) ? warpInfo.studentId : '';
+      warpedFileId = warpLoad.warpedFileId;
+      studentId = studentId || warpLoad.studentId || '';
       skipSaveWarped = true;
-      if (!studentId) {
-        var wimg = await loadImageElementFromBase64(base64);
-        var wmat = cv.imread(wimg);
-        studentId = detectOmrId(wmat, getPaperConfig(orientation), fillThreshold);
-        wmat.delete();
+      if (needImageNow) {
+        if (!warpLoad.base64) {
+          reportFileFailure(file, 'load_warped', '補正画像データを取得できませんでした');
+          return;
+        }
+        base64 = 'data:image/jpeg;base64,' + warpLoad.base64;
+        if (!studentId) {
+          var wimg = await loadImageElementFromBase64(base64);
+          var wmat = cv.imread(wimg);
+          studentId = detectOmrId(wmat, getPaperConfig(orientation), fillThreshold);
+          wmat.delete();
+        }
       }
-      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'load_warped' });
     } else {
       tracker.stepKey = 'load_src';
       if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'load_src' });
@@ -1182,12 +1188,19 @@ var BatchProcessor = (function() {
       skipSaveWarped = true;
     }
 
-    var fields = (typeof appState !== 'undefined' && appState.fields) ? appState.fields : [];
     var fieldCrops = null;
     tracker.stepKey = 'crop';
     if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'crop' });
     try {
-      if (fieldsNeedPerCropOcr(fields)) {
+      if (needsClientWarpImage) {
+        if (!base64) {
+          var warpForCrop = await gasRun('loadWarpedImageForOcr', file.id || '', file.name, warpedFileId || '', true);
+          if (!warpForCrop || !warpForCrop.success || !warpForCrop.base64) {
+            reportFileFailure(file, 'load_warped', (warpForCrop && warpForCrop.error) || '欄切り出し用の補正画像を取得できません');
+            return;
+          }
+          base64 = 'data:image/jpeg;base64,' + warpForCrop.base64;
+        }
         fieldCrops = await buildFieldCropsFromWarped(base64, fields);
       }
     } catch (cropErr) {
@@ -1198,7 +1211,8 @@ var BatchProcessor = (function() {
     tracker.stepKey = 'ocr';
     if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'ocr' });
     var ocrMeta = Object.assign({}, file, { warpedFileId: warpedFileId });
-    var res = await gasRun('ocrStudentPaper', ocrMeta, studentId, base64, fieldCrops, { skipSaveWarped: skipSaveWarped, warpedFileId: warpedFileId });
+    var ocrImagePayload = skipSaveWarped ? '' : (base64 || '');
+    var res = await gasRun('ocrStudentPaper', ocrMeta, studentId, ocrImagePayload, fieldCrops, { skipSaveWarped: skipSaveWarped, warpedFileId: warpedFileId });
     if (res.success) {
       stats.done++;
       clearFailedFile(file);
@@ -1324,23 +1338,55 @@ function loadImageElementFromBase64(base64) {
 }
 function gasRun(fn) {
   var args = Array.prototype.slice.call(arguments, 1);
-  return new Promise(function(resolve, reject) {
-    if (typeof google === 'undefined' || !google.script || !google.script.run) { reject(new Error('GAS 環境ではありません')); return; }
-    if (typeof google.script.run[fn] !== 'function') {
-      reject(new Error('サーバー関数が見つかりません: ' + fn + '（clasp push 後、Webアプリを開き直してください）'));
-      return;
-    }
-    var runner = google.script.run
-      .withSuccessHandler(function(result) {
-        if (result === null || result === undefined) {
-          reject(new Error('サーバーから応答がありません（タイムアウトまたはデプロイ未反映）。メニュー「自動採点 → Webアプリを開く」で開き直してください。'));
-        } else {
-          resolve(result);
-        }
-      })
-      .withFailureHandler(reject);
-    runner[fn].apply(runner, args);
-  });
+  return gasRunWithRetry(fn, args, { maxAttempts: 3, delayMs: 2000 });
+}
+
+function isRetryableGasError(err) {
+  var msg = String(err && err.message ? err.message : err);
+  return msg.indexOf('サーバーから応答がありません') >= 0 ||
+    msg.indexOf('Timeout') >= 0 ||
+    msg.indexOf('timeout') >= 0 ||
+    msg.indexOf('Exceeded maximum') >= 0;
+}
+
+function sleepMs(ms) {
+  return new Promise(function(resolve) { setTimeout(resolve, ms); });
+}
+
+function gasRunWithRetry(fn, args, opts) {
+  opts = opts || {};
+  var maxAttempts = opts.maxAttempts || 3;
+  var delayMs = opts.delayMs || 2000;
+
+  function attempt(n) {
+    return new Promise(function(resolve, reject) {
+      if (typeof google === 'undefined' || !google.script || !google.script.run) {
+        reject(new Error('GAS 環境ではありません'));
+        return;
+      }
+      if (typeof google.script.run[fn] !== 'function') {
+        reject(new Error('サーバー関数が見つかりません: ' + fn + '（clasp push 後、Webアプリを開き直してください）'));
+        return;
+      }
+      var runner = google.script.run
+        .withSuccessHandler(function(result) {
+          if (result === null || result === undefined) {
+            reject(new Error('サーバーから応答がありません（' + fn + '）。同時実行過多・転送量超過・GASタイムアウトの可能性があります。'));
+          } else {
+            resolve(result);
+          }
+        })
+        .withFailureHandler(reject);
+      runner[fn].apply(runner, args);
+    }).catch(function(err) {
+      if (n < maxAttempts && isRetryableGasError(err)) {
+        return sleepMs(delayMs * n).then(function() { return attempt(n + 1); });
+      }
+      throw err;
+    });
+  }
+
+  return attempt(1);
 }
 
 /** セッション限定のテスト再開キャッシュ（タブを閉じると破棄・メモリのみ） */

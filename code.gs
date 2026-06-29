@@ -1285,6 +1285,7 @@ function naturalCompareFileNames_(nameA, nameB) {
 }
 
 function getDriveFileBase64(fileId) {
+  if (!fileId) throw new Error('ファイルIDが指定されていません。');
   var file = DriveApp.getFileById(fileId);
   var mime = file.getMimeType();
   var blob = file.getBlob();
@@ -1296,6 +1297,40 @@ function getDriveFileBase64(fileId) {
     base64: bytes,
     isPdf: mime === 'application/pdf'
   };
+}
+
+function readWarpedDataUrlFromDrive_(warpedFileId) {
+  var data = getDriveFileBase64(warpedFileId);
+  return 'data:image/jpeg;base64,' + data.base64;
+}
+
+/** 補正画像のメタ＋必要なら base64 を1回の呼び出しで返す（google.script.run 多重呼び出し回避） */
+function loadWarpedImageForOcr(sourceFileId, sourceFileName, warpedFileIdHint, includeBase64) {
+  try {
+    var ss = getActiveTestSs();
+    var warpedId = warpedFileIdHint ? String(warpedFileIdHint) : '';
+    if (!warpedId) warpedId = getWarpedFileIdFromResults(ss, sourceFileId);
+    if (!warpedId) warpedId = findWarpedFileInFolder_(sourceFileId, sourceFileName);
+    if (!warpedId) {
+      return { success: false, error: '補正画像が見つかりません。' };
+    }
+    var studentId = getStudentIdFromResults(ss, sourceFileId);
+    var out = {
+      success: true,
+      warpedFileId: warpedId,
+      studentId: studentId,
+      fileId: sourceFileId || '',
+      fileName: sourceFileName || ''
+    };
+    if (includeBase64 !== false) {
+      var data = getDriveFileBase64(warpedId);
+      out.base64 = data.base64;
+      out.mimeType = data.mimeType;
+    }
+    return out;
+  } catch (error) {
+    return { success: false, error: error.toString() };
+  }
 }
 
 function saveWarpedImage(base64Image, originalFileName, studentId, sourceFileId) {
@@ -1881,7 +1916,16 @@ function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops, options)
         archiveOriginalFile(sourceFileId, folderId);
       }
     }
-    var textMapping = runOcrOnWarpedImage_(warpedBase64, fields, fieldCrops || []);
+    var ocrImage = warpedBase64;
+    var hasPayload = ocrImage && String(ocrImage).indexOf('base64,') >= 0 && String(ocrImage).split(',')[1];
+    if (!hasPayload) {
+      if (fieldCrops && fieldCrops.length && fieldsNeedPerCropOcr_(fields)) {
+        ocrImage = ocrImage || 'data:image/jpeg;base64,';
+      } else {
+        ocrImage = readWarpedDataUrlFromDrive_(saved.fileId);
+      }
+    }
+    var textMapping = runOcrOnWarpedImage_(ocrImage, fields, fieldCrops || []);
     var cleanStudentId = (studentId && !String(studentId).includes('?')) ? String(studentId) : '';
 
     return {
