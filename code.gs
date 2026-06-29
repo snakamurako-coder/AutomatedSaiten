@@ -4,15 +4,16 @@
 
 var HUB_SS_ID_KEY = 'HUB_SS_ID';
 
-function doGet() {
+function doGet(e) {
   try {
+    applyHubIdFromRequest_(e);
     initializeHub();
   } catch (err) {
     return HtmlService.createHtmlOutput(
       '<div style="font-family:sans-serif;padding:2em;max-width:640px">' +
       '<h2>初期設定が必要です</h2>' +
       '<p>' + err.message + '</p>' +
-      '<p>ハブ用スプレッドシートを開き、メニュー「自動採点 → ハブを登録」を実行してから Web アプリを再読み込みしてください。</p>' +
+      '<p>ハブ用スプレッドシートを開き、メニュー「自動採点 → Webアプリを開く」（または「ハブを登録」）を実行してから再度アクセスしてください。</p>' +
       '</div>'
     ).setTitle('模範解答ベース自動採点システム');
   }
@@ -21,17 +22,59 @@ function doGet() {
     .addMetaTag('viewport', 'width=device-width, initial-scale=1');
 }
 
+function applyHubIdFromRequest_(e) {
+  if (!e || !e.parameter) return;
+  var hubId = e.parameter.hubId || e.parameter.hubSsId;
+  if (!hubId) return;
+  PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, hubId);
+  try {
+    setupHubSheets(SpreadsheetApp.openById(hubId));
+  } catch (err) { /* hubId invalid */ }
+}
+
 function onOpen() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (ss) {
     PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
     setupHubSheets(ss);
+    try { syncHubTestList(); } catch (e) { /* ignore on first open */ }
   }
   SpreadsheetApp.getUi()
     .createMenu('自動採点')
+    .addItem('Webアプリを開く', 'openWebAppFromMenu')
     .addItem('ハブを登録', 'registerHubSpreadsheet')
+    .addItem('テスト一覧を再同期', 'syncHubTestListFromMenu')
     .addItem('古いWARP設定を削除', 'cleanupWarpScriptProperties')
     .addToUi();
+}
+
+function openWebAppFromMenu() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
+  PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
+  setupHubSheets(ss);
+  syncHubTestList();
+  var url = ScriptApp.getService().getUrl();
+  if (!url) {
+    SpreadsheetApp.getUi().alert('Webアプリが未デプロイです。「デプロイ」→「新しいデプロイ」で Web アプリを公開してください。');
+    return;
+  }
+  var sep = url.indexOf('?') >= 0 ? '&' : '?';
+  var openUrl = url + sep + 'hubId=' + encodeURIComponent(ss.getId());
+  var html = HtmlService.createHtmlOutput(
+    '<p style="font-family:sans-serif;font-size:13px">アプリを開いています…</p>' +
+    '<script>window.open("' + openUrl + '","_blank");google.script.host.close();</script>'
+  ).setWidth(260).setHeight(90);
+  SpreadsheetApp.getUi().showModalDialog(html, '自動採点アプリ');
+}
+
+function syncHubTestListFromMenu() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
+  PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
+  setupHubSheets(ss);
+  var n = syncHubTestList();
+  SpreadsheetApp.getUi().alert('テスト一覧を再同期しました（' + n + ' 件）。');
 }
 
 function registerHubSpreadsheet() {
@@ -40,7 +83,8 @@ function registerHubSpreadsheet() {
   PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
   setupHubSheets(ss);
   initializeHub();
-  SpreadsheetApp.getUi().alert('ハブを登録しました。\n' + ss.getUrl());
+  var n = syncHubTestList();
+  SpreadsheetApp.getUi().alert('ハブを登録しました。\n' + ss.getUrl() + '\n\nテスト一覧: ' + n + ' 件を同期');
   return { hubSsId: ss.getId(), url: ss.getUrl() };
 }
 
@@ -479,6 +523,7 @@ function createTest(testName, subject, dateTime) {
 
 function listTests(limit) {
   initializeHub();
+  syncHubTestList();
   var hubSs = getHubSs();
   setupHubSheets(hubSs);
   var sheet = hubSs.getSheetByName(SHEET_HUB_TEST_LIST);
@@ -491,6 +536,7 @@ function listTests(limit) {
   var activeId = getActiveTestSsId();
   var list = [];
   for (var i = 1; i < data.length; i++) {
+    if (!data[i][1]) continue;
     list.push({
       testName: data[i][0],
       testSsId: data[i][1],
@@ -513,6 +559,121 @@ function listTests(limit) {
 
 function getRecentTests(limit) {
   return listTests(limit || 20);
+}
+
+function getAppBootstrap() {
+  try {
+    initializeHub();
+    var hubSs = getHubSs();
+    var tests = listTests(50);
+    return {
+      ok: true,
+      hubSsId: hubSs.getId(),
+      hubUrl: hubSs.getUrl(),
+      hubName: hubSs.getName(),
+      activeTestSsId: getActiveTestSsId(),
+      tests: tests
+    };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e.message || String(e),
+      hubSsId: '',
+      hubUrl: '',
+      hubName: '',
+      activeTestSsId: getActiveTestSsId(),
+      tests: []
+    };
+  }
+}
+
+function getHubParentFolder_(hubSs) {
+  var hubFile = DriveApp.getFileById(hubSs.getId());
+  var parents = hubFile.getParents();
+  return parents.hasNext() ? parents.next() : null;
+}
+
+function buildTestListEntryFromSs(ss) {
+  ensureTestInfoKeys(ss);
+  return {
+    testName: getTestInfoValue(ss, 'テスト名') || ss.getName(),
+    testSsId: ss.getId(),
+    url: ss.getUrl(),
+    createdAt: getTestInfoValue(ss, '作成日時') || Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss'),
+    status: getTestInfoValue(ss, 'ステータス') || '作業中',
+    currentStep: getTestInfoValue(ss, '現在ステップ') || '0',
+    lastSavedAt: getTestInfoValue(ss, '最終保存日時') || ''
+  };
+}
+
+function discoverTestSpreadsheetsInHubFolder(hubSs) {
+  var hubId = hubSs.getId();
+  var folder = getHubParentFolder_(hubSs);
+  if (!folder) return [];
+
+  var list = [];
+  var files = folder.getFilesByType(MimeType.GOOGLE_SHEETS);
+  while (files.hasNext()) {
+    var file = files.next();
+    if (file.getId() === hubId) continue;
+    try {
+      var ss = SpreadsheetApp.openById(file.getId());
+      if (!ss.getSheetByName(SHEET_TEST_INFO)) continue;
+      list.push(buildTestListEntryFromSs(ss));
+    } catch (err) { /* skip */ }
+  }
+  return list;
+}
+
+function appendHubTestRow(sheet, entry) {
+  ensureHubSheetColumns(sheet);
+  sheet.appendRow([
+    entry.testName,
+    entry.testSsId,
+    entry.url,
+    entry.createdAt,
+    entry.status || '作業中',
+    entry.currentStep != null ? String(entry.currentStep) : '0',
+    entry.lastSavedAt || ''
+  ]);
+}
+
+function syncHubTestRowFromTestInfo(sheet, rowNum, entry) {
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colStep = headers.indexOf('現在ステップ');
+  var colSaved = headers.indexOf('最終保存日時');
+  var colStatus = headers.indexOf('ステータス');
+  var colName = headers.indexOf('テスト名');
+  if (colName >= 0 && entry.testName) sheet.getRange(rowNum, colName + 1).setValue(entry.testName);
+  if (colStep >= 0 && entry.currentStep !== '') sheet.getRange(rowNum, colStep + 1).setValue(String(entry.currentStep));
+  if (colSaved >= 0 && entry.lastSavedAt) sheet.getRange(rowNum, colSaved + 1).setValue(entry.lastSavedAt);
+  if (colStatus >= 0 && entry.status) sheet.getRange(rowNum, colStatus + 1).setValue(entry.status);
+}
+
+function syncHubTestList() {
+  var hubSs = getHubSs();
+  setupHubSheets(hubSs);
+  var sheet = hubSs.getSheetByName(SHEET_HUB_TEST_LIST);
+  ensureHubSheetColumns(sheet);
+
+  var data = sheet.getDataRange().getValues();
+  var existing = {};
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1]) existing[String(data[i][1])] = i + 1;
+  }
+
+  var discovered = discoverTestSpreadsheetsInHubFolder(hubSs);
+  discovered.forEach(function(entry) {
+    var rowNum = existing[entry.testSsId];
+    if (rowNum) {
+      syncHubTestRowFromTestInfo(sheet, rowNum, entry);
+    } else {
+      appendHubTestRow(sheet, entry);
+      existing[entry.testSsId] = sheet.getLastRow();
+    }
+  });
+
+  return discovered.length;
 }
 
 function setActiveTest(testSsId) {
@@ -552,6 +713,13 @@ function updateHubTestProgress(testSsId, stepNum, savedAt) {
       return;
     }
   }
+  try {
+    var ss = SpreadsheetApp.openById(testSsId);
+    appendHubTestRow(sheet, buildTestListEntryFromSs(ss));
+    var lastRow = sheet.getLastRow();
+    if (colStep >= 0) sheet.getRange(lastRow, colStep + 1).setValue(String(stepNum));
+    if (colSaved >= 0) sheet.getRange(lastRow, colSaved + 1).setValue(savedAt);
+  } catch (e) { /* ignore */ }
 }
 
 function saveStepProgress(stepNum, clientPayload) {

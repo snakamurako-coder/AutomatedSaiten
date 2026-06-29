@@ -28,7 +28,8 @@
         <select id="recent-test-select" class="w-full text-xs border rounded p-1 mb-1" onchange="onRecentTestChange(this.value)">
             <option value="">-- 作業中のテスト --</option>
         </select>
-        <p id="active-test-label" class="text-xs text-gray-600 mb-3 truncate">テスト未選択</p>
+        <p id="active-test-label" class="text-xs text-gray-600 mb-1 truncate">テスト未選択</p>
+        <p id="hub-label" class="text-xs text-gray-400 mb-3 truncate"></p>
         <nav id="step-nav" class="space-y-1 text-xs flex-1 overflow-y-auto"></nav>
         <div id="status-msg" class="mt-3 text-xs text-center text-gray-600 min-h-[2rem] border-t pt-2"></div>
     </div>
@@ -743,16 +744,54 @@ function formatTestOptionLabel(t) {
     return t.testName + '（' + step + ' / ' + saved + '）';
 }
 
+function applyTestsToUi(list) {
+    var sel = document.getElementById('recent-test-select');
+    var current = sel.value;
+    sel.innerHTML = '<option value="">-- 作業中のテスト --</option>' + (list || []).map(function(t) {
+        return '<option value="' + t.testSsId + '"' + (t.isActive ? ' selected' : '') + '>' + formatTestOptionLabel(t).replace(/</g, '&lt;') + '</option>';
+    }).join('');
+    if (current) sel.value = current;
+
+    document.getElementById('test-list').innerHTML = (list && list.length) ? list.map(function(t) {
+        var label = formatTestOptionLabel(t);
+        return '<button type="button" onclick="selectTest(\'' + t.testSsId + '\')" class="w-full text-left border rounded p-2 hover:bg-blue-50 ' + (t.isActive ? 'border-blue-400 bg-blue-50' : '') + '">' + label.replace(/</g, '&lt;') + '</button>';
+    }).join('') : '<p class="text-gray-400">テストがありません。⓪で新規作成するか、同じフォルダ内のテストSSを「テスト一覧を再同期」で取り込んでください。</p>';
+}
+
 async function refreshRecentTestsDropdown() {
     try {
-        var list = await gasRun('getRecentTests', 20);
-        var sel = document.getElementById('recent-test-select');
-        var current = sel.value;
-        sel.innerHTML = '<option value="">-- 作業中のテスト --</option>' + list.map(function(t) {
-            return '<option value="' + t.testSsId + '"' + (t.isActive ? ' selected' : '') + '>' + formatTestOptionLabel(t).replace(/</g, '&lt;') + '</option>';
-        }).join('');
-        if (current) sel.value = current;
-    } catch (e) { /* ignore */ }
+        var list = await gasRun('getRecentTests', 50);
+        applyTestsToUi(list);
+    } catch (e) {
+        setStatus('テスト一覧の取得に失敗: ' + (e.message || e), true);
+    }
+}
+
+async function loadAppBootstrap() {
+    try {
+        var boot = await gasRun('getAppBootstrap');
+        if (!boot.ok) {
+            document.getElementById('hub-label').innerHTML = '<span class="text-red-600">ハブ未登録</span>';
+            setStatus(boot.error || 'ハブの初期化に失敗しました。スプレッドシートから「自動採点 → Webアプリを開く」を実行してください。', true);
+            return;
+        }
+        document.getElementById('hub-label').innerHTML = 'ハブ: <a href="' + boot.hubUrl + '" target="_blank" class="text-blue-600 underline">' + escapeHtml(boot.hubName) + '</a>';
+        applyTestsToUi(boot.tests);
+
+        var resumeId = boot.activeTestSsId;
+        if (!resumeId && boot.tests.length > 0) resumeId = boot.tests[0].testSsId;
+        if (resumeId) {
+            await selectTest(resumeId);
+            var t = boot.tests.find(function(x) { return x.testSsId === resumeId; });
+            if (t && t.currentStep !== '' && t.currentStep != null) {
+                setStatus('作業を再開: ' + t.testName + '（Step ' + t.currentStep + '）');
+            }
+        } else if (!boot.tests.length) {
+            setStatus('テストがありません。⓪ テスト作成から始めてください。');
+        }
+    } catch (e) {
+        setStatus('初期化に失敗: ' + (e.message || e), true);
+    }
 }
 
 function onRecentTestChange(testSsId) {
@@ -881,13 +920,7 @@ async function createNewTest() {
 }
 
 async function refreshTestList() {
-    try {
-        var list = await gasRun('listTests');
-        document.getElementById('test-list').innerHTML = list.length ? list.map(function(t) {
-            var label = formatTestOptionLabel(t);
-            return '<button type="button" onclick="selectTest(\'' + t.testSsId + '\')" class="w-full text-left border rounded p-2 hover:bg-blue-50 ' + (t.isActive ? 'border-blue-400 bg-blue-50' : '') + '">' + label.replace(/</g, '&lt;') + '</button>';
-        }).join('') : '<p class="text-gray-400">テストがありません</p>';
-    } catch (e) { /* ignore on load */ }
+    await refreshRecentTestsDropdown();
 }
 
 async function selectTest(testSsId, targetStep) {
@@ -1284,12 +1317,8 @@ async function saveVerificationEdits() {
 
 document.addEventListener('DOMContentLoaded', function() {
     initStepNav();
-    refreshTestList();
-    refreshRecentTestsDropdown();
+    loadAppBootstrap();
     refreshVisionKeyStatus();
-    gasRun('getActiveTestSsId').then(function(id) {
-        if (id) selectTest(id);
-    }).catch(function(){});
 });
 </script>
 </body>
