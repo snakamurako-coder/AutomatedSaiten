@@ -16,11 +16,19 @@
         .step-btn.done { background: #dcfce7; color: #166534; }
         #editor-canvas, #batch-preview-canvas { max-width: 100%; cursor: crosshair; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
         .workspace-scroll { overflow: auto; max-height: calc(100vh - 120px); }
-        #crop-viewer-modal { display: none; position: fixed; inset: 0; z-index: 9999; background: rgba(0,0,0,0.75); }
-        #crop-viewer-modal.open { display: flex; align-items: center; justify-content: center; }
-        #crop-viewer-panel { background: white; border-radius: 8px; width: min(92vw, 1200px); max-height: 90vh; display: flex; flex-direction: column; }
-        #crop-viewer-scroll { overflow: auto; flex: 1; min-height: 200px; max-height: calc(90vh - 120px); background: #f3f4f6; }
-        #crop-viewer-img-wrap { display: inline-block; transform-origin: top left; }
+        #crop-gallery-modal { display: none; position: fixed; inset: 0; z-index: 10000; background: #111827; flex-direction: column; }
+        #crop-gallery-modal.open { display: flex; }
+        #crop-gallery-toolbar { flex-shrink: 0; background: #1f2937; color: #f9fafb; padding: 0.75rem 1rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; border-bottom: 1px solid #374151; }
+        #crop-gallery-scroll { flex: 1; overflow: auto; padding: 1rem; min-height: 0; }
+        #crop-gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(calc(var(--tile-base-w, 200px) * var(--gallery-zoom, 1)), 1fr));
+            gap: 0.5rem;
+            align-items: start;
+        }
+        .crop-gallery-tile { background: #fff; border-radius: 4px; overflow: hidden; border: 2px solid transparent; cursor: pointer; }
+        .crop-gallery-tile.deemed-checked { border-color: #2563eb; box-shadow: 0 0 0 1px #2563eb; }
+        .crop-gallery-tile img { width: 100%; height: auto; display: block; background: #f3f4f6; }
         .crop-tile.deemed-checked { box-shadow: 0 0 0 2px #2563eb; background: #eff6ff; }
         .crit-row-deemed-checked { background: #eff6ff; }
     </style>
@@ -123,7 +131,7 @@
 
             <div class="border rounded p-3 bg-amber-50 space-y-2">
                 <div class="text-xs font-bold text-amber-900">OCRテキスト置換（例: muchfasterthan → much faster than）</div>
-                <p class="text-xs text-amber-800">「置換ルールを保存」はルールのみ保存します。「置換を適用して再集約」で <b>採点結果シートのテキスト列</b> を書き換えます（手書きゆれの集約用）。</p>
+                <p class="text-xs text-amber-800">「置換ルールを保存」はルールのみ保存します。「置換を適用して再集約（SS書換）」で <b>採点結果シートの {記述欄名}_テキスト 列</b> のセル値を直接書き換えます（③のOCR結果も同期更新）。</p>
                 <div class="overflow-auto max-h-40 border rounded bg-white">
                     <table class="w-full text-xs">
                         <thead class="bg-gray-100"><tr><th class="p-1">検索</th><th class="p-1">置換後</th><th class="p-1">正規表現</th><th class="p-1"></th></tr></thead>
@@ -161,6 +169,7 @@
                     <button type="button" onclick="selectAllOutlierRows(true)" class="bg-white border px-2 py-1 rounded">表示を全選択</button>
                     <button type="button" onclick="selectAllOutlierRows(false)" class="bg-white border px-2 py-1 rounded">表示を解除</button>
                     <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showSelectedOutlierCrops)" class="bg-blue-600 text-white px-2 py-1 rounded font-bold">選択を画像表示</button>
+                    <button type="button" id="crop-gallery-open-btn" onclick="openCropGallery()" class="bg-blue-800 text-white px-2 py-1 rounded font-bold disabled:opacity-40" disabled>全画面ギャラリー</button>
                 </div>
                 <div id="outlier-groups-list" class="max-h-36 overflow-auto text-xs border rounded bg-white p-2"></div>
                 <div id="outlier-crop-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-[28rem] overflow-auto"></div>
@@ -225,16 +234,20 @@
 
 <img id="hidden-source-img" style="display:none">
 
-<div id="crop-viewer-modal" onclick="if(event.target===this) closeCropViewer()">
-    <div id="crop-viewer-panel" class="p-3 shadow-xl" onclick="event.stopPropagation()">
-        <div class="flex flex-wrap gap-2 items-center justify-between mb-2 text-xs">
-            <div id="crop-viewer-meta" class="font-mono truncate flex-1"></div>
-            <label class="flex items-center gap-1">拡大 <input type="range" id="crop-viewer-zoom" min="30" max="400" value="100" class="w-32"> <span id="crop-viewer-zoom-label">100%</span></label>
-            <button type="button" onclick="closeCropViewer()" class="border rounded px-2 py-1 bg-gray-100">閉じる</button>
-        </div>
-        <div id="crop-viewer-scroll">
-            <div id="crop-viewer-img-wrap"><img id="crop-viewer-img" alt="回答欄" class="border bg-white"></div>
-        </div>
+<div id="crop-gallery-modal" onclick="if(event.target===this) closeCropGallery()">
+    <div id="crop-gallery-toolbar" onclick="event.stopPropagation()">
+        <span class="font-bold text-sm">回答欄ギャラリー</span>
+        <span id="crop-gallery-count" class="text-gray-300 text-xs"></span>
+        <label class="flex items-center gap-2 ml-auto text-xs">
+            表示倍率
+            <input type="range" id="crop-gallery-zoom" min="30" max="400" value="100" class="w-40">
+            <span id="crop-gallery-zoom-label" class="w-10">100%</span>
+        </label>
+        <span class="text-xs text-gray-400 hidden sm:inline">画像クリック → みなしチェック</span>
+        <button type="button" onclick="closeCropGallery()" class="border border-gray-500 rounded px-3 py-1 text-xs hover:bg-gray-700">閉じる (Esc)</button>
+    </div>
+    <div id="crop-gallery-scroll">
+        <div id="crop-gallery-grid"></div>
     </div>
 </div>
 
@@ -665,7 +678,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [] };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], galleryZoom: 100 };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1041,6 +1054,10 @@ function syncDeemedUiFromState() {
         var ans = decodeAnswerAttr(tile.dataset.answer || '');
         tile.classList.toggle('deemed-checked', isDeemedChecked(fid, ans));
     });
+    document.querySelectorAll('.crop-gallery-tile').forEach(function(tile) {
+        var ans = decodeAnswerAttr(tile.dataset.answer || '');
+        tile.classList.toggle('deemed-checked', isDeemedChecked(fid, ans));
+    });
     updateDeemedApplyButtonState();
 }
 
@@ -1097,37 +1114,85 @@ async function applyDeemedScoringAndReaggregate() {
         if (deemedInput) deemedInput.value = canonical;
         renderCriteriaTable();
         syncDeemedUiFromState();
+        await syncBatchTableFromSheet();
         await fetchOutlierGroups();
-        setStatus('みなし採点: ' + (res.updatedCount || 0) + ' セルを更新、' + appState.criteriaList.length + ' 種類の解答に再集約');
+        setStatus('みなし採点: 採点結果シート ' + (res.updatedCount || 0) + ' セルを正答例「' + canonical + '」に更新、' + appState.criteriaList.length + ' 種類に再集約');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
-function openCropViewer(cropSrc, meta) {
-    var modal = document.getElementById('crop-viewer-modal');
-    var img = document.getElementById('crop-viewer-img');
-    var metaEl = document.getElementById('crop-viewer-meta');
-    var zoom = document.getElementById('crop-viewer-zoom');
-    if (!modal || !img) return;
-    img.src = cropSrc;
-    metaEl.textContent = (meta.studentId || '-') + ' / ' + (meta.fileName || '') + ' / ' + (meta.answer_text || '');
-    if (zoom) { zoom.value = 100; updateCropViewerZoom(); }
-    modal.classList.add('open');
-    appState.cropViewerMeta = meta;
+function openCropGallery() {
+    var results = (appState.cropGridResults || []).filter(function(r) { return r.ok; });
+    if (!results.length) { setStatus('先に画像を読み込んでください', true); return; }
+    var modal = document.getElementById('crop-gallery-modal');
+    var zoom = document.getElementById('crop-gallery-zoom');
+    if (zoom) zoom.value = appState.galleryZoom || 100;
+    renderCropGalleryGrid();
+    document.getElementById('crop-gallery-count').textContent = results.length + ' 枚';
+    if (modal) modal.classList.add('open');
+    updateCropGalleryZoom();
+    document.body.style.overflow = 'hidden';
 }
 
-function closeCropViewer() {
-    var modal = document.getElementById('crop-viewer-modal');
+function closeCropGallery() {
+    var modal = document.getElementById('crop-gallery-modal');
     if (modal) modal.classList.remove('open');
+    document.body.style.overflow = '';
 }
 
-function updateCropViewerZoom() {
-    var zoom = document.getElementById('crop-viewer-zoom');
-    var wrap = document.getElementById('crop-viewer-img-wrap');
-    var label = document.getElementById('crop-viewer-zoom-label');
-    if (!zoom || !wrap) return;
+function updateCropGalleryZoom() {
+    var zoom = document.getElementById('crop-gallery-zoom');
+    var grid = document.getElementById('crop-gallery-grid');
+    var label = document.getElementById('crop-gallery-zoom-label');
+    if (!zoom || !grid) return;
     var pct = parseInt(zoom.value, 10) || 100;
-    wrap.style.transform = 'scale(' + (pct / 100) + ')';
+    appState.galleryZoom = pct;
+    grid.style.setProperty('--gallery-zoom', String(pct / 100));
     if (label) label.textContent = pct + '%';
+}
+
+function renderCropGalleryGrid() {
+    var grid = document.getElementById('crop-gallery-grid');
+    if (!grid) return;
+    var fid = getCriteriaFieldId();
+    var results = appState.cropGridResults || [];
+    grid.innerHTML = results.map(function(r, idx) {
+        if (!r.ok) return '';
+        var ans = r.row.answer_text || '';
+        var enc = encodeAnswerAttr(ans);
+        var deemedCls = isDeemedChecked(fid, ans) ? ' deemed-checked' : '';
+        return '<div class="crop-gallery-tile crop-tile' + deemedCls + '" data-answer="' + enc + '" data-crop-idx="' + idx + '">' +
+            '<img src="' + r.crop + '" alt="回答欄" draggable="false">' +
+            '<div class="text-[10px] p-1 bg-white"><b>' + escapeHtml(r.row.studentId || '-') + '</b></div>' +
+            '<div class="text-[10px] px-1 pb-1 truncate text-gray-600" title="' + escapeHtml(r.row.fileName || '') + '">' + escapeHtml(r.row.fileName || '') + '</div>' +
+            '<div class="text-[10px] px-1 pb-1 font-mono text-purple-800 truncate" title="' + escapeHtml(ans) + '">' + escapeHtml(ans) + '</div></div>';
+    }).join('');
+}
+
+async function syncBatchTableFromSheet() {
+    try {
+        var preview = await gasRun('getOcrResultPreview');
+        if (!preview || !preview.length) return;
+        var map = {};
+        preview.forEach(function(r) { if (r.fileId) map[r.fileId] = r; });
+        var fields = appState.fields || [];
+        (appState.batchFiles || []).forEach(function(f) {
+            var row = document.getElementById('batch-row-' + f.id);
+            var data = map[f.id];
+            if (!row || !data) return;
+            var idCell = row.querySelector('.batch-student-id');
+            if (idCell && data.studentId) idCell.textContent = data.studentId;
+            var tds = row.querySelectorAll('td');
+            fields.forEach(function(field, fi) {
+                var txt = (data.textMapping && data.textMapping[field.id]) || 'なし';
+                var cellIdx = 3 + fi;
+                if (tds[cellIdx]) {
+                    tds[cellIdx].textContent = txt;
+                    tds[cellIdx].className = 'p-1 border font-mono text-xs';
+                    tds[cellIdx].title = txt;
+                }
+            });
+        });
+    } catch (e) { /* batch table optional */ }
 }
 
 function getCriteriaFieldId() {
@@ -1181,6 +1246,9 @@ function collectOcrReplacementRulesFromUi() {
 
 function clearOutlierPanel() {
     appState.outlierGroups = [];
+    appState.cropGridResults = [];
+    var btn = document.getElementById('crop-gallery-open-btn');
+    if (btn) btn.disabled = true;
     document.getElementById('outlier-groups-list').innerHTML = '<p class="text-gray-400">「外れ値を検出」で少数派解答を一覧します</p>';
     document.getElementById('outlier-crop-grid').innerHTML = '';
 }
@@ -1264,6 +1332,8 @@ async function loadAnswerCropsForRows(rows, fieldId) {
         renderCropGrid(results);
     }
     appState.cropGridResults = results;
+    var btn = document.getElementById('crop-gallery-open-btn');
+    if (btn) btn.disabled = !results.some(function(r) { return r.ok; });
 }
 
 function renderCropGrid(results) {
@@ -1277,11 +1347,9 @@ function renderCropGrid(results) {
         var ans = r.row.answer_text || '';
         var enc = encodeAnswerAttr(ans);
         var deemedCls = isDeemedChecked(fid, ans) ? ' deemed-checked' : '';
-        return '<div class="crop-tile border rounded p-1 bg-white shadow-sm cursor-pointer' + deemedCls + '" data-answer="' + enc + '" data-crop-idx="' + idx + '">' +
-            '<img src="' + r.crop + '" class="crop-tile-img w-full h-auto border bg-gray-50" alt="回答欄">' +
-            '<div class="text-[10px] p-1 flex justify-between items-center">' +
-            '<span><b>' + escapeHtml(r.row.studentId || '-') + '</b></span>' +
-            '<button type="button" class="crop-expand-btn text-blue-600 underline" data-crop-idx="' + idx + '">拡大</button></div>' +
+        return '<div class="crop-tile border rounded p-1 bg-white shadow-sm cursor-pointer' + deemedCls + '" data-answer="' + enc + '" data-crop-idx="' + idx + '" title="クリックでみなしチェック">' +
+            '<img src="' + r.crop + '" class="crop-tile-img w-full h-auto border bg-gray-50" alt="回答欄" draggable="false">' +
+            '<div class="text-[10px] p-1"><b>' + escapeHtml(r.row.studentId || '-') + '</b></div>' +
             '<div class="text-[10px] px-1 truncate text-gray-600" title="' + escapeHtml(r.row.fileName || '') + '">' + escapeHtml(r.row.fileName || '') + '</div>' +
             '<div class="text-[10px] p-1 font-mono text-purple-800 truncate" title="' + escapeHtml(ans) + '">' + escapeHtml(ans) + '</div></div>';
     }).join('');
@@ -1293,7 +1361,7 @@ async function showSelectedOutlierCrops() {
     if (!rows.length) { setStatus('表示する回答を選択してください', true); return; }
     setStatus(rows.length + ' 枚の回答欄画像を読み込み中...');
     await loadAnswerCropsForRows(rows, fid);
-    setStatus(rows.length + ' 枚を表示しました');
+    setStatus(rows.length + ' 枚を表示しました。「全画面ギャラリー」で拡大・一覧表示できます');
 }
 
 async function showAnswerPatternCrops(answerText) {
@@ -1345,9 +1413,11 @@ async function applyReplacementsAndReaggregate() {
         renderOcrReplacementTable(fid);
         renderCriteriaTable();
         syncDeemedUiFromState();
+        await syncBatchTableFromSheet();
         await fetchOutlierGroups();
         var n = res.replacedCount != null ? res.replacedCount : '—';
-        setStatus('置換適用: ' + n + ' セルを更新、' + appState.criteriaList.length + ' 種類の解答に再集約しました');
+        var colMsg = res.textColName ? '（列: ' + res.textColName + '）' : '';
+        setStatus('採点結果シート' + colMsg + ' を更新: ' + n + ' セル、' + appState.criteriaList.length + ' 種類の解答に再集約');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -1979,8 +2049,18 @@ document.addEventListener('DOMContentLoaded', function() {
             scheduleDeemedDraftSave();
         });
     }
-    var cropZoom = document.getElementById('crop-viewer-zoom');
-    if (cropZoom) cropZoom.addEventListener('input', updateCropViewerZoom);
+    var galleryZoom = document.getElementById('crop-gallery-zoom');
+    if (galleryZoom) galleryZoom.addEventListener('input', updateCropGalleryZoom);
+    document.addEventListener('keydown', function(ev) {
+        if (ev.key === 'Escape') closeCropGallery();
+    });
+    document.getElementById('crop-gallery-modal').addEventListener('click', function(ev) {
+        var t = ev.target;
+        var tile = t.closest('.crop-gallery-tile');
+        if (tile && tile.dataset.answer) {
+            toggleDeemedAnswer(getCriteriaFieldId(), decodeAnswerAttr(tile.dataset.answer));
+        }
+    });
     document.getElementById('step-4').addEventListener('click', function(ev) {
         var t = ev.target;
         if (t.classList.contains('ocr-rep-del')) {
@@ -1997,14 +2077,9 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (t.classList.contains('outlier-show-one')) {
             var row = getOutlierRowByKey(t.dataset.key);
             if (row) withBusyButton(t, function() { return loadAnswerCropsForRows([row], getCriteriaFieldId()); });
-        } else if (t.classList.contains('crop-expand-btn')) {
-            var ci = parseInt(t.dataset.cropIdx, 10);
-            var cr = (appState.cropGridResults || [])[ci];
-            if (cr && cr.ok) openCropViewer(cr.crop, cr.row);
-            ev.stopPropagation();
-        } else if (t.classList.contains('crop-tile-img') || (t.classList.contains('crop-tile') && !t.classList.contains('crop-expand-btn'))) {
+        } else if (t.classList.contains('crop-tile-img') || t.classList.contains('crop-tile')) {
             var tile = t.classList.contains('crop-tile') ? t : t.closest('.crop-tile');
-            if (tile && tile.dataset.answer) {
+            if (tile && tile.dataset.answer && !t.classList.contains('crop-gallery-tile')) {
                 toggleDeemedAnswer(getCriteriaFieldId(), decodeAnswerAttr(tile.dataset.answer));
             }
         }

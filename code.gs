@@ -1509,6 +1509,30 @@ function getResultRowCount() {
  * 採点基準・一括採点・考査総括
  */
 
+function columnToLetter_(column) {
+  var letter = '';
+  while (column > 0) {
+    var mod = (column - 1) % 26;
+    letter = String.fromCharCode(65 + mod) + letter;
+    column = Math.floor((column - mod - 1) / 26);
+  }
+  return letter;
+}
+
+function readResultColumnValues_(sheet, col1Based, startRow, endRow) {
+  if (endRow < startRow) return [];
+  var a1 = columnToLetter_(col1Based) + startRow + ':' + columnToLetter_(col1Based) + endRow;
+  return sheet.getRange(a1).getValues();
+}
+
+function writeResultColumnValues_(sheet, col1Based, startRow, values) {
+  if (!values || !values.length) return;
+  var endRow = startRow + values.length - 1;
+  var a1 = columnToLetter_(col1Based) + startRow + ':' + columnToLetter_(col1Based) + endRow;
+  sheet.getRange(a1).setValues(values);
+  SpreadsheetApp.flush();
+}
+
 function getFieldTextColName_(fieldId, fields) {
   var targetField = fields.find(function(f) { return f.id === fieldId; });
   if (!targetField) return null;
@@ -1539,14 +1563,16 @@ function getFieldAnswerDetails_(ss, fieldId) {
   var cols = getResultSheetColumnIndices_(headers, textColName);
   if (cols.textCol === -1) return [];
 
-  var numRows = lastRow - 1;
-  var texts = sheet.getRange(2, cols.textCol + 1, numRows, 1).getValues();
-  var fileIds = cols.fileIdCol >= 0 ? sheet.getRange(2, cols.fileIdCol + 1, numRows, 1).getValues() : [];
-  var fileNames = cols.fileNameCol >= 0 ? sheet.getRange(2, cols.fileNameCol + 1, numRows, 1).getValues() : [];
-  var studentIds = cols.studentIdCol >= 0 ? sheet.getRange(2, cols.studentIdCol + 1, numRows, 1).getValues() : [];
+  var startRow = 2;
+  var endRow = lastRow;
+  var rowCount = endRow - startRow + 1;
+  var texts = readResultColumnValues_(sheet, cols.textCol + 1, startRow, endRow);
+  var fileIds = cols.fileIdCol >= 0 ? readResultColumnValues_(sheet, cols.fileIdCol + 1, startRow, endRow) : [];
+  var fileNames = cols.fileNameCol >= 0 ? readResultColumnValues_(sheet, cols.fileNameCol + 1, startRow, endRow) : [];
+  var studentIds = cols.studentIdCol >= 0 ? readResultColumnValues_(sheet, cols.studentIdCol + 1, startRow, endRow) : [];
 
   var details = [];
-  for (var i = 0; i < numRows; i++) {
+  for (var i = 0; i < rowCount; i++) {
     var answer = String(texts[i][0]).trim();
     if (!answer) answer = 'なし';
     details.push({
@@ -1643,8 +1669,9 @@ function rewriteFieldTextColumn_(ss, fieldId, shouldRewriteFn, newText) {
   var textCol = headers.indexOf(textColName);
   if (textCol === -1) return 0;
 
-  var numRows = lastRow - 1;
-  var texts = sheet.getRange(2, textCol + 1, numRows, 1).getValues();
+  var startRow = 2;
+  var endRow = lastRow;
+  var texts = readResultColumnValues_(sheet, textCol + 1, startRow, endRow);
   var updatedCount = 0;
   var canonical = String(newText || '').trim() || 'なし';
 
@@ -1656,7 +1683,7 @@ function rewriteFieldTextColumn_(ss, fieldId, shouldRewriteFn, newText) {
     }
   }
   if (updatedCount > 0) {
-    sheet.getRange(2, textCol + 1, numRows, 1).setValues(texts);
+    writeResultColumnValues_(sheet, textCol + 1, startRow, texts);
   }
   return updatedCount;
 }
@@ -1680,10 +1707,11 @@ function applyTextReplacementsToField(fieldId, rules) {
 
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var textCol = headers.indexOf(textColName);
-  if (textCol === -1) return { answers: [], replacedCount: 0 };
+  if (textCol === -1) throw new Error('採点結果シートに列「' + textColName + '」が見つかりません。③テキスト化を実行してください。');
 
-  var numRows = lastRow - 1;
-  var texts = sheet.getRange(2, textCol + 1, numRows, 1).getValues();
+  var startRow = 2;
+  var endRow = lastRow;
+  var texts = readResultColumnValues_(sheet, textCol + 1, startRow, endRow);
   var replacedCount = 0;
   for (var i = 0; i < texts.length; i++) {
     var oldVal = String(texts[i][0]).trim() || 'なし';
@@ -1691,8 +1719,12 @@ function applyTextReplacementsToField(fieldId, rules) {
     if (oldVal !== newVal) replacedCount++;
     texts[i][0] = newVal;
   }
-  sheet.getRange(2, textCol + 1, numRows, 1).setValues(texts);
-  return { answers: getUniqueAnswers(fieldId), replacedCount: replacedCount };
+  writeResultColumnValues_(sheet, textCol + 1, startRow, texts);
+  return { answers: getUniqueAnswers(fieldId), replacedCount: replacedCount, textColName: textColName };
+}
+
+function getOcrResultPreview() {
+  return getOcrResultPreview_(getActiveTestSs());
 }
 
 function getUniqueAnswers(fieldId) {
