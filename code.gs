@@ -137,6 +137,7 @@ function setupHubSheets(ss) {
   } else {
     ensureHubSheetColumns(ss.getSheetByName(SHEET_HUB_TEST_LIST));
   }
+  initHubRosterSheet_(ss);
   var sheet1 = ss.getSheetByName('シート1');
   if (sheet1 && ss.getSheets().length > 1 && sheet1.getLastRow() === 0) {
     ss.deleteSheet(sheet1);
@@ -187,6 +188,9 @@ function getOrCreateTestImageFolder(ss) {
  */
 
 var SHEET_HUB_TEST_LIST = 'テスト一覧';
+var SHEET_ROSTER = '名簿';
+var ROSTER_HEADERS = ['名簿名', 'ID', '年', '組', '番号', '氏名', 'その他属性1', 'その他属性2', 'その他属性3'];
+var ORIGINAL_ARCHIVE_FOLDER_NAME = '元画像';
 
 var SHEET_TEST_INFO = 'テスト情報';
 var SHEET_ANSWER_FIELDS = '記述欄情報';
@@ -205,7 +209,7 @@ var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
   '模範解答画像FileID', '生徒解答フォルダID',
   '基準画像幅', '基準画像高さ', 'ステータス',
-  '現在ステップ', '最終保存日時'
+  '現在ステップ', '最終保存日時', '選択名簿名', 'IDマーク欄使用'
 ];
 
 var HUB_TEST_LIST_HEADERS = ['テスト名', 'スプレッドシートID', 'URL', '作成日', 'ステータス', '現在ステップ', '最終保存日時'];
@@ -556,6 +560,7 @@ function createTest(testName, subject, dateTime) {
   setTestInfoValue(ss, '実施日時', dateTime || '');
   setTestInfoValue(ss, '作成日時', Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss'));
   setTestInfoValue(ss, 'ステータス', '作成中');
+  setTestInfoValue(ss, 'IDマーク欄使用', 'true');
 
   var folder = getOrCreateTestImageFolder(ss);
   setTestInfoValue(ss, '生徒解答フォルダID', folder.getId());
@@ -1023,10 +1028,15 @@ function saveStepProgress(stepNum, clientPayload) {
     if (clientPayload.modelBase64) {
       saveModelAnswerImage(clientPayload.modelBase64, clientPayload.width, clientPayload.height);
     }
+    if (clientPayload.useIdMark != null) {
+      setTestInfoValue(ss, 'IDマーク欄使用', clientPayload.useIdMark ? 'true' : 'false');
+    }
   } else if (stepNum === 2 && clientPayload && clientPayload.points) {
     savePoints(clientPayload.points);
   } else if (stepNum === 3 && clientPayload && clientPayload.folderId) {
     setTestInfoValue(ss, '生徒解答フォルダID', clientPayload.folderId);
+  } else if (stepNum === 7 && clientPayload && clientPayload.rosterName != null) {
+    setTestInfoValue(ss, '選択名簿名', clientPayload.rosterName || '');
   } else if (stepNum === 8 && clientPayload && clientPayload.identityFields) {
     saveIdentityFields(clientPayload.identityFields);
   }
@@ -1258,8 +1268,12 @@ function listFolderFiles(folderId) {
       isPdf: mime === 'application/pdf'
     });
   }
-  list.sort(function(a, b) { return a.name.localeCompare(b.name, 'ja'); });
+  list.sort(function(a, b) { return naturalCompareFileNames_(a.name, b.name); });
   return list;
+}
+
+function naturalCompareFileNames_(nameA, nameB) {
+  return String(nameA).localeCompare(String(nameB), 'ja', { numeric: true, sensitivity: 'base' });
 }
 
 function getDriveFileBase64(fileId) {
@@ -1276,15 +1290,86 @@ function getDriveFileBase64(fileId) {
   };
 }
 
-function saveWarpedImage(base64Image, originalFileName, studentId) {
+function saveWarpedImage(base64Image, originalFileName, studentId, sourceFileId) {
   var ss = getActiveTestSs();
+  if (sourceFileId) {
+    var existing = getWarpedFileIdFromResults(ss, sourceFileId);
+    if (!existing) existing = findWarpedFileInFolder_(sourceFileId, originalFileName);
+    if (existing) return { fileId: existing, fileName: '', reused: true };
+  }
   var folder = getOrCreateTestImageFolder(ss);
   var imageBytes = base64Image.split(',')[1];
   var safeId = studentId && !String(studentId).includes('?') ? studentId : 'unknown';
   var fileName = '補正_' + safeId + '_' + (originalFileName || 'image') + '.jpg';
   fileName = fileName.replace(/[^\w\u3040-\u30ff\u4e00-\u9faf.\-]/g, '_').substring(0, 200);
   var file = folder.createFile(Utilities.newBlob(Utilities.base64Decode(imageBytes), 'image/jpeg', fileName));
-  return { fileId: file.getId(), fileName: fileName };
+  return { fileId: file.getId(), fileName: fileName, reused: false };
+}
+
+function getOrCreateOriginalArchiveFolder(studentFolder) {
+  var sub = studentFolder.getFoldersByName(ORIGINAL_ARCHIVE_FOLDER_NAME);
+  return sub.hasNext() ? sub.next() : studentFolder.createFolder(ORIGINAL_ARCHIVE_FOLDER_NAME);
+}
+
+function archiveOriginalFile(fileId, studentFolderId) {
+  if (!fileId || !studentFolderId) return { moved: false };
+  try {
+    var file = DriveApp.getFileById(fileId);
+    var studentFolder = DriveApp.getFolderById(studentFolderId);
+    var archiveFolder = getOrCreateOriginalArchiveFolder(studentFolder);
+    var parents = file.getParents();
+    while (parents.hasNext()) {
+      var parent = parents.next();
+      if (parent.getId() === studentFolder.getId()) {
+        file.moveTo(archiveFolder);
+        return { moved: true, archiveFolderId: archiveFolder.getId() };
+      }
+    }
+  } catch (e) { /* ignore */ }
+  return { moved: false };
+}
+
+function getStudentIdFromResults(ss, sourceFileId) {
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  if (sheet.getLastRow() <= 1) return '';
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colMap = getResultColumnMap(headers);
+  if (colMap.fileId < 0 || colMap.studentId < 0) return '';
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][colMap.fileId]) === String(sourceFileId)) {
+      return String(data[i][colMap.studentId] || '');
+    }
+  }
+  return '';
+}
+
+function getExistingWarpedForFile(sourceFileId, sourceFileName) {
+  var ss = getActiveTestSs();
+  var warpedId = getWarpedFileIdFromResults(ss, sourceFileId);
+  if (!warpedId) warpedId = findWarpedFileInFolder_(sourceFileId, sourceFileName);
+  if (!warpedId) return null;
+  return {
+    warpedFileId: warpedId,
+    studentId: getStudentIdFromResults(ss, sourceFileId)
+  };
+}
+
+function findWarpedFileInFolder_(sourceFileId, sourceFileName) {
+  try {
+    var ss = getActiveTestSs();
+    var folder = getOrCreateTestImageFolder(ss);
+    var files = folder.getFiles();
+    var safeName = String(sourceFileName || '').replace(/[^\w\u3040-\u30ff\u4e00-\u9faf.\-]/g, '_');
+    while (files.hasNext()) {
+      var f = files.next();
+      var name = f.getName();
+      if (name.indexOf('補正_') !== 0) continue;
+      if (safeName && name.indexOf(safeName) >= 0) return f.getId();
+      if (sourceFileId && name.indexOf(sourceFileId) >= 0) return f.getId();
+    }
+  } catch (e) { /* ignore */ }
+  return '';
 }
 
 function getProcessedFileIds(ss) {
@@ -1477,15 +1562,28 @@ function buildResultRowArray(headers, map, fields, fileMeta, studentId, textMapp
   return row;
 }
 
-function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops) {
+function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops, options) {
   try {
     var ss = getActiveTestSs();
+    options = options || {};
     var sourceFileId = fileMeta.id || fileMeta.fileId;
     var sourceFileName = fileMeta.name || fileMeta.fileName || '';
     var fields = getAnswerFields(ss);
     if (fields.length === 0) throw new Error('記述欄が設定されていません。');
 
-    var saved = saveWarpedImage(warpedBase64, sourceFileName, studentId);
+    var saved;
+    if (options.skipSaveWarped) {
+      var existingId = getWarpedFileIdFromResults(ss, sourceFileId);
+      if (!existingId) existingId = findWarpedFileInFolder_(sourceFileId, sourceFileName);
+      if (!existingId) throw new Error('補正画像が見つかりません。');
+      saved = { fileId: existingId, reused: true };
+    } else {
+      saved = saveWarpedImage(warpedBase64, sourceFileName, studentId, sourceFileId);
+      if (!saved.reused) {
+        var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+        archiveOriginalFile(sourceFileId, folderId);
+      }
+    }
     var textMapping = runOcrOnWarpedImage_(warpedBase64, fields, fieldCrops || []);
     var cleanStudentId = (studentId && !String(studentId).includes('?')) ? String(studentId) : '';
 
@@ -1496,7 +1594,8 @@ function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops) {
       fileName: sourceFileName,
       warpedFileId: saved.fileId,
       textMapping: textMapping,
-      skipped: false
+      skipped: false,
+      warpReused: !!saved.reused
     };
   } catch (error) {
     return {
@@ -2477,6 +2576,278 @@ function importExternalScoresFromCsv(csvText) {
   var rows = parseExternalScoresCsv(csvText);
   if (rows.length === 0) throw new Error('有効なCSVデータがありません。');
   return importExternalScores(rows);
+}
+
+
+// ========== RosterService.gs ==========
+
+function initHubRosterSheet_(ss) {
+  if (!ss.getSheetByName(SHEET_ROSTER)) {
+    var sheet = ss.insertSheet(SHEET_ROSTER);
+    sheet.appendRow(ROSTER_HEADERS);
+    sheet.setFrozenRows(1);
+  }
+}
+
+function getRosterSheet_() {
+  var ss = getHubSs();
+  initHubRosterSheet_(ss);
+  return ss.getSheetByName(SHEET_ROSTER);
+}
+
+function rosterRowFromSheet_(row) {
+  return {
+    rosterName: String(row[0] || ''),
+    studentId: String(row[1] || ''),
+    year: String(row[2] || ''),
+    classNo: String(row[3] || ''),
+    number: String(row[4] || ''),
+    name: String(row[5] || ''),
+    attr1: String(row[6] || ''),
+    attr2: String(row[7] || ''),
+    attr3: String(row[8] || '')
+  };
+}
+
+function listRosterNames() {
+  var sheet = getRosterSheet_();
+  if (sheet.getLastRow() <= 1) return [];
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  var names = {};
+  data.forEach(function(r) {
+    var n = String(r[0] || '').trim();
+    if (n) names[n] = true;
+  });
+  return Object.keys(names).sort(function(a, b) { return a.localeCompare(b, 'ja'); });
+}
+
+function getRosterRows(rosterName) {
+  if (!rosterName) return [];
+  var sheet = getRosterSheet_();
+  if (sheet.getLastRow() <= 1) return [];
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, ROSTER_HEADERS.length).getValues();
+  var rows = [];
+  data.forEach(function(r) {
+    if (String(r[0] || '').trim() !== String(rosterName).trim()) return;
+    var row = rosterRowFromSheet_(r);
+    row.rowIndex = rows.length;
+    rows.push(row);
+  });
+  return rows;
+}
+
+function saveRosterRows(rosterName, rows) {
+  if (!rosterName || !String(rosterName).trim()) throw new Error('名簿名を指定してください。');
+  rosterName = String(rosterName).trim();
+  var sheet = getRosterSheet_();
+  var lastRow = sheet.getLastRow();
+  var kept = [];
+  if (lastRow > 1) {
+    var data = sheet.getRange(2, 1, lastRow, ROSTER_HEADERS.length).getValues();
+    data.forEach(function(r) {
+      if (String(r[0] || '').trim() !== rosterName) kept.push(r);
+    });
+    sheet.getRange(2, 1, lastRow, ROSTER_HEADERS.length).clearContent();
+  }
+  var out = kept.slice();
+  (rows || []).forEach(function(r) {
+    out.push([
+      rosterName,
+      r.studentId || '',
+      r.year || '',
+      r.classNo || '',
+      r.number || '',
+      r.name || '',
+      r.attr1 || '',
+      r.attr2 || '',
+      r.attr3 || ''
+    ]);
+  });
+  if (out.length) {
+    sheet.getRange(2, 1, 1 + out.length, ROSTER_HEADERS.length).setValues(out);
+  }
+  return { saved: (rows || []).length, rosterName: rosterName };
+}
+
+function parseRosterTsv(tsvText) {
+  var lines = String(tsvText || '').split(/\r?\n/).filter(function(l) { return l.trim(); });
+  var rows = [];
+  lines.forEach(function(line) {
+    var parts = line.split('\t');
+    if (parts.length === 1) parts = line.split(/[,;]/);
+    rows.push(parts.map(function(p) { return String(p).trim(); }));
+  });
+  var colCount = 0;
+  rows.forEach(function(r) { colCount = Math.max(colCount, r.length); });
+  return { rows: rows, colCount: colCount, previewRows: rows.slice(0, 8) };
+}
+
+function importRosterWithMapping(rosterName, rawRows, columnMapping) {
+  if (!rosterName || !String(rosterName).trim()) throw new Error('名簿名を指定してください。');
+  rosterName = String(rosterName).trim();
+  columnMapping = columnMapping || {};
+  var parsed = [];
+  (rawRows || []).forEach(function(parts, lineIdx) {
+    if (!parts || !parts.length) return;
+    var row = { studentId: '', year: '', classNo: '', number: '', name: '', attr1: '', attr2: '', attr3: '' };
+    var hasData = false;
+    Object.keys(columnMapping).forEach(function(colIdx) {
+      var key = columnMapping[colIdx];
+      if (!key || key === 'ignore') return;
+      var val = parts[parseInt(colIdx, 10)];
+      if (val == null || val === '') return;
+      hasData = true;
+      if (key === 'id') row.studentId = String(val);
+      else if (key === 'year') row.year = String(val);
+      else if (key === 'classNo') row.classNo = String(val);
+      else if (key === 'number') row.number = String(val);
+      else if (key === 'name') row.name = String(val);
+      else if (key === 'attr1') row.attr1 = String(val);
+      else if (key === 'attr2') row.attr2 = String(val);
+      else if (key === 'attr3') row.attr3 = String(val);
+    });
+    if (!hasData) return;
+    if (lineIdx === 0 && row.studentId && (row.studentId.indexOf('ID') >= 0 || row.studentId.indexOf('id') >= 0)) return;
+    parsed.push(row);
+  });
+  if (!parsed.length) throw new Error('取込可能な行がありません。列マッピングを確認してください。');
+  return saveRosterRows(rosterName, parsed);
+}
+
+function compareRosterRows_(a, b) {
+  var ca = parseInt(a.classNo, 10);
+  var cb = parseInt(b.classNo, 10);
+  if (isNaN(ca)) ca = 0;
+  if (isNaN(cb)) cb = 0;
+  if (ca !== cb) return ca - cb;
+  var na = parseInt(a.number, 10);
+  var nb = parseInt(b.number, 10);
+  if (isNaN(na)) na = 0;
+  if (isNaN(nb)) nb = 0;
+  if (na !== nb) return na - nb;
+  return String(a.studentId).localeCompare(String(b.studentId), 'ja');
+}
+
+function getIdAssignmentStatus() {
+  var ss = getActiveTestSs();
+  var useOmr = getTestInfoValue(ss, 'IDマーク欄使用');
+  if (useOmr === '') useOmr = 'true';
+  var useOmrFlag = useOmr === 'true' || useOmr === '1' || useOmr === 'はい';
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  var total = 0;
+  var withId = 0;
+  if (sheet.getLastRow() > 1) {
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var colMap = getResultColumnMap(headers);
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+    data.forEach(function(row) {
+      total++;
+      var sid = colMap.studentId >= 0 ? String(row[colMap.studentId] || '').trim() : '';
+      if (sid && sid.indexOf('?') < 0) withId++;
+    });
+  }
+  var majorityHasId = total > 0 && withId > total / 2;
+  return {
+    useOmrIdMark: useOmrFlag,
+    resultCount: total,
+    withIdCount: withId,
+    skipAssignment: useOmrFlag && majorityHasId,
+    selectedRosterName: getTestInfoValue(ss, '選択名簿名')
+  };
+}
+
+function saveSelectedRosterName(rosterName) {
+  var ss = getActiveTestSs();
+  setTestInfoValue(ss, '選択名簿名', rosterName || '');
+  return { rosterName: rosterName || '' };
+}
+
+function saveIdMarkSetting(useOmr) {
+  var ss = getActiveTestSs();
+  setTestInfoValue(ss, 'IDマーク欄使用', useOmr ? 'true' : 'false');
+  return { useOmr: !!useOmr };
+}
+
+function getRosterCsvForVerification(rosterName) {
+  var rows = getRosterRows(rosterName || getTestInfoValue(getActiveTestSs(), '選択名簿名'));
+  return rows.map(function(r) {
+    return (r.studentId || '') + ',' + (r.name || '');
+  }).join('\n');
+}
+
+function assignIdsFromRoster(rosterName, absentIndices) {
+  var ss = getActiveTestSs();
+  rosterName = rosterName || getTestInfoValue(ss, '選択名簿名');
+  if (!rosterName) throw new Error('名簿を選択してください。');
+
+  var status = getIdAssignmentStatus();
+  if (status.skipAssignment) {
+    return {
+      skipped: true,
+      reason: 'IDマーク欄使用かつ採点結果の過半数にIDが入力済みのため割当をスキップしました。',
+      updated: 0,
+      warnings: []
+    };
+  }
+
+  var absentSet = {};
+  (absentIndices || []).forEach(function(i) { absentSet[parseInt(i, 10)] = true; });
+
+  var rosterAll = getRosterRows(rosterName);
+  var rosterSorted = rosterAll.filter(function(r) {
+    return !absentSet[r.rowIndex];
+  }).sort(compareRosterRows_);
+
+  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  if (!folderId) throw new Error('生徒解答フォルダIDが未設定です。Step③でフォルダを指定してください。');
+  var filesSorted = listFolderFiles(folderId);
+
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  var resultByFileId = {};
+  var rowIndexByFileId = {};
+  if (sheet.getLastRow() > 1) {
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var colMap = getResultColumnMap(headers);
+    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+    data.forEach(function(row, i) {
+      var fid = colMap.fileId >= 0 ? String(row[colMap.fileId] || '') : '';
+      if (fid) {
+        resultByFileId[fid] = row;
+        rowIndexByFileId[fid] = i + 2;
+      }
+    });
+  }
+
+  var updated = 0;
+  var warnings = [];
+  var pairCount = Math.min(filesSorted.length, rosterSorted.length);
+
+  for (var i = 0; i < pairCount; i++) {
+    var file = filesSorted[i];
+    var student = rosterSorted[i];
+    var rowIdx = rowIndexByFileId[file.id];
+    if (rowIdx) {
+      updateStudentIdentity(rowIdx, student.studentId, student.name);
+      updated++;
+    } else {
+      warnings.push('OCR未完了: ' + file.name + ' → ' + student.studentId + ' ' + student.name);
+    }
+  }
+
+  if (filesSorted.length > rosterSorted.length) {
+    warnings.push('ファイル数(' + filesSorted.length + ')が受験者数(' + rosterSorted.length + ')を超えています。');
+  } else if (rosterSorted.length > filesSorted.length) {
+    warnings.push('受験者数(' + rosterSorted.length + ')がファイル数(' + filesSorted.length + ')を超えています。');
+  }
+
+  setTestInfoValue(ss, '選択名簿名', rosterName);
+  return {
+    skipped: false,
+    updated: updated,
+    fileCount: filesSorted.length,
+    rosterCount: rosterSorted.length,
+    warnings: warnings
+  };
 }
 
 

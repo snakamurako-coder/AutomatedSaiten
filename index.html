@@ -125,6 +125,9 @@
             display: flex; align-items: center; justify-content: center;
         }
         #load-countdown-overlay.hidden { display: none; }
+        #roster-map-modal { position: fixed; inset: 0; z-index: 95000; background: rgba(15, 23, 42, 0.5); display: flex; align-items: center; justify-content: center; }
+        #roster-map-modal.hidden { display: none !important; }
+        #roster-map-panel { background: #fff; border-radius: 8px; max-width: 90vw; max-height: 85vh; overflow: auto; padding: 1rem; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
         #load-countdown-panel {
             background: #fff; border-radius: 12px; padding: 2rem 2.5rem;
             box-shadow: 0 20px 50px rgba(0,0,0,0.25); text-align: center; min-width: 280px;
@@ -230,6 +233,7 @@
             <h2 class="font-bold">① 回答欄設定（模範解答）</h2>
             <div class="flex flex-wrap gap-3 items-end text-xs">
                 <label>用紙方向 <select id="orientation-1" class="border rounded p-1"><option value="landscape">A4横</option><option value="portrait">A4縦</option></select></label>
+                <label class="flex items-center gap-1"><input type="checkbox" id="use-id-mark" checked> IDマーク欄あり</label>
                 <label>二値化 <input type="range" id="thresh-1" min="0" max="255" value="128" class="w-24"></label>
                 <input type="file" id="model-file" accept="image/*,.pdf" class="text-xs">
                 <div class="flex gap-1 items-end">
@@ -265,6 +269,7 @@
                 <button type="button" id="drive-list-btn" data-busy-label="取得中..." onclick="withBusyButton(event.currentTarget, listDriveFiles)" class="bg-gray-200 px-3 py-2 rounded">ファイル一覧</button>
                 <label class="flex items-center gap-1">並列 <input type="number" id="batch-ocr-concurrency" value="4" min="1" max="5" class="w-12 border rounded p-1 text-center" title="同時処理枚数（3〜5推奨）"></label>
                 <button type="button" onclick="withBusyButton(event.currentTarget, startBatchOcr)" id="batch-start-btn" data-busy-label="OCR実行中..." data-keep-busy="0" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">バッチOCR開始</button>
+                <button type="button" id="batch-retry-failed-btn" data-busy-label="再実行中..." onclick="withBusyButton(event.currentTarget, function(){ return startBatchOcr(true); })" class="bg-red-600 text-white px-3 py-2 rounded" title="前回失敗したファイルのみ再処理">失敗分のみ再実行</button>
                 <button type="button" onclick="BatchProcessor.pause()" class="bg-orange-200 px-3 py-2 rounded">一時停止</button>
             </div>
             <p id="batch-ocr-lang-hint" class="text-xs text-gray-500"></p>
@@ -394,6 +399,32 @@
         <!-- ⑦ 合計・外部 -->
         <div id="step-7" class="step-panel hidden space-y-3">
             <h2 class="font-bold">⑦ 領域合計・外部連携得点</h2>
+
+            <div class="border rounded p-3 bg-blue-50 space-y-2">
+                <h3 class="text-sm font-bold text-blue-900">ID・氏名の連動（名簿）</h3>
+                <p id="id-assign-status" class="text-xs text-gray-600"></p>
+                <div class="flex flex-wrap gap-2 items-end text-xs">
+                    <div><label class="font-semibold block">名簿</label>
+                    <select id="roster-select" class="border rounded p-1 min-w-[160px]" onchange="onRosterSelectChange()">
+                        <option value="">-- 名簿を選択 --</option>
+                    </select></div>
+                    <label class="flex items-center gap-1"><input type="checkbox" id="use-id-mark-step7" checked onchange="syncIdMarkSetting()"> 解答用紙にIDマーク欄あり</label>
+                    <button type="button" data-busy-label="割当中..." onclick="withBusyButton(event.currentTarget, assignIdsFromRosterUi)" id="assign-ids-btn" class="bg-blue-700 text-white px-3 py-1 rounded font-bold">ID・氏名を割り当て</button>
+                </div>
+                <div class="text-xs space-y-1">
+                    <label class="font-semibold">名簿TSV（タブ区切り）を貼り付け</label>
+                    <textarea id="roster-tsv-paste" class="w-full border rounded p-2 h-16 font-mono text-xs" placeholder="ID	年	組	番号	氏名	..."></textarea>
+                    <button type="button" onclick="openRosterMapModal()" class="bg-green-600 text-white px-3 py-1 rounded">登録</button>
+                </div>
+                <div id="roster-preview-wrap" class="overflow-auto max-h-48 border rounded bg-white">
+                    <table class="w-full text-xs"><thead class="bg-gray-100 sticky top-0"><tr>
+                        <th class="p-1 border">未受験</th><th class="p-1 border">組</th><th class="p-1 border">番号</th><th class="p-1 border">ID</th><th class="p-1 border">氏名</th>
+                    </tr></thead><tbody id="roster-preview-tbody"></tbody></table>
+                </div>
+                <p id="assign-result-msg" class="text-xs text-gray-600"></p>
+            </div>
+
+            <hr class="border-gray-200">
             <button type="button" data-busy-label="計算中..." onclick="withBusyButton(event.currentTarget, recalcDomains)" class="bg-blue-600 text-white px-4 py-2 rounded text-sm mb-2">領域合計・総計点を再計算</button>
             <div><label class="text-xs font-semibold">外部得点CSV（生徒ID,得点[,ソース]）</label>
             <textarea id="external-csv" class="w-full border rounded p-2 text-xs h-24 font-mono" placeholder="1001,15&#10;1002,12"></textarea></div>
@@ -427,6 +458,20 @@
             <p class="text-gray-500 text-sm">採点判定結果・合計点を解答用紙画像に上書きする機能は今後実装予定です。</p>
         </div>
     </main>
+</div>
+
+<div id="roster-map-modal" class="hidden" role="dialog" aria-modal="true">
+    <div id="roster-map-panel" class="space-y-3 w-full max-w-2xl">
+        <h3 class="font-bold text-sm">名簿列マッピング</h3>
+        <div><label class="text-xs font-semibold">名簿名 *</label>
+        <input id="roster-map-name" class="w-full border rounded p-2 text-sm" placeholder="例: 2年1組 期末"></div>
+        <div id="roster-map-preview" class="overflow-auto max-h-40 border rounded text-xs"></div>
+        <div id="roster-map-columns" class="space-y-1 text-xs"></div>
+        <div class="flex gap-2 justify-end">
+            <button type="button" onclick="closeRosterMapModal()" class="bg-gray-200 px-3 py-1 rounded">キャンセル</button>
+            <button type="button" data-busy-label="登録中..." onclick="withBusyButton(event.currentTarget, confirmRosterImport)" class="bg-green-600 text-white px-4 py-1 rounded font-bold">名簿に登録</button>
+        </div>
+    </div>
 </div>
 
 <img id="hidden-source-img" style="display:none">
@@ -729,7 +774,7 @@ var BatchProcessor = (function() {
   var DEFAULT_CONCURRENCY = 4;
   var queue = [], running = false, paused = false, activeCount = 0;
   var stats = { total: 0, done: 0, skipped: 0, failed: 0, flushed: 0 };
-  var pendingRows = [], processedIds = {}, startTime = 0;
+  var pendingRows = [], processedIds = {}, failedFileIds = {}, startTime = 0;
   var onProgress, onComplete, onError, onItemUpdate, onFlush;
   var orientation = 'landscape', threshVal = 128, fillThreshold = 0.35;
   var concurrency = DEFAULT_CONCURRENCY;
@@ -744,6 +789,54 @@ var BatchProcessor = (function() {
     onError = opts.onError;
     onItemUpdate = opts.onItemUpdate;
     onFlush = opts.onFlush;
+  }
+
+  function getFailedStorageKey() {
+    var testId = (typeof appState !== 'undefined' && appState.test) ? appState.test.testSsId : '';
+    return testId ? 'ocrFailed_' + testId : '';
+  }
+
+  function saveFailedToStorage() {
+    var key = getFailedStorageKey();
+    if (!key) return;
+    var ids = Object.keys(failedFileIds);
+    if (!ids.length) { localStorage.removeItem(key); return; }
+    try { localStorage.setItem(key, JSON.stringify(ids)); } catch (e) { /* ignore */ }
+  }
+
+  function loadFailedFromStorage() {
+    var key = getFailedStorageKey();
+    if (!key) return;
+    try {
+      var raw = localStorage.getItem(key);
+      (raw ? JSON.parse(raw) : []).forEach(function(id) { failedFileIds[String(id)] = true; });
+    } catch (e) { /* ignore */ }
+  }
+
+  function clearFailedFileIds() {
+    failedFileIds = {};
+    var key = getFailedStorageKey();
+    if (key) localStorage.removeItem(key);
+  }
+
+  function recordFailed(fileId) {
+    if (!fileId) return;
+    failedFileIds[String(fileId)] = true;
+    saveFailedToStorage();
+  }
+
+  function clearFailedFileId(fileId) {
+    if (!fileId) return;
+    delete failedFileIds[String(fileId)];
+    saveFailedToStorage();
+  }
+
+  function getFailedFileIds() {
+    return Object.assign({}, failedFileIds);
+  }
+
+  function getFailedCount() {
+    return Object.keys(failedFileIds).length;
   }
 
   function getConcurrencyLimit() {
@@ -830,12 +923,27 @@ var BatchProcessor = (function() {
       return;
     }
 
-    var fileData = await gasRun('getDriveFileBase64', file.id);
-    var img = await driveFileToImageElement(fileData);
-    var result = warpImageFromElement(img, orientation, threshVal);
-    var base64 = matToBase64Jpeg(result.warpedMat);
-    var studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold);
-    result.warpedMat.delete();
+    var base64, studentId, skipSaveWarped = false;
+    var existingWarp = await gasRun('getExistingWarpedForFile', file.id, file.name);
+    if (existingWarp && existingWarp.warpedFileId) {
+      var wdata = await gasRun('getDriveFileBase64', existingWarp.warpedFileId);
+      base64 = 'data:image/jpeg;base64,' + wdata.base64;
+      studentId = existingWarp.studentId || '';
+      skipSaveWarped = true;
+      if (!studentId) {
+        var wimg = await loadImageElementFromBase64(base64);
+        var wmat = cv.imread(wimg);
+        studentId = detectOmrId(wmat, getPaperConfig(orientation), fillThreshold);
+        wmat.delete();
+      }
+    } else {
+      var fileData = await gasRun('getDriveFileBase64', file.id);
+      var img = await driveFileToImageElement(fileData);
+      var result = warpImageFromElement(img, orientation, threshVal);
+      base64 = matToBase64Jpeg(result.warpedMat);
+      studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold);
+      result.warpedMat.delete();
+    }
 
     var fields = (typeof appState !== 'undefined' && appState.fields) ? appState.fields : [];
     var fieldCrops = null;
@@ -843,9 +951,10 @@ var BatchProcessor = (function() {
       fieldCrops = await buildFieldCropsFromWarped(base64, fields);
     }
 
-    var res = await gasRun('ocrStudentPaper', file, studentId, base64, fieldCrops);
+    var res = await gasRun('ocrStudentPaper', file, studentId, base64, fieldCrops, { skipSaveWarped: skipSaveWarped });
     if (res.success) {
       stats.done++;
+      clearFailedFileId(file.id);
       pendingRows.push({
         fileName: res.fileName,
         fileId: res.fileId,
@@ -863,6 +972,7 @@ var BatchProcessor = (function() {
       }
     } else {
       stats.failed++;
+      recordFailed(file.id);
       if (onError) onError(file, res.error);
       if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: res.error });
     }
@@ -877,6 +987,7 @@ var BatchProcessor = (function() {
         await processOneFile(file);
       } catch (err) {
         stats.failed++;
+        recordFailed(file.id);
         if (onError) onError(file, err.message || String(err));
         if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: err.message || String(err) });
       }
@@ -923,9 +1034,22 @@ var BatchProcessor = (function() {
     getStats: function() { return stats; },
     getStartTime: function() { return startTime; },
     restorePendingFromStorage: loadPendingFromStorage,
-    clearPendingStorage: clearPendingStorage
+    clearPendingStorage: clearPendingStorage,
+    getFailedFileIds: getFailedFileIds,
+    getFailedCount: getFailedCount,
+    clearFailedFileIds: clearFailedFileIds,
+    reloadFailedFromStorage: loadFailedFromStorage
   };
 })();
+function loadImageElementFromBase64(base64) {
+  return new Promise(function(resolve, reject) {
+    var img = document.getElementById('hidden-source-img');
+    if (!img) { img = new Image(); }
+    img.onload = function() { resolve(img); };
+    img.onerror = reject;
+    img.src = base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64;
+  });
+}
 function gasRun(fn) {
   var args = Array.prototype.slice.call(arguments, 1);
   return new Promise(function(resolve, reject) {
@@ -1049,7 +1173,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], cropInlineZoom: 100 };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], cropInlineZoom: 100, rosterAbsent: {}, rosterImportRows: null };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -1437,7 +1561,9 @@ function goToStep(n, options) {
         updateBatchOcrLangHint();
     } else if (n === 4) populateCriteriaSelectFromCache();
     else if (n === 6) renderDomainTableFromCache();
+    else if (n === 7) initRosterStepUi();
     else if (n === 8) loadIdentityEditorFromState();
+    else if (n === 9) loadRosterForVerification();
 }
 
 function renderPointsTableFromCache() {
@@ -2111,6 +2237,12 @@ async function restoreTestUi(data) {
             var localDt = dt.indexOf('T') >= 0 ? dt : dt.replace(' ', 'T').substring(0, 16);
             document.getElementById('test-datetime').value = localDt;
         }
+        var useIdMark = data.info['IDマーク欄使用'];
+        var useId = useIdMark !== 'false' && useIdMark !== '0';
+        var el1 = document.getElementById('use-id-mark');
+        var el7 = document.getElementById('use-id-mark-step7');
+        if (el1) el1.checked = useId;
+        if (el7) el7.checked = useId;
     }
 
     try {
@@ -2169,6 +2301,9 @@ async function restoreTestUi(data) {
 
     appState.currentStep = data.currentStep != null ? parseInt(data.currentStep, 10) : 0;
     appState.restoring = false;
+    BatchProcessor.reloadFailedFromStorage();
+    updateBatchRetryFailedButton();
+    initRosterStepUi().catch(function() {});
 }
 
 async function autoSaveFieldsForStep2() {
@@ -2207,6 +2342,7 @@ async function saveCurrentStepProgress(stepNum) {
             var info = await gasRun('getTestInfo');
             if (!info.info['模範解答画像FileID']) { setStatus('模範解答画像が未保存です。先に模範解答を読み込んでください。', true); return; }
         }
+        payload.useIdMark = document.getElementById('use-id-mark') ? document.getElementById('use-id-mark').checked : true;
     } else if (stepNum === 2) {
         var map = {};
         document.querySelectorAll('.point-input').forEach(function(el) { map[el.dataset.id] = el.value; });
@@ -2217,6 +2353,11 @@ async function saveCurrentStepProgress(stepNum) {
         await saveCriteriaToServer();
     } else if (stepNum === 6) {
         await saveDomainsToServer();
+    } else if (stepNum === 7) {
+        payload.rosterName = document.getElementById('roster-select') ? document.getElementById('roster-select').value : '';
+        payload.useIdMark = document.getElementById('use-id-mark-step7') ? document.getElementById('use-id-mark-step7').checked : true;
+        await gasRun('saveIdMarkSetting', payload.useIdMark);
+        if (payload.rosterName) await gasRun('saveSelectedRosterName', payload.rosterName);
     } else if (stepNum === 8) {
         payload.identityFields = RegionEditor.getRegions();
     }
@@ -2426,11 +2567,12 @@ async function listDriveFiles() {
         await ensureBatchFields();
         initBatchResultsTable(appState.batchFiles);
         document.getElementById('batch-file-count').textContent = appState.batchFiles.length + ' ファイル検出';
+        updateBatchRetryFailedButton();
         setStatus(appState.batchFiles.length + ' 件のファイルを検出');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
-async function startBatchOcr() {
+async function startBatchOcr(retryFailedOnly) {
     if (!visionKeyOk) { setStatus('Vision API キーが未設定のためバッチOCRを実行できません', true); return; }
     if (!appState.batchFiles.length) { setStatus('先にファイル一覧を取得してください', true); return; }
     if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
@@ -2438,6 +2580,28 @@ async function startBatchOcr() {
     await tryRestorePendingFlush();
     await ensureBatchFields();
     if (!appState.fields.length) { setStatus('記述欄が未設定です。①で設定してください。', true); return; }
+
+    BatchProcessor.reloadFailedFromStorage();
+    var queueFiles = appState.batchFiles;
+    if (retryFailedOnly) {
+        var failedMap = BatchProcessor.getFailedFileIds();
+        queueFiles = appState.batchFiles.filter(function(f) { return failedMap[String(f.id)]; });
+        if (!queueFiles.length) {
+            document.querySelectorAll('#batch-results-tbody .batch-status').forEach(function(cell) {
+                if (cell.textContent.indexOf('失敗') >= 0) {
+                    var row = cell.closest('tr');
+                    if (row && row.id) {
+                        var fid = row.id.replace('batch-row-', '');
+                        if (fid) failedMap[fid] = true;
+                    }
+                }
+            });
+            queueFiles = appState.batchFiles.filter(function(f) { return failedMap[String(f.id)]; });
+        }
+        if (!queueFiles.length) { setStatus('失敗したファイルがありません', true); return; }
+    } else {
+        BatchProcessor.clearFailedFileIds();
+    }
 
     var processedIds = await gasRun('getProcessedFileIdList');
     BatchProcessor.setProcessedIds(processedIds);
@@ -2487,13 +2651,22 @@ async function startBatchOcr() {
             clearInterval(elapsedTimer);
             releaseBusyButton(batchBtn);
             updateBatchFlushStatus();
+            updateBatchRetryFailedButton();
             setStatus('OCR完了: 成功' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed + '（シート反映' + s.flushed + '件）');
             markStepDone(3);
         },
-        onError: function(f, err) { console.error(f, err); if (f) setStatus(String(err), true); }
+        onError: function(f, err) { console.error(f, err); if (f) setStatus(String(err), true); updateBatchRetryFailedButton(); }
     });
-    BatchProcessor.setQueue(appState.batchFiles);
+    BatchProcessor.setQueue(queueFiles);
     BatchProcessor.start();
+}
+
+function updateBatchRetryFailedButton() {
+    var btn = document.getElementById('batch-retry-failed-btn');
+    if (!btn) return;
+    var n = BatchProcessor.getFailedCount();
+    btn.disabled = n === 0;
+    btn.title = n > 0 ? ('失敗 ' + n + ' 件を再実行') : '失敗したファイルがありません';
 }
 
 function populateCriteriaSelect() {
@@ -2629,6 +2802,177 @@ async function saveDomainsToServer() {
         setStatus('領域設定を保存し得点を再計算しました');
         markStepDone(6);
     } catch (e) { setStatus(e.message || e, true); }
+}
+
+var ROSTER_MAP_FIELDS = [
+    { key: 'ignore', label: '（無視）' },
+    { key: 'id', label: 'ID' },
+    { key: 'year', label: '年' },
+    { key: 'classNo', label: '組' },
+    { key: 'number', label: '番号' },
+    { key: 'name', label: '氏名' },
+    { key: 'attr1', label: 'その他属性1' },
+    { key: 'attr2', label: 'その他属性2' },
+    { key: 'attr3', label: 'その他属性3' }
+];
+
+async function refreshRosterSelect(selectedName) {
+    var sel = document.getElementById('roster-select');
+    if (!sel) return;
+    var names = await gasRun('listRosterNames');
+    sel.innerHTML = '<option value="">-- 名簿を選択 --</option>' +
+        names.map(function(n) {
+            return '<option value="' + escapeHtml(n) + '"' + (n === selectedName ? ' selected' : '') + '>' + escapeHtml(n) + '</option>';
+        }).join('');
+}
+
+async function initRosterStepUi() {
+    if (!appState.test) return;
+    var selected = (appState.test.info && appState.test.info['選択名簿名']) || '';
+    await refreshRosterSelect(selected);
+    await updateIdAssignStatusUi();
+    if (selected) await loadRosterPreview(selected);
+    else document.getElementById('roster-preview-tbody').innerHTML = '';
+}
+
+async function updateIdAssignStatusUi() {
+    var el = document.getElementById('id-assign-status');
+    var btn = document.getElementById('assign-ids-btn');
+    if (!el) return;
+    try {
+        var st = await gasRun('getIdAssignmentStatus');
+        if (st.skipAssignment) {
+            el.textContent = 'IDマーク欄使用かつ採点結果の過半数にID入力済み（' + st.withIdCount + '/' + st.resultCount + '）— 名簿割当は不要です。';
+            if (btn) btn.disabled = true;
+        } else if (st.useOmrIdMark) {
+            el.textContent = 'IDマーク欄あり。未入力の行は名簿割当で補完できます（入力済 ' + st.withIdCount + '/' + st.resultCount + '）。';
+            if (btn) btn.disabled = false;
+        } else {
+            el.textContent = 'IDマーク欄なし — スキャン順と名簿（組・番号順、未受験除外）でID・氏名を割り当てます。';
+            if (btn) btn.disabled = false;
+        }
+    } catch (e) {
+        el.textContent = '';
+    }
+}
+
+async function onRosterSelectChange() {
+    var name = document.getElementById('roster-select').value;
+    appState.rosterAbsent = {};
+    if (name) {
+        await gasRun('saveSelectedRosterName', name);
+        await loadRosterPreview(name);
+    } else {
+        document.getElementById('roster-preview-tbody').innerHTML = '';
+    }
+}
+
+async function loadRosterPreview(rosterName) {
+    var rows = await gasRun('getRosterRows', rosterName);
+    rows.sort(function(a, b) {
+        var ca = parseInt(a.classNo, 10) || 0, cb = parseInt(b.classNo, 10) || 0;
+        if (ca !== cb) return ca - cb;
+        return (parseInt(a.number, 10) || 0) - (parseInt(b.number, 10) || 0);
+    });
+    var tbody = document.getElementById('roster-preview-tbody');
+    if (!tbody) return;
+    tbody.innerHTML = rows.map(function(r) {
+        var absent = appState.rosterAbsent[r.rowIndex];
+        return '<tr><td class="p-1 border text-center"><input type="checkbox" class="roster-absent-cb" data-idx="' + r.rowIndex + '"' + (absent ? ' checked' : '') + '></td>' +
+            '<td class="p-1 border">' + escapeHtml(r.classNo) + '</td>' +
+            '<td class="p-1 border">' + escapeHtml(r.number) + '</td>' +
+            '<td class="p-1 border">' + escapeHtml(r.studentId) + '</td>' +
+            '<td class="p-1 border">' + escapeHtml(r.name) + '</td></tr>';
+    }).join('');
+}
+
+function openRosterMapModal() {
+    var tsv = document.getElementById('roster-tsv-paste').value.trim();
+    if (!tsv) { setStatus('TSVを貼り付けてください', true); return; }
+    gasRun('parseRosterTsv', tsv).then(function(parsed) {
+        appState.rosterImportRows = parsed.rows;
+        var preview = document.getElementById('roster-map-preview');
+        preview.innerHTML = '<table class="w-full border"><tbody>' +
+            parsed.previewRows.map(function(row) {
+                return '<tr>' + row.map(function(c) { return '<td class="p-1 border">' + escapeHtml(c) + '</td>'; }).join('') + '</tr>';
+            }).join('') + '</tbody></table>';
+        var colDiv = document.getElementById('roster-map-columns');
+        colDiv.innerHTML = '';
+        var defaults = ['id', 'year', 'classNo', 'number', 'name', 'attr1', 'attr2', 'attr3'];
+        for (var c = 0; c < parsed.colCount; c++) {
+            var defaultKey = c < defaults.length ? defaults[c] : 'ignore';
+            var opts = ROSTER_MAP_FIELDS.map(function(f) {
+                return '<option value="' + f.key + '"' + (f.key === defaultKey ? ' selected' : '') + '>' + f.label + '</option>';
+            }).join('');
+            colDiv.innerHTML += '<div class="flex items-center gap-2"><span class="w-16">列' + (c + 1) + '</span><select class="roster-map-col border rounded p-1 flex-1" data-col="' + c + '">' + opts + '</select></div>';
+        }
+        document.getElementById('roster-map-modal').classList.remove('hidden');
+    }).catch(function(e) { setStatus(e.message || e, true); });
+}
+
+function closeRosterMapModal() {
+    document.getElementById('roster-map-modal').classList.add('hidden');
+}
+
+async function confirmRosterImport() {
+    var rosterName = document.getElementById('roster-map-name').value.trim();
+    if (!rosterName) { setStatus('名簿名を入力してください', true); return; }
+    if (!appState.rosterImportRows || !appState.rosterImportRows.length) { setStatus('取込データがありません', true); return; }
+    var mapping = {};
+    document.querySelectorAll('.roster-map-col').forEach(function(sel) {
+        mapping[sel.dataset.col] = sel.value;
+    });
+    try {
+        var res = await gasRun('importRosterWithMapping', rosterName, appState.rosterImportRows, mapping);
+        closeRosterMapModal();
+        document.getElementById('roster-tsv-paste').value = '';
+        await refreshRosterSelect(rosterName);
+        document.getElementById('roster-select').value = rosterName;
+        await gasRun('saveSelectedRosterName', rosterName);
+        appState.rosterAbsent = {};
+        await loadRosterPreview(rosterName);
+        setStatus('名簿「' + rosterName + '」に ' + res.saved + ' 行を登録しました');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function syncIdMarkSetting() {
+    var checked = document.getElementById('use-id-mark-step7').checked;
+    var el1 = document.getElementById('use-id-mark');
+    if (el1) el1.checked = checked;
+    try {
+        await gasRun('saveIdMarkSetting', checked);
+        await updateIdAssignStatusUi();
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function assignIdsFromRosterUi() {
+    var rosterName = document.getElementById('roster-select').value;
+    if (!rosterName) { setStatus('名簿を選択してください', true); return; }
+    var absentIndices = [];
+    document.querySelectorAll('.roster-absent-cb:checked').forEach(function(cb) {
+        absentIndices.push(parseInt(cb.dataset.idx, 10));
+    });
+    try {
+        var res = await gasRun('assignIdsFromRoster', rosterName, absentIndices);
+        var msgEl = document.getElementById('assign-result-msg');
+        if (res.skipped) {
+            if (msgEl) msgEl.textContent = res.reason || '割当をスキップしました。';
+            setStatus(res.reason || '割当スキップ');
+            return;
+        }
+        var msg = res.updated + ' 件のID・氏名を更新しました（ファイル' + res.fileCount + ' / 受験者' + res.rosterCount + '）。';
+        if (res.warnings && res.warnings.length) msg += ' 警告: ' + res.warnings.join(' / ');
+        if (msgEl) msgEl.textContent = msg;
+        setStatus(msg, !!(res.warnings && res.warnings.length));
+        await updateIdAssignStatusUi();
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function loadRosterForVerification() {
+    try {
+        var csv = await gasRun('getRosterCsvForVerification');
+        if (csv) document.getElementById('roster-csv').value = csv;
+    } catch (e) { /* ignore */ }
 }
 
 async function recalcDomains() {
@@ -2794,6 +3138,24 @@ document.addEventListener('DOMContentLoaded', function() {
             purgeIncorrectFromCropGrid();
         }
     });
+    document.getElementById('roster-preview-wrap').addEventListener('change', function(ev) {
+        if (ev.target.classList.contains('roster-absent-cb')) {
+            var idx = parseInt(ev.target.dataset.idx, 10);
+            if (ev.target.checked) appState.rosterAbsent[idx] = true;
+            else delete appState.rosterAbsent[idx];
+        }
+    });
+    document.getElementById('roster-map-modal').addEventListener('click', function(ev) {
+        if (ev.target.id === 'roster-map-modal') closeRosterMapModal();
+    });
+    var useIdMarkEl = document.getElementById('use-id-mark');
+    if (useIdMarkEl) {
+        useIdMarkEl.addEventListener('change', function() {
+            var el7 = document.getElementById('use-id-mark-step7');
+            if (el7) el7.checked = useIdMarkEl.checked;
+            gasRun('saveIdMarkSetting', useIdMarkEl.checked).catch(function() {});
+        });
+    }
     loadAppBootstrap();
     refreshVisionKeyStatus();
 });
