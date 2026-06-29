@@ -73,16 +73,11 @@ function calculateDomainScores() {
 
   for (var r = 0; r < data.length; r++) {
     var row = data[r];
-    var subtotal = 0;
 
     Object.keys(daiMonGroups).forEach(function(k) {
       var colName = '大問' + k + '_得点';
       var idx = headers.indexOf(colName);
-      if (idx >= 0) {
-        var val = sumFieldScores(row, daiMonGroups[k]);
-        row[idx] = val;
-        subtotal += val;
-      }
+      if (idx >= 0) row[idx] = sumFieldScores(row, daiMonGroups[k]);
     });
     Object.keys(hanIGroups).forEach(function(k) {
       var colName = '範囲' + k + '_得点';
@@ -95,6 +90,8 @@ function calculateDomainScores() {
       if (idx >= 0) row[idx] = sumFieldScores(row, noryokuGroups[k]);
     });
 
+    // 総計点は記述欄ごとの得点合計＋外部得点（領域列は内訳表示のみで加算しない）
+    var subtotal = 0;
     fields.forEach(function(f) {
       var label = f.displayName || f.id;
       var fm = colMap.fields[label];

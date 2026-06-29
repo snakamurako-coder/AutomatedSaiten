@@ -1,0 +1,2 @@
+# clasp: scriptId は環境ごとに異なるためリポジトリに含めない
+.clasp.json
