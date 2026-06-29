@@ -198,6 +198,8 @@ var SHEET_DOMAINS = '領域設定';
 var SHEET_IDENTITY_FIELDS = '本人確認欄情報';
 var SHEET_EXTERNAL_SCORES = '外部連携得点';
 var SHEET_OCR_REPLACEMENTS = 'OCR置換ルール';
+var SHEET_DEEMED_SCORING = 'みなし採点';
+var SHEET_DEEMED_DRAFT = 'みなし採点下書き';
 
 var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
@@ -249,6 +251,8 @@ function buildTestSheets(ss) {
   initIdentityFieldsSheet(ss.getSheetByName(SHEET_IDENTITY_FIELDS));
   initExternalScoresSheet(ss.getSheetByName(SHEET_EXTERNAL_SCORES));
   ensureOcrReplacementsSheet(ss);
+  ensureDeemedScoringSheet(ss);
+  ensureDeemedDraftSheet(ss);
 
   const defaultSheet = ss.getSheetByName('シート1');
   if (defaultSheet) ss.deleteSheet(defaultSheet);
@@ -266,7 +270,9 @@ function getAllTestSheetNames() {
     DOMAINS: SHEET_DOMAINS,
     IDENTITY_FIELDS: SHEET_IDENTITY_FIELDS,
     EXTERNAL_SCORES: SHEET_EXTERNAL_SCORES,
-    OCR_REPLACEMENTS: SHEET_OCR_REPLACEMENTS
+    OCR_REPLACEMENTS: SHEET_OCR_REPLACEMENTS,
+    DEEMED_SCORING: SHEET_DEEMED_SCORING,
+    DEEMED_DRAFT: SHEET_DEEMED_DRAFT
   };
 }
 
@@ -282,6 +288,22 @@ function initOcrReplacementsSheet(sheet) {
   if (sheet.getLastRow() > 0) return;
   sheet.appendRow(['記述欄ID', '検索文字列', '置換後', '正規表現']);
   sheet.setFrozenRows(1);
+}
+
+function ensureDeemedScoringSheet(ss) {
+  if (!ss.getSheetByName(SHEET_DEEMED_SCORING)) {
+    var sheet = ss.insertSheet(SHEET_DEEMED_SCORING);
+    sheet.appendRow(['記述欄ID', '正答例', '元解答', '適用日時']);
+    sheet.setFrozenRows(1);
+  }
+}
+
+function ensureDeemedDraftSheet(ss) {
+  if (!ss.getSheetByName(SHEET_DEEMED_DRAFT)) {
+    var sheet = ss.insertSheet(SHEET_DEEMED_DRAFT);
+    sheet.appendRow(['記述欄ID', '正答例', '元解答']);
+    sheet.setFrozenRows(1);
+  }
 }
 
 function initTestInfoSheet(sheet) {
@@ -892,6 +914,8 @@ function getTestRestoreData(testSsId) {
     currentStep: resumeStep,
     lastSavedAt: getTestInfoValue(ss, '最終保存日時'),
     ocrReplacementsByField: getOcrReplacementsGrouped_(ss),
+    deemedScoringByField: getDeemedScoringGrouped_(ss),
+    deemedDraftByField: getDeemedDraftGrouped_(ss),
     activeTestSsId: ss.getId()
   };
 }
@@ -1606,31 +1630,69 @@ function saveOcrReplacements(fieldId, rules) {
   return getOcrReplacements(fieldId);
 }
 
+function rewriteFieldTextColumn_(ss, fieldId, shouldRewriteFn, newText) {
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  var lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return 0;
+
+  var fields = getAnswerFields(ss);
+  var textColName = getFieldTextColName_(fieldId, fields);
+  if (!textColName) return 0;
+
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var textCol = headers.indexOf(textColName);
+  if (textCol === -1) return 0;
+
+  var numRows = lastRow - 1;
+  var texts = sheet.getRange(2, textCol + 1, numRows, 1).getValues();
+  var updatedCount = 0;
+  var canonical = String(newText || '').trim() || 'なし';
+
+  for (var i = 0; i < texts.length; i++) {
+    var oldVal = String(texts[i][0]).trim() || 'なし';
+    if (shouldRewriteFn(oldVal) && oldVal !== canonical) {
+      texts[i][0] = canonical;
+      updatedCount++;
+    }
+  }
+  if (updatedCount > 0) {
+    sheet.getRange(2, textCol + 1, numRows, 1).setValues(texts);
+  }
+  return updatedCount;
+}
+
 function applyTextReplacementsToField(fieldId, rules) {
   var ss = getActiveTestSs();
   if (rules && rules.length) saveOcrReplacements(fieldId, rules);
   else rules = getOcrReplacements(fieldId);
-  if (!rules.length) return getUniqueAnswers(fieldId);
+
+  if (!rules.length) {
+    return { answers: getUniqueAnswers(fieldId), replacedCount: 0 };
+  }
 
   var sheet = ss.getSheetByName(SHEET_RESULTS);
   var lastRow = sheet.getLastRow();
-  if (lastRow <= 1) return [];
+  if (lastRow <= 1) return { answers: [], replacedCount: 0 };
 
   var fields = getAnswerFields(ss);
   var textColName = getFieldTextColName_(fieldId, fields);
-  if (!textColName) return [];
+  if (!textColName) return { answers: [], replacedCount: 0 };
 
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var textCol = headers.indexOf(textColName);
-  if (textCol === -1) return [];
+  if (textCol === -1) return { answers: [], replacedCount: 0 };
 
   var numRows = lastRow - 1;
   var texts = sheet.getRange(2, textCol + 1, numRows, 1).getValues();
+  var replacedCount = 0;
   for (var i = 0; i < texts.length; i++) {
-    texts[i][0] = applyReplacementRules_(texts[i][0], rules);
+    var oldVal = String(texts[i][0]).trim() || 'なし';
+    var newVal = applyReplacementRules_(texts[i][0], rules);
+    if (oldVal !== newVal) replacedCount++;
+    texts[i][0] = newVal;
   }
   sheet.getRange(2, textCol + 1, numRows, 1).setValues(texts);
-  return getUniqueAnswers(fieldId);
+  return { answers: getUniqueAnswers(fieldId), replacedCount: replacedCount };
 }
 
 function getUniqueAnswers(fieldId) {
@@ -1687,6 +1749,119 @@ function getAnswerRowsForPattern(fieldId, answerText) {
       answer_text: row.answer
     };
   });
+}
+
+function getDeemedDraftForSs_(ss, fieldId) {
+  ensureDeemedDraftSheet(ss);
+  var sheet = ss.getSheetByName(SHEET_DEEMED_DRAFT);
+  var data = sheet.getDataRange().getValues();
+  var canonical = '';
+  var sources = [];
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0] || '').trim() !== fieldId) continue;
+    canonical = String(data[i][1] || '');
+    var src = String(data[i][2] || '').trim();
+    if (src) sources.push(src);
+  }
+  return { canonical: canonical, sources: sources };
+}
+
+function getDeemedDraftGrouped_(ss) {
+  ensureDeemedDraftSheet(ss);
+  var sheet = ss.getSheetByName(SHEET_DEEMED_DRAFT);
+  var data = sheet.getDataRange().getValues();
+  var grouped = {};
+  for (var i = 1; i < data.length; i++) {
+    var fid = String(data[i][0] || '').trim();
+    if (!fid) continue;
+    if (!grouped[fid]) grouped[fid] = { canonical: '', sources: [] };
+    grouped[fid].canonical = String(data[i][1] || '');
+    var src = String(data[i][2] || '').trim();
+    if (src && grouped[fid].sources.indexOf(src) < 0) grouped[fid].sources.push(src);
+  }
+  return grouped;
+}
+
+function getDeemedScoringGrouped_(ss) {
+  ensureDeemedScoringSheet(ss);
+  var sheet = ss.getSheetByName(SHEET_DEEMED_SCORING);
+  var data = sheet.getDataRange().getValues();
+  var grouped = {};
+  for (var i = 1; i < data.length; i++) {
+    var fid = String(data[i][0] || '').trim();
+    if (!fid) continue;
+    if (!grouped[fid]) grouped[fid] = { canonical: '', sources: [] };
+    grouped[fid].canonical = String(data[i][1] || '');
+    var src = String(data[i][2] || '').trim();
+    if (src && grouped[fid].sources.indexOf(src) < 0) grouped[fid].sources.push(src);
+  }
+  return grouped;
+}
+
+function getDeemedScoring(fieldId) {
+  return getDeemedDraftForSs_(getActiveTestSs(), fieldId);
+}
+
+function saveDeemedScoringDraft(fieldId, canonical, sources) {
+  var ss = getActiveTestSs();
+  ensureDeemedDraftSheet(ss);
+  var sheet = ss.getSheetByName(SHEET_DEEMED_DRAFT);
+  var data = sheet.getDataRange().getValues();
+  var kept = data.length > 1 ? [data[0]] : [['記述欄ID', '正答例', '元解答']];
+
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0] || '').trim() !== fieldId) kept.push(data[i]);
+  }
+  canonical = String(canonical || '').trim();
+  (sources || []).forEach(function(src) {
+    src = String(src || '').trim();
+    if (!src) return;
+    kept.push([fieldId, canonical, src]);
+  });
+
+  sheet.clearContents();
+  if (kept.length) sheet.getRange(1, 1, kept.length, kept[0].length).setValues(kept);
+  sheet.setFrozenRows(1);
+  return getDeemedDraftForSs_(ss, fieldId);
+}
+
+function applyDeemedScoringToField(fieldId, canonical, sources) {
+  var ss = getActiveTestSs();
+  canonical = String(canonical || '').trim();
+  if (!canonical) throw new Error('正答例を入力してください。');
+
+  var sourceSet = {};
+  (sources || []).forEach(function(s) {
+    s = String(s || '').trim();
+    if (s && s !== canonical) sourceSet[s] = true;
+  });
+  var sourceList = Object.keys(sourceSet);
+  if (!sourceList.length) throw new Error('みなし対象の解答を1件以上選択してください。');
+
+  saveDeemedScoringDraft(fieldId, canonical, sourceList);
+
+  var updatedCount = rewriteFieldTextColumn_(ss, fieldId, function(answer) {
+    return !!sourceSet[answer];
+  }, canonical);
+
+  ensureDeemedScoringSheet(ss);
+  var auditSheet = ss.getSheetByName(SHEET_DEEMED_SCORING);
+  var now = Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss');
+  sourceList.forEach(function(src) {
+    auditSheet.appendRow([fieldId, canonical, src, now]);
+  });
+
+  var draftSheet = ss.getSheetByName(SHEET_DEEMED_DRAFT);
+  var draftData = draftSheet.getDataRange().getValues();
+  var keptDraft = draftData.length > 1 ? [draftData[0]] : [['記述欄ID', '正答例', '元解答']];
+  for (var i = 1; i < draftData.length; i++) {
+    if (String(draftData[i][0] || '').trim() !== fieldId) keptDraft.push(draftData[i]);
+  }
+  draftSheet.clearContents();
+  if (keptDraft.length) draftSheet.getRange(1, 1, keptDraft.length, keptDraft[0].length).setValues(keptDraft);
+  draftSheet.setFrozenRows(1);
+
+  return { answers: getUniqueAnswers(fieldId), updatedCount: updatedCount, canonical: canonical };
 }
 
 function generateRubricWithGemini(fieldId, uniqueAnswersArray) {
