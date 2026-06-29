@@ -1947,34 +1947,130 @@ function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops, options)
   }
 }
 
+function padResultRow_(row, numCols) {
+  var out = [];
+  var n = numCols > 0 ? numCols : (row ? row.length : 0);
+  for (var i = 0; i < n; i++) out.push(row && i < row.length ? row[i] : '');
+  return out;
+}
+
+function escapeTsvCell_(value) {
+  var s = String(value == null ? '' : value);
+  if (s.indexOf('\t') >= 0 || s.indexOf('\n') >= 0 || s.indexOf('\r') >= 0 || s.indexOf('"') >= 0) {
+    return '"' + s.replace(/"/g, '""') + '"';
+  }
+  return s;
+}
+
+function isPendingRowAlreadyInSheet_(ss, row) {
+  if (!row) return false;
+  var names = getProcessedFileNames(ss);
+  var ids = getProcessedFileIds(ss);
+  var n = normalizeResultFileName_(row.fileName);
+  if (n && names[n]) return true;
+  if (row.fileId && ids[String(row.fileId)]) return true;
+  return false;
+}
+
+/** 採点結果シートを追記可能な状態にし、現在のヘッダー行を返す */
+function prepareResultsSheetForAppend_(sheet, fields, ss) {
+  ss = ss || getActiveTestSs();
+  fields = fields || getAnswerFields(ss);
+  var extra = getDynamicResultExtraColumns(ss);
+  var expected = buildResultHeaders(fields, extra);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, expected.length).setValues([expected]);
+    sheet.setFrozenRows(1);
+    return expected;
+  }
+  ensureWarpedFileIdColumn(sheet);
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  expected.forEach(function(h) {
+    if (headers.indexOf(h) >= 0) return;
+    var lastCol = sheet.getLastColumn();
+    sheet.insertColumnAfter(lastCol);
+    sheet.getRange(1, lastCol + 1).setValue(h);
+    headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  });
+  return headers;
+}
+
+function buildResultRowsTsv(rows) {
+  if (!rows || rows.length === 0) return { tsv: '', headers: [], rowCount: 0 };
+  var ss = getActiveTestSs();
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  var fields = getAnswerFields(ss);
+  var headers = prepareResultsSheetForAppend_(sheet, fields, ss);
+  var map = getResultColumnMap(headers);
+  var numCols = sheet.getLastColumn();
+  var lines = [headers.map(escapeTsvCell_).join('\t')];
+  rows.forEach(function(r) {
+    var rowArr = padResultRow_(buildResultRowArray(headers, map, fields, {
+      fileName: r.fileName,
+      fileId: r.fileId,
+      warpedFileId: r.warpedFileId
+    }, r.studentId, r.textMapping), numCols);
+    lines.push(rowArr.map(escapeTsvCell_).join('\t'));
+  });
+  return { tsv: lines.join('\n'), headers: headers, rowCount: rows.length };
+}
+
 function flushResultRows(rows) {
-  if (!rows || rows.length === 0) return { written: 0 };
+  if (!rows || rows.length === 0) return { written: 0, skipped: 0, errors: [], writtenFileNames: [], skippedFileNames: [] };
 
   var ss = getActiveTestSs();
   var sheet = ss.getSheetByName(SHEET_RESULTS);
   var fields = getAnswerFields(ss);
-  if (sheet.getLastRow() === 0) {
-    initResultsSheet(sheet, fields, getDynamicResultExtraColumns(ss));
-  }
-  ensureWarpedFileIdColumn(sheet);
-  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var headers = prepareResultsSheetForAppend_(sheet, fields, ss);
   var map = getResultColumnMap(headers);
-  var startRow = sheet.getLastRow() + 1;
+  var numCols = sheet.getLastColumn();
+  var written = 0;
+  var skipped = 0;
+  var errors = [];
+  var writtenRows = [];
+  var writtenFileNames = [];
+  var skippedFileNames = [];
 
-  var dataRows = rows.map(function(r) {
-    return buildResultRowArray(headers, map, fields, {
-      fileName: r.fileName,
-      fileId: r.fileId,
-      warpedFileId: r.warpedFileId
-    }, r.studentId, r.textMapping);
+  rows.forEach(function(r, idx) {
+    try {
+      if (isPendingRowAlreadyInSheet_(ss, r)) {
+        skipped++;
+        if (r.fileName) skippedFileNames.push(String(r.fileName));
+        return;
+      }
+      var rowArr = padResultRow_(buildResultRowArray(headers, map, fields, {
+        fileName: r.fileName,
+        fileId: r.fileId,
+        warpedFileId: r.warpedFileId
+      }, r.studentId, r.textMapping), numCols);
+      sheet.appendRow(rowArr);
+      written++;
+      writtenRows.push(r);
+      if (r.fileName) writtenFileNames.push(String(r.fileName));
+    } catch (e) {
+      errors.push({
+        index: idx,
+        fileName: r.fileName || '',
+        fileId: r.fileId || '',
+        error: e.toString()
+      });
+    }
   });
 
-  sheet.getRange(startRow, 1, startRow + dataRows.length - 1, headers.length).setValues(dataRows);
-  updateTestStatus('テキスト化中');
-  touchTestProgress_(ss, 3);
+  if (written > 0) {
+    updateTestStatus('テキスト化中');
+    touchTestProgress_(ss, 3);
+  }
   var studentFolderId = getTestInfoValue(ss, '生徒解答フォルダID');
-  var movedToProcessed = moveResultRowsToProcessed_(rows, studentFolderId);
-  return { written: dataRows.length, movedToProcessed: movedToProcessed };
+  var movedToProcessed = moveResultRowsToProcessed_(writtenRows, studentFolderId);
+  return {
+    written: written,
+    skipped: skipped,
+    errors: errors,
+    movedToProcessed: movedToProcessed,
+    writtenFileNames: writtenFileNames,
+    skippedFileNames: skippedFileNames
+  };
 }
 
 function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists, fieldCrops) {

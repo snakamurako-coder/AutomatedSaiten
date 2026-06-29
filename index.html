@@ -301,6 +301,14 @@
             <p id="batch-work-queue-hint" class="text-xs text-indigo-700"></p>
             <p id="batch-flush-status" class="text-xs text-gray-600"></p>
             <button type="button" id="batch-flush-btn" data-busy-label="書込中..." onclick="withBusyButton(event.currentTarget, manualFlushToSheet)" class="bg-teal-600 text-white px-3 py-1 rounded text-xs hidden">未反映分をシートに反映 (<span id="batch-pending-count">0</span>件)</button>
+            <div id="batch-tsv-panel" class="hidden border rounded p-2 bg-amber-50 text-xs space-y-2">
+                <div class="flex flex-wrap gap-2 items-center">
+                    <span class="font-bold text-amber-900">手動貼付用 TSV（採点結果の最下行の次に貼り付け）</span>
+                    <button type="button" onclick="copyBatchPendingTsv()" class="bg-white border px-2 py-1 rounded">TSVをコピー</button>
+                    <button type="button" data-busy-label="生成中..." onclick="withBusyButton(event.currentTarget, refreshBatchPendingTsv)" class="bg-amber-200 px-2 py-1 rounded">TSV再生成</button>
+                </div>
+                <textarea id="batch-pending-tsv" class="w-full h-36 font-mono text-xs border rounded p-2 bg-white" readonly placeholder="未反映データがあるとここにTSVが表示されます"></textarea>
+            </div>
             <div class="overflow-auto max-h-80 border rounded">
                 <table class="w-full text-xs"><thead id="batch-results-thead" class="bg-gray-100 sticky top-0"></thead><tbody id="batch-results-tbody"></tbody></table>
             </div>
@@ -1080,14 +1088,38 @@ var BatchProcessor = (function() {
     var toWrite = pendingRows.splice(0, pendingRows.length);
     try {
       var res = await gasRun('flushResultRows', toWrite);
-      stats.flushed += res.written;
+      stats.flushed += res.written || 0;
+      var doneNames = {};
+      (res.writtenFileNames || []).forEach(function(n) { doneNames[normalizeFileName(n)] = true; });
+      (res.skippedFileNames || []).forEach(function(n) { doneNames[normalizeFileName(n)] = true; });
+      var failedRows = [];
       toWrite.forEach(function(r) {
-        if (r.fileId) processedIds[String(r.fileId)] = true;
-        var n = normalizeFileName(r.fileName);
-        if (n) processedFileNames[n] = true;
+        var key = normalizeFileName(r.fileName);
+        if (key && doneNames[key]) {
+          if (r.fileId) processedIds[String(r.fileId)] = true;
+          processedFileNames[key] = true;
+        } else {
+          failedRows.push(r);
+        }
       });
-      clearPendingStorage();
-      if (onFlush) onFlush({ written: res.written, pending: pendingRows.length, rows: toWrite });
+      if (failedRows.length) {
+        pendingRows = failedRows.concat(pendingRows);
+        savePendingToStorage();
+      } else {
+        clearPendingStorage();
+      }
+      if (onFlush) onFlush({
+        written: res.written || 0,
+        pending: pendingRows.length,
+        rows: toWrite,
+        errors: res.errors,
+        writtenFileNames: res.writtenFileNames,
+        skippedFileNames: res.skippedFileNames
+      });
+      if (res.errors && res.errors.length && onError) {
+        onError(null, 'シート反映: ' + res.errors.length + ' 件失敗（下のTSVを手動貼付してください）');
+      }
+      if (typeof refreshBatchPendingTsv === 'function') refreshBatchPendingTsv();
       return res;
     } catch (e) {
       pendingRows = toWrite.concat(pendingRows);
@@ -1314,6 +1346,7 @@ var BatchProcessor = (function() {
     pause: pause,
     flushNow: function() { return flushPending(true); },
     getPendingCount: function() { return pendingRows.length; },
+    getPendingRows: function() { return pendingRows.slice(); },
     getStats: function() { return stats; },
     getStartTime: function() { return startTime; },
     restorePendingFromStorage: loadPendingFromStorage,
@@ -1514,13 +1547,51 @@ function updateBatchFlushStatus() {
     var el = document.getElementById('batch-pending-count');
     var btn = document.getElementById('batch-flush-btn');
     var status = document.getElementById('batch-flush-status');
+    var tsvPanel = document.getElementById('batch-tsv-panel');
     if (el) el.textContent = String(pending);
     if (btn) btn.classList.toggle('hidden', pending === 0);
+    if (tsvPanel) tsvPanel.classList.toggle('hidden', pending === 0);
     if (status) {
         var st = BatchProcessor.getStats();
         status.textContent = pending > 0
-            ? 'シート未反映: ' + pending + ' 件（15件ごとに自動反映 / 手動反映も可）'
+            ? 'シート未反映: ' + pending + ' 件（最終行の次に追記 / 失敗時はTSV手動貼付）'
             : (st.flushed > 0 ? 'シート反映済: ' + st.flushed + ' 件' : '');
+    }
+    if (pending > 0) refreshBatchPendingTsv().catch(function() {});
+}
+
+async function refreshBatchPendingTsv() {
+    var rows = BatchProcessor.getPendingRows();
+    var panel = document.getElementById('batch-tsv-panel');
+    var ta = document.getElementById('batch-pending-tsv');
+    if (!rows.length) {
+        if (panel) panel.classList.add('hidden');
+        if (ta) ta.value = '';
+        return;
+    }
+    if (panel) panel.classList.remove('hidden');
+    if (!ta) return;
+    try {
+        var res = await gasRun('buildResultRowsTsv', rows);
+        ta.value = res.tsv || '';
+    } catch (e) {
+        ta.value = '# TSV生成失敗: ' + (e.message || e);
+    }
+}
+
+function copyBatchPendingTsv() {
+    var ta = document.getElementById('batch-pending-tsv');
+    if (!ta || !ta.value) { setStatus('コピーするTSVがありません', true); return; }
+    ta.select();
+    try {
+        document.execCommand('copy');
+        setStatus('TSVをクリップボードにコピーしました');
+    } catch (e) {
+        navigator.clipboard.writeText(ta.value).then(function() {
+            setStatus('TSVをクリップボードにコピーしました');
+        }).catch(function() {
+            setStatus('コピーに失敗しました。テキストを手動選択してください', true);
+        });
     }
 }
 
@@ -1529,6 +1600,10 @@ async function ensureBatchFields() {
     var info = await gasRun('getTestInfo');
     appState.fields = info.fields || [];
     return appState.fields;
+}
+
+function normalizeBatchFileName(name) {
+    return String(name || '').trim();
 }
 
 function batchRowDomId(file) {
@@ -1685,10 +1760,16 @@ async function tryRestorePendingFlush() {
     if (!stored.length) return;
     try {
         var res = await gasRun('flushResultRows', stored);
-        BatchProcessor.clearPendingStorage();
-        setStatus('前回未反映だった ' + res.written + ' 件をシートに書き込みました');
+        if ((res.written || 0) + (res.skipped || 0) >= stored.length) {
+            BatchProcessor.clearPendingStorage();
+        }
+        setStatus('前回未反映: 追記' + (res.written || 0) + ' 件' +
+            ((res.skipped || 0) ? ' / スキップ' + res.skipped + ' 件（既存）' : '') +
+            ((res.errors && res.errors.length) ? ' / 失敗' + res.errors.length + ' 件' : ''));
+        if (res.errors && res.errors.length) refreshBatchPendingTsv();
     } catch (e) {
-        setStatus('未反映データの復元書き込みに失敗: ' + (e.message || e), true);
+        setStatus('未反映データの復元書き込みに失敗: ' + (e.message || e) + '（TSV手動貼付を利用してください）', true);
+        refreshBatchPendingTsv();
     }
 }
 
@@ -1697,7 +1778,10 @@ async function manualFlushToSheet() {
     if (pending === 0) { setStatus('未反映のデータはありません'); return; }
     try {
         var res = await BatchProcessor.flushNow();
-        setStatus(res.written + ' 件をシートに反映しました');
+        var msg = (res.written || 0) + ' 件をシート末尾に追記';
+        if (res.skipped) msg += '（' + res.skipped + ' 件は既存のためスキップ）';
+        if (res.errors && res.errors.length) msg += ' / ' + res.errors.length + ' 件失敗→TSV参照';
+        setStatus(msg);
         document.querySelectorAll('#batch-results-tbody .batch-sheet-status').forEach(function(el) {
             if (el.textContent === '未反映' || el.textContent === '未反映!') {
                 el.textContent = '反映済';
@@ -1705,7 +1789,10 @@ async function manualFlushToSheet() {
             }
         });
         updateBatchFlushStatus();
-    } catch (e) { setStatus('シート反映に失敗: ' + (e.message || e), true); }
+    } catch (e) {
+        setStatus('シート反映に失敗: ' + (e.message || e) + '（TSV手動貼付を利用してください）', true);
+        refreshBatchPendingTsv();
+    }
 }
 
 function onOpenCvReady() {
@@ -3195,7 +3282,15 @@ async function startBatchOcr(mode) {
             updateBatchResultRow(ev);
         },
         onFlush: function(info) {
-            if (info.rows) markBatchRowsFlushed(info.rows.map(function(r) { return r.fileId; }));
+            if (info.rows && info.written > 0) {
+                var done = {};
+                (info.writtenFileNames || []).forEach(function(n) { done[normalizeBatchFileName(n)] = true; });
+                (info.skippedFileNames || []).forEach(function(n) { done[normalizeBatchFileName(n)] = true; });
+                var flushedIds = info.rows.filter(function(r) {
+                    return done[normalizeBatchFileName(r.fileName)];
+                }).map(function(r) { return r.fileId; }).filter(Boolean);
+                if (flushedIds.length) markBatchRowsFlushed(flushedIds);
+            }
             updateBatchFlushStatus();
         },
         onComplete: function(s) {
