@@ -191,6 +191,7 @@ var SHEET_HUB_TEST_LIST = 'テスト一覧';
 var SHEET_ROSTER = '名簿';
 var ROSTER_HEADERS = ['名簿名', 'ID', '年', '組', '番号', '氏名', 'その他属性1', 'その他属性2', 'その他属性3'];
 var ORIGINAL_ARCHIVE_FOLDER_NAME = '元画像';
+var PROCESSED_ARCHIVE_FOLDER_NAME = '処理済み';
 
 var SHEET_TEST_INFO = 'テスト情報';
 var SHEET_ANSWER_FIELDS = '記述欄情報';
@@ -925,6 +926,8 @@ function getOcrResultPreview_(ss) {
 function getBatchRestoreSnapshot_(ss) {
   var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
   var processedIds = Object.keys(getProcessedFileIds(ss));
+  var processedNames = Object.keys(getProcessedFileNames(ss));
+  var workQueue = buildOcrWorkQueue_(ss);
   var files = [];
   if (folderId) {
     try {
@@ -935,8 +938,10 @@ function getBatchRestoreSnapshot_(ss) {
     folderId: folderId,
     files: files,
     processedFileIds: processedIds,
+    processedFileNames: processedNames,
+    workQueueStats: workQueue.stats,
     resultPreview: getOcrResultPreview_(ss),
-    processedCount: processedIds.length,
+    processedCount: processedNames.length,
     totalFiles: files.length
   };
 }
@@ -1314,15 +1319,24 @@ function getOrCreateOriginalArchiveFolder(studentFolder) {
   return sub.hasNext() ? sub.next() : studentFolder.createFolder(ORIGINAL_ARCHIVE_FOLDER_NAME);
 }
 
+function getOrCreateProcessedFolder_(studentFolder) {
+  var sub = studentFolder.getFoldersByName(PROCESSED_ARCHIVE_FOLDER_NAME);
+  return sub.hasNext() ? sub.next() : studentFolder.createFolder(PROCESSED_ARCHIVE_FOLDER_NAME);
+}
+
 function archiveOriginalFile(fileId, studentFolderId) {
   if (!fileId || !studentFolderId) return { moved: false };
   try {
     var file = DriveApp.getFileById(fileId);
     var studentFolder = DriveApp.getFolderById(studentFolderId);
     var archiveFolder = getOrCreateOriginalArchiveFolder(studentFolder);
+    var processedFolder = getOrCreateProcessedFolder_(studentFolder);
     var parents = file.getParents();
     while (parents.hasNext()) {
       var parent = parents.next();
+      if (parent.getId() === processedFolder.getId()) {
+        return { moved: false, alreadyProcessed: true };
+      }
       if (parent.getId() === studentFolder.getId()) {
         file.moveTo(archiveFolder);
         return { moved: true, archiveFolderId: archiveFolder.getId() };
@@ -1330,6 +1344,57 @@ function archiveOriginalFile(fileId, studentFolderId) {
     }
   } catch (e) { /* ignore */ }
   return { moved: false };
+}
+
+/** OCR成功・シート反映後、元画像を「処理済み」サブフォルダへ移動（直下・元画像/ から） */
+function moveSourceFileToProcessed_(fileId, fileName, studentFolderId) {
+  if (!studentFolderId) return { moved: false };
+  try {
+    var studentFolder = DriveApp.getFolderById(studentFolderId);
+    var archiveFolder = getOrCreateOriginalArchiveFolder(studentFolder);
+    var processedFolder = getOrCreateProcessedFolder_(studentFolder);
+    var file = null;
+    if (fileId) {
+      try { file = DriveApp.getFileById(fileId); } catch (e) { /* stale id */ }
+    }
+    if (!file && fileName) {
+      var found = findSourceFileByName_(studentFolderId, fileName);
+      if (found) {
+        try { file = DriveApp.getFileById(found.id); } catch (e) { /* ignore */ }
+      }
+    }
+    if (!file) return { moved: false, reason: 'not_found' };
+
+    var parents = file.getParents();
+    while (parents.hasNext()) {
+      var parent = parents.next();
+      if (parent.getId() === processedFolder.getId()) {
+        return { moved: false, alreadyProcessed: true };
+      }
+    }
+
+    parents = file.getParents();
+    while (parents.hasNext()) {
+      var p = parents.next();
+      if (p.getId() === studentFolder.getId() || p.getId() === archiveFolder.getId()) {
+        file.moveTo(processedFolder);
+        return { moved: true, processedFolderId: processedFolder.getId() };
+      }
+    }
+  } catch (e) {
+    return { moved: false, error: e.toString() };
+  }
+  return { moved: false, reason: 'wrong_parent' };
+}
+
+function moveResultRowsToProcessed_(rows, studentFolderId) {
+  if (!rows || !rows.length || !studentFolderId) return 0;
+  var moved = 0;
+  rows.forEach(function(r) {
+    var res = moveSourceFileToProcessed_(r.fileId, r.fileName, studentFolderId);
+    if (res.moved) moved++;
+  });
+  return moved;
 }
 
 function getStudentIdFromResults(ss, sourceFileId) {
@@ -1389,6 +1454,207 @@ function getProcessedFileIds(ss) {
     if (row[fileIdCol]) map[String(row[fileIdCol])] = true;
   });
   return map;
+}
+
+function getProcessedFileNames(ss) {
+  ss = ss || getActiveTestSs();
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  if (sheet.getLastRow() <= 1) return {};
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var fileNameCol = headers.indexOf('ファイル名');
+  if (fileNameCol < 0) return {};
+
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  var map = {};
+  data.forEach(function(row) {
+    var name = normalizeResultFileName_(row[fileNameCol]);
+    if (name) map[name] = true;
+  });
+  return map;
+}
+
+function normalizeResultFileName_(name) {
+  return String(name || '').trim();
+}
+
+function isFileNameInResults_(fileName, processedNames) {
+  return !!processedNames[normalizeResultFileName_(fileName)];
+}
+
+function parseWarpedOriginalFileName_(warpedFileName) {
+  var name = String(warpedFileName || '');
+  if (name.indexOf('補正_') !== 0) return '';
+  var rest = name.substring(3);
+  var dot = rest.lastIndexOf('.');
+  if (dot > 0) rest = rest.substring(0, dot);
+  var sep = rest.indexOf('_');
+  if (sep < 0) return '';
+  return rest.substring(sep + 1);
+}
+
+function listArchivedSourceFiles_(studentFolderId) {
+  if (!studentFolderId) return [];
+  try {
+    var studentFolder = DriveApp.getFolderById(studentFolderId);
+    var archiveFolder = getOrCreateOriginalArchiveFolder(studentFolder);
+    var files = archiveFolder.getFiles();
+    var list = [];
+    while (files.hasNext()) {
+      var file = files.next();
+      var mime = file.getMimeType();
+      if (!IMAGE_MIME_TYPES[mime]) continue;
+      list.push({
+        id: file.getId(),
+        name: file.getName(),
+        mimeType: mime,
+        isPdf: mime === 'application/pdf',
+        inArchive: true
+      });
+    }
+    list.sort(function(a, b) { return naturalCompareFileNames_(a.name, b.name); });
+    return list;
+  } catch (e) {
+    return [];
+  }
+}
+
+function findSourceFileByName_(studentFolderId, fileName) {
+  if (!studentFolderId || !fileName) return null;
+  var target = normalizeResultFileName_(fileName);
+  var folder = DriveApp.getFolderById(studentFolderId);
+  var direct = folder.getFiles();
+  while (direct.hasNext()) {
+    var f = direct.next();
+    if (normalizeResultFileName_(f.getName()) === target) {
+      return { id: f.getId(), name: f.getName(), mimeType: f.getMimeType(), isPdf: f.getMimeType() === 'application/pdf', inArchive: false, location: 'inbox' };
+    }
+  }
+  var archived = listArchivedSourceFiles_(studentFolderId);
+  for (var i = 0; i < archived.length; i++) {
+    if (normalizeResultFileName_(archived[i].name) === target) {
+      archived[i].location = 'warp_pending';
+      return archived[i];
+    }
+  }
+  return null;
+}
+
+function buildOcrWorkQueue_(ss) {
+  ss = ss || getActiveTestSs();
+  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var processedNames = getProcessedFileNames(ss);
+  var itemsByName = {};
+
+  function ensureItem(meta) {
+    var key = normalizeResultFileName_(meta.name);
+    if (!key || isFileNameInResults_(key, processedNames)) return;
+    if (!itemsByName[key]) {
+      itemsByName[key] = {
+        id: meta.id || '',
+        name: meta.name,
+        mimeType: meta.mimeType || 'image/jpeg',
+        isPdf: !!meta.isPdf,
+        stage: 'warp_and_ocr',
+        warpedFileId: '',
+        inArchive: !!meta.inArchive
+      };
+    } else {
+      if (meta.id && !itemsByName[key].id) itemsByName[key].id = meta.id;
+      if (meta.inArchive) itemsByName[key].inArchive = true;
+      if (meta.mimeType) itemsByName[key].mimeType = meta.mimeType;
+      if (meta.isPdf != null) itemsByName[key].isPdf = !!meta.isPdf;
+    }
+  }
+
+  // フォルダ直下 = 未処理（補正前）。サブフォルダ（元画像/・処理済み/）は listFolderFiles 対象外。
+  if (folderId) {
+    try {
+      listFolderFiles(folderId).forEach(function(f) {
+        ensureItem(Object.assign({}, f, { inArchive: false, location: 'inbox' }));
+      });
+    } catch (e) { /* folder inaccessible */ }
+    // 元画像/ = 補正済み・OCR未完了（OCR再試行用）
+    listArchivedSourceFiles_(folderId).forEach(function(f) {
+      ensureItem(Object.assign({}, f, { location: 'warp_pending' }));
+    });
+  }
+
+  try {
+    var warpedFolder = getOrCreateTestImageFolder(ss);
+    var warpedFiles = warpedFolder.getFiles();
+    while (warpedFiles.hasNext()) {
+      var wf = warpedFiles.next();
+      var wfName = wf.getName();
+      if (wfName.indexOf('補正_') !== 0) continue;
+      var origName = parseWarpedOriginalFileName_(wfName);
+      if (!origName || isFileNameInResults_(origName, processedNames)) continue;
+      ensureItem({ id: '', name: origName, mimeType: 'image/jpeg', isPdf: false, inArchive: true });
+      itemsByName[normalizeResultFileName_(origName)].stage = 'ocr_only';
+      itemsByName[normalizeResultFileName_(origName)].warpedFileId = wf.getId();
+    }
+  } catch (e) { /* ignore */ }
+
+  Object.keys(itemsByName).forEach(function(key) {
+    var item = itemsByName[key];
+    if (item.stage === 'ocr_only' && item.warpedFileId) return;
+    if (item.id) {
+      var wid = findWarpedFileInFolder_(item.id, item.name);
+      if (wid) {
+        item.stage = 'ocr_only';
+        item.warpedFileId = wid;
+      }
+      return;
+    }
+    if (folderId) {
+      var found = findSourceFileByName_(folderId, item.name);
+      if (found) {
+        item.id = found.id;
+        item.inArchive = !!found.inArchive;
+        item.mimeType = found.mimeType;
+        item.isPdf = !!found.isPdf;
+        var wid2 = findWarpedFileInFolder_(found.id, item.name);
+        if (wid2) {
+          item.stage = 'ocr_only';
+          item.warpedFileId = wid2;
+        }
+      }
+    }
+  });
+
+  var items = Object.keys(itemsByName).map(function(k) { return itemsByName[k]; });
+  items.sort(function(a, b) { return naturalCompareFileNames_(a.name, b.name); });
+
+  var ocrOnly = 0;
+  var warpAndOcr = 0;
+  var inInbox = 0;
+  items.forEach(function(it) {
+    if (it.stage === 'ocr_only') ocrOnly++;
+    else warpAndOcr++;
+    if (!it.inArchive) inInbox++;
+  });
+
+  return {
+    items: items,
+    stats: {
+      pending: items.length,
+      ocrOnly: ocrOnly,
+      warpAndOcr: warpAndOcr,
+      inInbox: inInbox,
+      inSheet: Object.keys(processedNames).length
+    }
+  };
+}
+
+function getOcrWorkQueue() {
+  return buildOcrWorkQueue_(getActiveTestSs());
+}
+
+function getProcessedSheetState() {
+  var ss = getActiveTestSs();
+  return {
+    fileIds: Object.keys(getProcessedFileIds(ss)),
+    fileNames: Object.keys(getProcessedFileNames(ss))
+  };
 }
 
 function isFileAlreadyProcessed(ss, fileId) {
@@ -1565,6 +1831,33 @@ function buildResultRowArray(headers, map, fields, fileMeta, studentId, textMapp
   return row;
 }
 
+function saveWarpedOnly(fileMeta, studentId, warpedBase64) {
+  try {
+    var ss = getActiveTestSs();
+    var sourceFileId = fileMeta.id || fileMeta.fileId;
+    var sourceFileName = fileMeta.name || fileMeta.fileName || '';
+    if (!warpedBase64) throw new Error('補正画像データがありません。');
+    var saved = saveWarpedImage(warpedBase64, sourceFileName, studentId, sourceFileId);
+    if (!saved.reused && sourceFileId) {
+      var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+      archiveOriginalFile(sourceFileId, folderId);
+    }
+    return {
+      success: true,
+      warpedFileId: saved.fileId,
+      reused: !!saved.reused,
+      fileId: sourceFileId,
+      fileName: sourceFileName
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.toString(),
+      fileId: fileMeta ? (fileMeta.id || fileMeta.fileId) : ''
+    };
+  }
+}
+
 function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops, options) {
   try {
     var ss = getActiveTestSs();
@@ -1576,7 +1869,8 @@ function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops, options)
 
     var saved;
     if (options.skipSaveWarped) {
-      var existingId = getWarpedFileIdFromResults(ss, sourceFileId);
+      var existingId = fileMeta.warpedFileId || options.warpedFileId || '';
+      if (!existingId) existingId = getWarpedFileIdFromResults(ss, sourceFileId);
       if (!existingId) existingId = findWarpedFileInFolder_(sourceFileId, sourceFileName);
       if (!existingId) throw new Error('補正画像が見つかりません。');
       saved = { fileId: existingId, reused: true };
@@ -1634,7 +1928,9 @@ function flushResultRows(rows) {
   sheet.getRange(startRow, 1, startRow + dataRows.length - 1, headers.length).setValues(dataRows);
   updateTestStatus('テキスト化中');
   touchTestProgress_(ss, 3);
-  return { written: dataRows.length };
+  var studentFolderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var movedToProcessed = moveResultRowsToProcessed_(rows, studentFolderId);
+  return { written: dataRows.length, movedToProcessed: movedToProcessed };
 }
 
 function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists, fieldCrops) {
@@ -1654,6 +1950,9 @@ function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists, fi
       fileId: ocrResult.fileId,
       warpedFileId: ocrResult.warpedFileId
     }, ocrResult.studentId, ocrResult.textMapping);
+
+    var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+    moveSourceFileToProcessed_(ocrResult.fileId, ocrResult.fileName, folderId);
 
     return {
       success: true,
