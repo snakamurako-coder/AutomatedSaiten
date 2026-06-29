@@ -72,9 +72,33 @@
         }
         .crop-tile.deemed-checked { box-shadow: 0 0 0 2px #2563eb; background: #eff6ff; }
         .crit-row-deemed-checked { background: #eff6ff; }
+        .crit-row-incorrect-checked { background: #fef2f2; }
+        #load-countdown-overlay {
+            position: fixed; inset: 0; z-index: 99999;
+            background: rgba(15, 23, 42, 0.55);
+            display: flex; align-items: center; justify-content: center;
+        }
+        #load-countdown-overlay.hidden { display: none; }
+        #load-countdown-panel {
+            background: #fff; border-radius: 12px; padding: 2rem 2.5rem;
+            box-shadow: 0 20px 50px rgba(0,0,0,0.25); text-align: center; min-width: 280px;
+        }
+        #load-countdown-sec {
+            font-size: 3rem; font-weight: 800; color: #2563eb; line-height: 1;
+            font-variant-numeric: tabular-nums;
+        }
     </style>
 </head>
 <body>
+<div id="load-countdown-overlay" class="hidden" aria-live="polite" aria-busy="true">
+    <div id="load-countdown-panel">
+        <div class="loader mx-auto mb-4" style="width:28px;height:28px;border-width:4px;"></div>
+        <p id="load-countdown-msg" class="text-gray-700 font-medium mb-2">読み込み中...</p>
+        <p class="text-sm text-gray-500 mb-1">残り</p>
+        <p id="load-countdown-sec" class="mb-2">25</p>
+        <p class="text-xs text-gray-400">秒</p>
+    </div>
+</div>
 <div id="app-shell">
 
     <!-- 左: ステップナビ（付箋グラバー付き・自動格納） -->
@@ -209,15 +233,20 @@
             </div>
 
             <div class="overflow-auto max-h-[calc(100vh-14rem)] border rounded">
-                <table class="w-full text-xs"><thead class="bg-gray-100"><tr><th class="p-2">みなし</th><th class="p-2">解答</th><th class="p-2">人数</th><th class="p-2">判定</th><th class="p-2">得点</th><th class="p-2">備考</th><th class="p-2">画像</th></tr></thead><tbody id="criteria-tbody"></tbody></table>
+                <table class="w-full text-xs"><thead class="bg-gray-100"><tr><th class="p-2">みなし</th><th class="p-2">不正解</th><th class="p-2">解答</th><th class="p-2">人数</th><th class="p-2">判定</th><th class="p-2">得点</th><th class="p-2">備考</th><th class="p-2">画像</th></tr></thead><tbody id="criteria-tbody"></tbody></table>
             </div>
 
             <div class="border rounded p-3 bg-slate-50 space-y-2">
                 <div class="text-xs font-bold text-slate-800">外れ値・少数派解答の確認（回答欄画像）</div>
-                <p class="text-xs text-slate-600">下の「表示」チェックで画像を選びます。画像クリックで解答表の「みなし」チェックと連動します。</p>
+                <p class="text-xs text-slate-600">下表の「みなし」「不正解」は解答集約表と連動します。「不正解」☑の解答は、下のオプションが有効なとき画像を読み込みません。</p>
                 <div class="flex flex-wrap gap-2 items-center text-xs">
                     <label>人数上限 ≤ <input type="number" id="outlier-max-count" value="2" min="1" class="w-12 border rounded p-1 text-center"></label>
                     <button type="button" data-busy-label="検出中..." onclick="withBusyButton(event.currentTarget, fetchOutlierGroups)" class="bg-slate-600 text-white px-2 py-1 rounded">外れ値を検出</button>
+                    <label class="flex items-center gap-1 border rounded bg-white px-2 py-1">
+                        <input type="checkbox" id="hide-incorrect-crops" checked>
+                        <span>不正解対象の解答の画像は表示しない</span>
+                    </label>
+                    <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showNoneAnswerCrops)" class="bg-amber-600 text-white px-2 py-1 rounded font-bold">なし（未回答）の回答を確認する</button>
                     <button type="button" onclick="selectAllOutlierRows(true)" class="bg-white border px-2 py-1 rounded">表示を全選択</button>
                     <button type="button" onclick="selectAllOutlierRows(false)" class="bg-white border px-2 py-1 rounded">表示を解除</button>
                     <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showSelectedOutlierCrops)" class="bg-blue-600 text-white px-2 py-1 rounded font-bold">選択を画像表示</button>
@@ -744,15 +773,17 @@ function patchCurrentTestSessionCache(updater) {
 async function preloadTestsToSessionCache(tests) {
   var ids = (tests || []).map(function(t) { return t.testSsId; }).filter(Boolean);
   if (!ids.length) return;
-  setStatus('テスト再開情報を読み込み中... (' + ids.length + ' 件)');
-  try {
-    var map = await gasRun('getBatchTestRestoreSnapshots', ids);
-    Object.keys(map || {}).forEach(function(id) {
-      TestSessionCache.set(id, map[id]);
-    });
-  } catch (e) {
-    setStatus('テスト再開情報の一括読込に失敗: ' + (e.message || e), true);
-  }
+  await withLoadCountdown('テスト管理データを読み込み中... (' + ids.length + ' 件)', async function() {
+    setStatus('テスト再開情報を読み込み中... (' + ids.length + ' 件)');
+    try {
+      var map = await gasRun('getBatchTestRestoreSnapshots', ids);
+      Object.keys(map || {}).forEach(function(id) {
+        TestSessionCache.set(id, map[id]);
+      });
+    } catch (e) {
+      setStatus('テスト再開情報の一括読込に失敗: ' + (e.message || e), true);
+    }
+  });
 }
 
 async function refreshCurrentTestInCache() {
@@ -794,7 +825,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], cropInlineZoom: 100 };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], cropInlineZoom: 100 };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -943,6 +974,43 @@ function setStatus(msg, isError) {
     document.getElementById('status-msg').innerHTML = isError ? '<span class="text-red-600">' + msg + '</span>' : '<span class="text-gray-700">' + msg + '</span>';
 }
 
+var loadCountdownTimer = null;
+var LOAD_COUNTDOWN_SEC = 25;
+
+function startLoadCountdown(message) {
+    stopLoadCountdown(false);
+    var overlay = document.getElementById('load-countdown-overlay');
+    var msgEl = document.getElementById('load-countdown-msg');
+    var secEl = document.getElementById('load-countdown-sec');
+    if (!overlay || !msgEl || !secEl) return;
+    var remaining = LOAD_COUNTDOWN_SEC;
+    overlay.classList.remove('hidden');
+    msgEl.textContent = message || '読み込み中...';
+    secEl.textContent = String(remaining);
+    loadCountdownTimer = setInterval(function() {
+        remaining--;
+        secEl.textContent = String(Math.max(0, remaining));
+        if (remaining <= 0) stopLoadCountdown(true);
+    }, 1000);
+}
+
+function stopLoadCountdown(forceHide) {
+    if (loadCountdownTimer) {
+        clearInterval(loadCountdownTimer);
+        loadCountdownTimer = null;
+    }
+    if (forceHide !== false) {
+        var overlay = document.getElementById('load-countdown-overlay');
+        if (overlay) overlay.classList.add('hidden');
+    }
+}
+
+async function withLoadCountdown(message, fn) {
+    startLoadCountdown(message);
+    try { return await fn(); }
+    finally { stopLoadCountdown(true); }
+}
+
 function formatTestOptionLabel(t) {
     var step = t.currentStep !== '' && t.currentStep != null ? 'Step ' + t.currentStep : 'Step ?';
     var saved = t.lastSavedAt || t.createdAt || '';
@@ -982,7 +1050,7 @@ async function loadAppBootstrap() {
                 await preloadTestsToSessionCache(boot.tests);
                 var resumePartial = boot.activeTestSsId || boot.tests[0].testSsId;
                 if (resumePartial) {
-                    await selectTest(resumePartial);
+                    await selectTest(resumePartial, null, { skipLoadCountdown: true });
                 } else {
                     setStatus(boot.error || 'ハブの初期化に問題がありますが、テスト一覧は表示しました。', true);
                 }
@@ -1003,7 +1071,7 @@ async function loadAppBootstrap() {
         var resumeId = boot.activeTestSsId;
         if (!resumeId && boot.tests.length > 0) resumeId = boot.tests[0].testSsId;
         if (resumeId) {
-            await selectTest(resumeId);
+            await selectTest(resumeId, null, { skipLoadCountdown: true });
         } else if (!boot.tests.length) {
             setStatus('テストがありません。⓪ テスト作成から始めてください。');
         }
@@ -1198,7 +1266,7 @@ function loadCriteriaUiForField(fieldId) {
         return;
     }
     appState.criteriaList = [];
-    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="7" class="p-2 text-gray-400">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
+    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="8" class="p-2 text-gray-400">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
 }
 
 function getDeemedCanonicalUi() {
@@ -1242,10 +1310,90 @@ function getDeemedCheckedSources(fieldId) {
     return Object.keys(map).filter(function(k) { return map[k]; });
 }
 
+function ensureIncorrectCheckedField(fieldId) {
+    if (!appState.incorrectCheckedByField[fieldId]) appState.incorrectCheckedByField[fieldId] = {};
+    return appState.incorrectCheckedByField[fieldId];
+}
+
+function isIncorrectChecked(fieldId, answerText) {
+    var map = (appState.incorrectCheckedByField || {})[fieldId] || {};
+    return !!map[answerText];
+}
+
+function toggleIncorrectAnswer(fieldId, answerText, forceValue) {
+    var map = ensureIncorrectCheckedField(fieldId);
+    var next = forceValue != null ? !!forceValue : !map[answerText];
+    if (next) map[answerText] = true;
+    else delete map[answerText];
+    syncIncorrectUiFromState();
+    purgeIncorrectFromCropGrid();
+}
+
+function shouldHideIncorrectCrops() {
+    var el = document.getElementById('hide-incorrect-crops');
+    return el ? el.checked : !!appState.hideIncorrectCropImages;
+}
+
+function shouldSkipCropLoadForAnswer(answerText) {
+    if (!shouldHideIncorrectCrops()) return false;
+    return isIncorrectChecked(getCriteriaFieldId(), answerText);
+}
+
+function filterRowsForCropLoad(rows) {
+    if (!shouldHideIncorrectCrops()) return rows || [];
+    return (rows || []).filter(function(row) {
+        return !isIncorrectChecked(getCriteriaFieldId(), row.answer_text);
+    });
+}
+
+function renderDeemedCheckboxHtml(fid, answerText, cssClass) {
+    var canonical = getDeemedCanonicalUi();
+    if (canonical && answerText === canonical) {
+        return '<span class="text-gray-400" title="正答例">—</span>';
+    }
+    var enc = encodeAnswerAttr(answerText);
+    var checked = isDeemedChecked(fid, answerText);
+    return '<input type="checkbox" class="' + cssClass + '" data-answer="' + enc + '"' + (checked ? ' checked' : '') + '>';
+}
+
+function renderIncorrectCheckboxHtml(fid, answerText, cssClass) {
+    var enc = encodeAnswerAttr(answerText);
+    var checked = isIncorrectChecked(fid, answerText);
+    return '<input type="checkbox" class="' + cssClass + '" data-answer="' + enc + '"' + (checked ? ' checked' : '') + '>';
+}
+
+function syncIncorrectUiFromState() {
+    var fid = getCriteriaFieldId();
+    document.querySelectorAll('.crit-incorrect, .outlier-incorrect').forEach(function(cb) {
+        var ans = decodeAnswerAttr(cb.dataset.answer || '');
+        cb.checked = isIncorrectChecked(fid, ans);
+        var tr = cb.closest('tr');
+        if (tr) tr.classList.toggle('crit-row-incorrect-checked', cb.checked);
+    });
+    document.querySelectorAll('.outlier-deemed').forEach(function(cb) {
+        var ans = decodeAnswerAttr(cb.dataset.answer || '');
+        cb.checked = isDeemedChecked(fid, ans);
+    });
+}
+
+function purgeIncorrectFromCropGrid() {
+    if (!shouldHideIncorrectCrops()) return;
+    var fid = getCriteriaFieldId();
+    appState.cropGridResults = (appState.cropGridResults || []).filter(function(r) {
+        return !isIncorrectChecked(fid, r.row && r.row.answer_text);
+    });
+    var grid = document.getElementById('outlier-crop-grid');
+    if (appState.cropGridResults.length) {
+        renderCropGrid(appState.cropGridResults);
+    } else if (grid) {
+        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">不正解対象の解答は画像表示から除外しました</p>';
+    }
+}
+
 function syncDeemedUiFromState() {
     var fid = getCriteriaFieldId();
     var canonical = getDeemedCanonicalUi();
-    document.querySelectorAll('.crit-deemed').forEach(function(cb) {
+    document.querySelectorAll('.crit-deemed, .outlier-deemed').forEach(function(cb) {
         var ans = decodeAnswerAttr(cb.dataset.answer || '');
         cb.checked = isDeemedChecked(fid, ans);
         var tr = cb.closest('tr');
@@ -1257,6 +1405,7 @@ function syncDeemedUiFromState() {
         tile.classList.toggle('deemed-checked', isDeemedChecked(fid, ans));
     });
     updateDeemedApplyButtonState();
+    syncIncorrectUiFromState();
 }
 
 function updateDeemedApplyButtonState() {
@@ -1302,6 +1451,7 @@ async function applyDeemedScoringAndReaggregate() {
     var sources = getDeemedCheckedSources(fid).filter(function(s) { return s !== canonical; });
     if (!canonical) { setStatus('正答例を入力してください', true); return; }
     if (!sources.length) { setStatus('みなし対象を1件以上選択してください', true); return; }
+    var appliedSources = sources.slice();
     try {
         setStatus('みなし採点を適用して再集約中...');
         var res = await gasRun('applyDeemedScoringToField', fid, canonical, sources);
@@ -1312,11 +1462,35 @@ async function applyDeemedScoringAndReaggregate() {
         if (deemedInput) deemedInput.value = canonical;
         renderCriteriaTable();
         syncDeemedUiFromState();
+        purgeDeemedTargetsFromOutlierUi(appliedSources);
         await syncBatchTableFromSheet();
         await fetchOutlierGroups();
         setStatus('みなし採点: 採点結果シート ' + (res.updatedCount || 0) + ' セルを正答例「' + canonical + '」に更新、' + appState.criteriaList.length + ' 種類に再集約');
         refreshCurrentTestInCache().catch(function() {});
     } catch (e) { setStatus(e.message || e, true); }
+}
+
+function purgeDeemedTargetsFromOutlierUi(appliedSources) {
+    if (!appliedSources || !appliedSources.length) return;
+    var sourceSet = {};
+    appliedSources.forEach(function(s) { sourceSet[s] = true; });
+
+    appState.outlierGroups = (appState.outlierGroups || []).filter(function(group) {
+        return !sourceSet[group.answer_text];
+    });
+
+    appState.cropGridResults = (appState.cropGridResults || []).filter(function(r) {
+        var ans = r.row && r.row.answer_text;
+        return !sourceSet[ans];
+    });
+
+    renderOutlierGroupsList();
+    var grid = document.getElementById('outlier-crop-grid');
+    if (appState.cropGridResults.length) {
+        renderCropGrid(appState.cropGridResults);
+    } else if (grid) {
+        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">みなし適用済みの解答は非表示にしました</p>';
+    }
 }
 
 function applyCropInlineZoom(pct) {
@@ -1434,15 +1608,26 @@ function renderOutlierGroupsList() {
         container.innerHTML = '<p class="text-gray-500">該当する外れ値はありません</p>';
         return;
     }
-    var html = '<table class="w-full"><tr class="bg-gray-50"><th class="p-1 w-6">表示</th><th class="p-1 text-left">解答</th><th class="p-1">人数</th><th class="p-1">生徒</th><th class="p-1"></th></tr>';
+    var fid = getCriteriaFieldId();
+    var html = '<table class="w-full"><tr class="bg-gray-50"><th class="p-1 w-8">みなし</th><th class="p-1 w-8">不正解</th><th class="p-1 text-left">解答</th><th class="p-1 w-10">人数</th><th class="p-1 w-8">表示</th><th class="p-1">生徒</th><th class="p-1"></th></tr>';
     appState.outlierGroups.forEach(function(group, gi) {
+        var rowSpan = group.rows.length;
         group.rows.forEach(function(row, ri) {
             var key = gi + ':' + ri;
-            html += '<tr class="border-t"><td class="p-1 text-center"><input type="checkbox" class="outlier-row-cb" data-key="' + key + '" checked></td>' +
-                '<td class="p-1 font-mono truncate max-w-[200px]" title="' + escapeHtml(group.answer_text) + '">' + escapeHtml(group.answer_text) + '</td>' +
-                '<td class="p-1 text-center">' + group.count + '</td>' +
+            var skipImg = shouldSkipCropLoadForAnswer(group.answer_text);
+            html += '<tr class="border-t' + (isIncorrectChecked(fid, group.answer_text) ? ' crit-row-incorrect-checked' : '') + '">';
+            if (ri === 0) {
+                html += '<td class="p-1 text-center align-top" rowspan="' + rowSpan + '">' + renderDeemedCheckboxHtml(fid, group.answer_text, 'outlier-deemed') + '</td>';
+                html += '<td class="p-1 text-center align-top" rowspan="' + rowSpan + '">' + renderIncorrectCheckboxHtml(fid, group.answer_text, 'outlier-incorrect') + '</td>';
+                html += '<td class="p-1 font-mono align-top truncate max-w-[200px]" rowspan="' + rowSpan + '" title="' + escapeHtml(group.answer_text) + '">' + escapeHtml(group.answer_text) + '</td>';
+                html += '<td class="p-1 text-center align-top" rowspan="' + rowSpan + '">' + group.count + '</td>';
+            }
+            html += '<td class="p-1 text-center"><input type="checkbox" class="outlier-row-cb" data-key="' + key + '"' + (skipImg ? '' : ' checked') + (skipImg ? ' disabled title="不正解対象のため非表示"' : '') + '></td>' +
                 '<td class="p-1 truncate max-w-[120px]" title="' + escapeHtml(row.fileName) + '">' + escapeHtml(row.studentId || '-') + '</td>' +
-                '<td class="p-1"><button type="button" class="text-blue-600 underline outlier-show-one" data-key="' + key + '">1枚</button></td></tr>';
+                '<td class="p-1">' + (skipImg
+                    ? '<span class="text-gray-400 text-[10px]">除外</span>'
+                    : '<button type="button" class="text-blue-600 underline outlier-show-one" data-key="' + key + '">1枚</button>') +
+                '</td></tr>';
         });
     });
     html += '</table>';
@@ -1478,13 +1663,16 @@ function selectAllOutlierRows(checked) {
     document.querySelectorAll('.outlier-row-cb').forEach(function(cb) { cb.checked = checked; });
 }
 
-async function loadAnswerCropsForRows(rows, fieldId) {
+async function loadAnswerCropsForRows(rows, fieldId, opts) {
+    opts = opts || {};
     var field = (appState.fields || []).find(function(f) { return f.id === fieldId; });
     if (!field) throw new Error('記述欄が見つかりません');
+    if (!opts.allowIncorrect) rows = filterRowsForCropLoad(rows);
     var region = { x: field.x, y: field.y, width: field.width, height: field.height };
     var grid = document.getElementById('outlier-crop-grid');
     if (!rows.length) {
-        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">表示する回答がありません</p>';
+        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">表示する回答がありません（不正解対象は読み込みません）</p>';
+        appState.cropGridResults = [];
         return;
     }
     grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">画像を読み込み中...（' + rows.length + '枚）</p>';
@@ -1532,8 +1720,8 @@ function renderCropGrid(results) {
 
 async function showSelectedOutlierCrops() {
     var fid = getCriteriaFieldId();
-    var rows = getSelectedOutlierRows();
-    if (!rows.length) { setStatus('表示する回答を選択してください', true); return; }
+    var rows = filterRowsForCropLoad(getSelectedOutlierRows());
+    if (!rows.length) { setStatus('表示する回答を選択してください（不正解対象は除外されます）', true); return; }
     setStatus(rows.length + ' 枚の回答欄画像を読み込み中...');
     await loadAnswerCropsForRows(rows, fid);
     setStatus(rows.length + ' 枚を表示しました。倍率スライダーまたは数値入力でサイズを調整できます');
@@ -1541,13 +1729,30 @@ async function showSelectedOutlierCrops() {
 
 async function showAnswerPatternCrops(answerText) {
     var fid = getCriteriaFieldId();
+    if (shouldSkipCropLoadForAnswer(answerText)) {
+        setStatus('不正解対象のため「' + answerText + '」の画像は表示しません', true);
+        return;
+    }
     setStatus('該当解答の画像を取得中...');
     try {
         var rows = await gasRun('getAnswerRowsForPattern', fid, answerText);
         if (!rows.length) { setStatus('該当する回答がありません', true); return; }
+        rows = filterRowsForCropLoad(rows);
+        if (!rows.length) { setStatus('不正解対象のため画像を表示しません', true); return; }
         selectAllOutlierRows(false);
         await loadAnswerCropsForRows(rows, fid);
         setStatus(rows.length + ' 枚（解答: ' + answerText + '）');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function showNoneAnswerCrops() {
+    var fid = getCriteriaFieldId();
+    setStatus('「なし（未回答）」の回答欄画像を読み込み中...');
+    try {
+        var rows = await gasRun('getAnswerRowsForPattern', fid, 'なし');
+        if (!rows.length) { setStatus('「なし」の回答は見つかりませんでした', true); return; }
+        await loadAnswerCropsForRows(rows, fid, { allowIncorrect: true });
+        setStatus(rows.length + ' 枚の「なし（未回答）」を表示しました。薄い文字か本当に未記入かを確認してください');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -1558,6 +1763,7 @@ async function fetchOutlierGroups() {
     try {
         appState.outlierGroups = await gasRun('getOutlierAnswerGroups', fid, maxCount);
         renderOutlierGroupsList();
+        syncIncorrectUiFromState();
         setStatus(appState.outlierGroups.length + ' 種類の外れ値解答を検出（人数 ≤ ' + maxCount + '）');
     } catch (e) { setStatus(e.message || e, true); }
 }
@@ -1601,7 +1807,7 @@ function renderCriteriaTableFromSaved(rules) {
     var tbody = document.getElementById('criteria-tbody');
     tbody.innerHTML = rules.map(function(item, idx) {
         var enc = encodeAnswerAttr(item.answer_text);
-        return '<tr><td class="p-2 border text-center">—</td><td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">—</td>' +
+        return '<tr><td class="p-2 border text-center">—</td><td class="p-2 border text-center">—</td><td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">—</td>' +
             '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (item.judgment==='○'?' selected':'') + '>○</option><option' + (item.judgment==='△'?' selected':'') + '>△</option><option' + (item.judgment==='×'?' selected':'') + '>×</option></select></td>' +
             '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + (item.score != null ? item.score : 0) + '"></td>' +
             '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + escapeHtml(item.reason || '') + '"></td>' +
@@ -1663,6 +1869,7 @@ async function restoreTestUi(data) {
     appState.deemedDraftByField = data.deemedDraftByField || {};
     appState.deemedScoringByField = data.deemedScoringByField || {};
     appState.deemedCheckedByField = {};
+    appState.incorrectCheckedByField = {};
     appState.domainRows = data.domainSettings || [];
     appState.criteriaList = [];
     appState.warpedBase64 = null;
@@ -1821,9 +2028,10 @@ async function refreshTestList() {
     await refreshRecentTestsDropdown();
 }
 
-async function selectTest(testSsId, targetStep) {
+async function selectTest(testSsId, targetStep, opts) {
     if (!testSsId) return;
-    try {
+    opts = opts || {};
+    var runSelect = async function() {
         await gasRun('setActiveTestIdOnly', testSsId);
         var cached = TestSessionCache.get(testSsId);
         if (cached) {
@@ -1847,6 +2055,13 @@ async function selectTest(testSsId, targetStep) {
         var step = targetStep != null ? targetStep : (data.currentStep || 0);
         goToStep(step, { skipAutoSave: true });
         setStatus('作業を再開: ' + (data.info['テスト名'] || testSsId) + '（Step ' + step + '）');
+    };
+    try {
+        if (opts.skipLoadCountdown || TestSessionCache.has(testSsId)) {
+            await runSelect();
+        } else {
+            await withLoadCountdown('テスト管理データを読み込み中...', runSelect);
+        }
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -2065,14 +2280,17 @@ function renderCriteriaTable(aiList) {
         var enc = encodeAnswerAttr(item.answer_text);
         var isCanonical = canonical && item.answer_text === canonical;
         var deemedChecked = isDeemedChecked(fid, item.answer_text);
-        var rowCls = deemedChecked ? ' crit-row-deemed-checked' : '';
-        var deemedCell = isCanonical
-            ? '<span class="text-gray-400" title="正答例">—</span>'
-            : '<input type="checkbox" class="crit-deemed" data-answer="' + enc + '"' + (deemedChecked ? ' checked' : '') + '>';
-        var confirmCell = showImg
+        var incorrectChecked = isIncorrectChecked(fid, item.answer_text);
+        var rowCls = (deemedChecked ? ' crit-row-deemed-checked' : '') + (incorrectChecked ? ' crit-row-incorrect-checked' : '');
+        var deemedCell = renderDeemedCheckboxHtml(fid, item.answer_text, 'crit-deemed');
+        var incorrectCell = renderIncorrectCheckboxHtml(fid, item.answer_text, 'crit-incorrect');
+        var confirmCell = showImg && !shouldSkipCropLoadForAnswer(item.answer_text)
             ? '<button type="button" class="text-blue-600 underline crit-show-img" data-idx="' + idx + '">表示</button>'
-            : '—';
+            : (showImg && shouldSkipCropLoadForAnswer(item.answer_text)
+                ? '<span class="text-gray-400 text-[10px]" title="不正解対象">除外</span>'
+                : '—');
         return '<tr class="' + rowCls.trim() + '"><td class="p-2 border text-center">' + deemedCell + '</td>' +
+            '<td class="p-2 border text-center">' + incorrectCell + '</td>' +
             '<td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">' + item.count + '</td>' +
             '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (judgment==='○'?' selected':'') + '>○</option><option' + (judgment==='△'?' selected':'') + '>△</option><option' + (judgment==='×'?' selected':'') + '>×</option></select></td>' +
             '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + score + '"></td>' +
@@ -2286,10 +2504,22 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (t.classList.contains('crit-show-img')) {
             var cidx = parseInt(t.dataset.idx, 10);
             var item = appState.criteriaList[cidx];
-            if (item) withBusyButton(t, function() { return showAnswerPatternCrops(item.answer_text); });
+            if (item) {
+                if (shouldSkipCropLoadForAnswer(item.answer_text)) {
+                    setStatus('不正解対象のため画像を表示しません', true);
+                    return;
+                }
+                withBusyButton(t, function() { return showAnswerPatternCrops(item.answer_text); });
+            }
         } else if (t.classList.contains('outlier-show-one')) {
             var row = getOutlierRowByKey(t.dataset.key);
-            if (row) withBusyButton(t, function() { return loadAnswerCropsForRows([row], getCriteriaFieldId()); });
+            if (row) {
+                if (shouldSkipCropLoadForAnswer(row.answer_text)) {
+                    setStatus('不正解対象のため画像を表示しません', true);
+                    return;
+                }
+                withBusyButton(t, function() { return loadAnswerCropsForRows([row], getCriteriaFieldId()); });
+            }
         } else if (t.classList.contains('crop-tile-img') || t.classList.contains('crop-tile')) {
             var tile = t.classList.contains('crop-tile') ? t : t.closest('.crop-tile');
             if (tile && tile.dataset.answer) {
@@ -2298,8 +2528,15 @@ document.addEventListener('DOMContentLoaded', function() {
         }
     });
     document.getElementById('step-4').addEventListener('change', function(ev) {
-        if (ev.target.classList.contains('crit-deemed')) {
-            toggleDeemedAnswer(getCriteriaFieldId(), decodeAnswerAttr(ev.target.dataset.answer), ev.target.checked);
+        var fid = getCriteriaFieldId();
+        if (ev.target.classList.contains('crit-deemed') || ev.target.classList.contains('outlier-deemed')) {
+            toggleDeemedAnswer(fid, decodeAnswerAttr(ev.target.dataset.answer), ev.target.checked);
+        } else if (ev.target.classList.contains('crit-incorrect') || ev.target.classList.contains('outlier-incorrect')) {
+            toggleIncorrectAnswer(fid, decodeAnswerAttr(ev.target.dataset.answer), ev.target.checked);
+        } else if (ev.target.id === 'hide-incorrect-crops') {
+            appState.hideIncorrectCropImages = ev.target.checked;
+            renderOutlierGroupsList();
+            purgeIncorrectFromCropGrid();
         }
     });
     loadAppBootstrap();
