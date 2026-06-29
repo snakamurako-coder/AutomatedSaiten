@@ -1,0 +1,548 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>模範解答ベース自動採点システム</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+    <style>
+        body { font-family: 'Noto Sans JP', sans-serif; background: #f3f4f6; }
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 18px; height: 18px; animation: spin 1s linear infinite; display: inline-block; }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .step-btn.active { background: #2563eb; color: white; }
+        .step-btn.done { background: #dcfce7; color: #166534; }
+        #editor-canvas, #batch-preview-canvas { max-width: 100%; cursor: crosshair; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
+        .workspace-scroll { overflow: auto; max-height: calc(100vh - 120px); }
+    </style>
+</head>
+<body class="p-4">
+<div class="max-w-[1600px] mx-auto bg-white rounded-xl shadow-lg flex flex-col lg:flex-row min-h-[90vh]">
+
+    <!-- 左: ステップナビ -->
+    <div class="w-full lg:w-80 bg-gray-50 border-r p-4 flex flex-col shrink-0">
+        <h1 class="text-lg font-bold text-gray-800 mb-1"><i class="fa-solid fa-graduation-cap text-blue-600 mr-2"></i>自動採点システム</h1>
+        <p id="opencv-status" class="text-xs text-orange-600 mb-2"><i class="fa-solid fa-spinner fa-spin"></i> OpenCV.js 読込中...</p>
+        <p id="active-test-label" class="text-xs text-gray-600 mb-3 truncate">テスト未選択</p>
+        <nav id="step-nav" class="space-y-1 text-xs flex-1 overflow-y-auto"></nav>
+        <div id="status-msg" class="mt-3 text-xs text-center text-gray-600 min-h-[2rem] border-t pt-2"></div>
+    </div>
+
+    <!-- 右: ワークスペース -->
+    <div class="flex-1 p-4 workspace-scroll">
+        <!-- ⓪ テスト作成 -->
+        <div id="step-0" class="step-panel space-y-4">
+            <h2 class="font-bold text-gray-800">⓪ テスト作成</h2>
+            <div class="grid gap-3 max-w-md">
+                <div><label class="text-xs font-semibold">テスト名 *</label><input id="test-name" class="w-full border rounded p-2 text-sm" placeholder="例: 2025前期 中間テスト"></div>
+                <div><label class="text-xs font-semibold">科目名</label><input id="test-subject" class="w-full border rounded p-2 text-sm"></div>
+                <div><label class="text-xs font-semibold">実施日時</label><input id="test-datetime" type="datetime-local" class="w-full border rounded p-2 text-sm"></div>
+                <button onclick="createNewTest()" class="bg-blue-600 text-white py-2 rounded font-bold text-sm hover:bg-blue-700">テスト用スプレッドシートを作成</button>
+            </div>
+            <div class="mt-4">
+                <h3 class="text-sm font-bold mb-2">既存テストを開く</h3>
+                <div id="test-list" class="space-y-1 text-xs"></div>
+            </div>
+        </div>
+
+        <!-- ① 回答欄設定 -->
+        <div id="step-1" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">① 回答欄設定（模範解答）</h2>
+            <div class="flex flex-wrap gap-3 items-end text-xs">
+                <label>用紙方向 <select id="orientation-1" class="border rounded p-1"><option value="landscape">A4横</option><option value="portrait">A4縦</option></select></label>
+                <label>二値化 <input type="range" id="thresh-1" min="0" max="255" value="128" class="w-24"></label>
+                <input type="file" id="model-file" accept="image/*,.pdf" class="text-xs">
+                <button onclick="loadModelAnswer()" class="bg-blue-600 text-white px-3 py-1 rounded">模範解答を読込</button>
+                <button onclick="saveAnswerFieldsToServer()" class="bg-green-600 text-white px-3 py-1 rounded">記述欄を保存</button>
+                <button onclick="RegionEditor.deleteSelected()" class="bg-red-100 text-red-700 px-3 py-1 rounded">選択欄を削除</button>
+            </div>
+            <p class="text-xs text-gray-500">Canvas上をドラッグして記述欄を追加。クリックで選択→移動・リサイズ可能。</p>
+            <div class="flex gap-4">
+                <canvas id="editor-canvas" class="bg-white"></canvas>
+                <ul id="field-list" class="text-xs w-48 space-y-1"></ul>
+            </div>
+        </div>
+
+        <!-- ② 配点 -->
+        <div id="step-2" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">② 各問題の配点決定</h2>
+            <div id="points-table" class="max-w-md"></div>
+            <button onclick="savePointsToServer()" class="bg-green-600 text-white px-4 py-2 rounded text-sm font-bold">配点を保存</button>
+        </div>
+
+        <!-- ③ テキスト化 -->
+        <div id="step-3" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">③ 回答欄のテキスト化</h2>
+            <div class="flex flex-wrap gap-2 text-xs items-end">
+                <div class="flex-1 min-w-[200px]"><label class="font-semibold">DriveフォルダID</label><input id="drive-folder-id" class="w-full border rounded p-2 text-sm" placeholder="フォルダURLの id= 以降"></div>
+                <button onclick="listDriveFiles()" class="bg-gray-200 px-3 py-2 rounded">ファイル一覧</button>
+                <button onclick="startBatchOcr()" id="batch-start-btn" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">バッチOCR開始</button>
+                <button onclick="BatchProcessor.pause()" class="bg-orange-200 px-3 py-2 rounded">一時停止</button>
+            </div>
+            <div class="text-xs"><span id="batch-progress">待機中</span></div>
+            <div class="w-full bg-gray-200 rounded h-2"><div id="batch-bar" class="bg-blue-600 h-2 rounded transition-all" style="width:0%"></div></div>
+            <p id="batch-file-count" class="text-xs text-gray-500"></p>
+        </div>
+
+        <!-- ④ 採点基準 -->
+        <div id="step-4" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">④ 採点基準の設定</h2>
+            <div class="flex gap-2 text-xs">
+                <select id="criteria-field-select" class="border rounded p-2"></select>
+                <button onclick="fetchUniqueForCriteria()" class="bg-purple-100 text-purple-800 px-3 py-1 rounded font-bold">解答を集約</button>
+                <button onclick="askGeminiCriteria()" class="bg-purple-600 text-white px-3 py-1 rounded font-bold">AI原案</button>
+                <button onclick="saveCriteriaToServer()" class="bg-green-600 text-white px-3 py-1 rounded font-bold">基準を保存</button>
+            </div>
+            <div class="overflow-auto max-h-96 border rounded">
+                <table class="w-full text-xs"><thead class="bg-gray-100"><tr><th class="p-2">解答</th><th class="p-2">人数</th><th class="p-2">判定</th><th class="p-2">得点</th><th class="p-2">備考</th></tr></thead><tbody id="criteria-tbody"></tbody></table>
+            </div>
+        </div>
+
+        <!-- ⑤ 採点 -->
+        <div id="step-5" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">⑤ 採点の実施</h2>
+            <button onclick="runGrading()" class="bg-green-600 text-white px-6 py-3 rounded font-bold text-sm"><i class="fa-solid fa-calculator mr-2"></i>一括採点を実行</button>
+            <div id="summary-preview" class="text-xs border rounded p-3 bg-gray-50 max-h-80 overflow-auto"></div>
+        </div>
+
+        <!-- ⑥ 領域 -->
+        <div id="step-6" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">⑥ 領域の設定</h2>
+            <div id="domain-table" class="overflow-auto"></div>
+            <button onclick="saveDomainsToServer()" class="bg-green-600 text-white px-4 py-2 rounded text-sm font-bold">領域設定を保存・再計算</button>
+        </div>
+
+        <!-- ⑦ 合計・外部 -->
+        <div id="step-7" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">⑦ 領域合計・外部連携得点</h2>
+            <button onclick="recalcDomains()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm mb-2">領域合計・総計点を再計算</button>
+            <div><label class="text-xs font-semibold">外部得点CSV（生徒ID,得点[,ソース]）</label>
+            <textarea id="external-csv" class="w-full border rounded p-2 text-xs h-24 font-mono" placeholder="1001,15&#10;1002,12"></textarea></div>
+            <button onclick="importExternalCsv()" class="bg-green-600 text-white px-4 py-2 rounded text-sm">外部得点を取込</button>
+            <p class="text-xs text-gray-500">フィードバック画像への判定描画は今後実装予定です。</p>
+        </div>
+
+        <!-- ⑧ 本人欄 -->
+        <div id="step-8" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">⑧ 学年・組・番号・氏名欄の設定</h2>
+            <p class="text-xs text-gray-500">OCRは使わず、照合用に画像領域のみ指定します。</p>
+            <button onclick="loadModelForIdentity()" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">模範解答を再表示</button>
+            <button onclick="saveIdentityToServer()" class="bg-green-600 text-white px-3 py-1 rounded text-xs">本人欄を保存</button>
+            <canvas id="identity-canvas" class="bg-white max-w-full"></canvas>
+        </div>
+
+        <!-- ⑨ 照合 -->
+        <div id="step-9" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">⑨ ID・氏名の照合</h2>
+            <div class="text-xs"><label>名簿CSV（生徒ID,氏名）</label><textarea id="roster-csv" class="w-full border rounded p-2 h-20 font-mono"></textarea></div>
+            <button onclick="runVerification()" class="bg-blue-600 text-white px-4 py-2 rounded text-sm">照合実行</button>
+            <div id="verify-results" class="overflow-auto max-h-96 text-xs"></div>
+        </div>
+
+        <!-- ⑩ 出力 -->
+        <div id="step-10" class="step-panel hidden space-y-3">
+            <h2 class="font-bold">⑩ 出力（未実装）</h2>
+            <p class="text-gray-500 text-sm">採点判定結果・合計点を解答用紙画像に上書きする機能は今後実装予定です。</p>
+        </div>
+    </div>
+</div>
+
+<img id="hidden-source-img" style="display:none">
+<script><?!= include('ImageWarp'); ?></script>
+<script><?!= include('PdfLoader'); ?></script>
+<script><?!= include('RegionEditor'); ?></script>
+<script><?!= include('BatchProcessor'); ?></script>
+<script>
+var STEPS = [
+    { id: 0, label: '⓪ テスト作成' }, { id: 1, label: '① 回答欄設定' }, { id: 2, label: '② 配点決定' },
+    { id: 3, label: '③ テキスト化' }, { id: 4, label: '④ 採点基準' }, { id: 5, label: '⑤ 採点実行' },
+    { id: 6, label: '⑥ 領域設定' }, { id: 7, label: '⑦ 合計・外部得点' }, { id: 8, label: '⑧ 本人欄設定' },
+    { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
+];
+var currentStep = 0, opencvReady = false, appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [] };
+
+function onOpenCvReady() {
+    opencvReady = true;
+    document.getElementById('opencv-status').innerHTML = '<span class="text-green-600"><i class="fa-solid fa-check"></i> OpenCV.js 準備完了</span>';
+    document.getElementById('file-input') && (document.getElementById('file-input').disabled = false);
+}
+
+function setStatus(msg, isError) {
+    document.getElementById('status-msg').innerHTML = isError ? '<span class="text-red-600">' + msg + '</span>' : '<span class="text-gray-700">' + msg + '</span>';
+}
+
+function initStepNav() {
+    var nav = document.getElementById('step-nav');
+    nav.innerHTML = STEPS.map(function(s) {
+        return '<button type="button" class="step-btn w-full text-left px-3 py-2 rounded border mb-1 ' + (s.id === 0 ? 'active' : '') + '" data-step="' + s.id + '" onclick="goToStep(' + s.id + ')">' + s.label + '</button>';
+    }).join('');
+}
+
+function goToStep(n) {
+    currentStep = n;
+    document.querySelectorAll('.step-panel').forEach(function(el) { el.classList.add('hidden'); });
+    document.getElementById('step-' + n).classList.remove('hidden');
+    document.querySelectorAll('.step-btn').forEach(function(btn) {
+        btn.classList.toggle('active', parseInt(btn.dataset.step, 10) === n);
+    });
+    if (n === 2) renderPointsTable();
+    if (n === 4) populateCriteriaSelect();
+    if (n === 6) loadDomainTable();
+}
+
+function markStepDone(n) {
+    var btn = document.querySelector('.step-btn[data-step="' + n + '"]');
+    if (btn) btn.classList.add('done');
+}
+
+async function createNewTest() {
+    var name = document.getElementById('test-name').value.trim();
+    if (!name) { setStatus('テスト名を入力してください', true); return; }
+    try {
+        var res = await gasRun('createTest', name, document.getElementById('test-subject').value, document.getElementById('test-datetime').value);
+        appState.test = res;
+        document.getElementById('active-test-label').textContent = '現在: ' + res.testName;
+        setStatus('テスト「' + res.testName + '」を作成しました');
+        markStepDone(0);
+        await refreshTestList();
+        goToStep(1);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function refreshTestList() {
+    try {
+        var list = await gasRun('listTests');
+        document.getElementById('test-list').innerHTML = list.length ? list.map(function(t) {
+            return '<button onclick="selectTest(\'' + t.testSsId + '\')" class="w-full text-left border rounded p-2 hover:bg-blue-50 ' + (t.isActive ? 'border-blue-400 bg-blue-50' : '') + '">' + t.testName + '<br><span class="text-gray-400">' + t.createdAt + '</span></button>';
+        }).join('') : '<p class="text-gray-400">テストがありません</p>';
+    } catch (e) { /* ignore on load */ }
+}
+
+async function selectTest(testSsId) {
+    try {
+        var info = await gasRun('setActiveTest', testSsId);
+        appState.test = info;
+        appState.fields = info.fields || [];
+        document.getElementById('active-test-label').textContent = '現在: ' + (info.info['テスト名'] || testSsId);
+        if (info.info['生徒解答フォルダID']) document.getElementById('drive-folder-id').value = info.info['生徒解答フォルダID'];
+        setStatus('テストを選択しました');
+        await refreshTestList();
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function loadModelAnswer() {
+    if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
+    var file = document.getElementById('model-file').files[0];
+    if (!file) { setStatus('ファイルを選択してください', true); return; }
+    try {
+        var dataUrl;
+        if (file.type === 'application/pdf') {
+            var buf = await file.arrayBuffer();
+            var b64 = btoa(String.fromCharCode.apply(null, new Uint8Array(buf)));
+            dataUrl = await loadPdfFirstPageAsImage(b64);
+        } else {
+            dataUrl = await new Promise(function(res, rej) {
+                var r = new FileReader(); r.onload = function() { res(r.result); }; r.onerror = rej; r.readAsDataURL(file);
+            });
+        }
+        var img = document.getElementById('hidden-source-img');
+        await new Promise(function(res, rej) { img.onload = res; img.onerror = rej; img.src = dataUrl; });
+        var orientation = document.getElementById('orientation-1').value;
+        var thresh = parseInt(document.getElementById('thresh-1').value, 10);
+        var result = warpImageFromElement(img, orientation, thresh);
+        appState.warpedBase64 = matToBase64Jpeg(result.warpedMat);
+        var c = document.createElement('canvas');
+        c.width = result.warpedMat.cols; c.height = result.warpedMat.rows;
+        cv.imshow(c, result.warpedMat);
+        result.warpedMat.delete();
+        appState.warpedImageEl = c;
+        RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields, onChange: renderFieldList });
+        RegionEditor.setImage(c);
+        renderFieldList(appState.fields);
+        await gasRun('saveModelAnswerImage', appState.warpedBase64, c.width, c.height);
+        setStatus('模範解答を読み込みました');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+function renderFieldList(fields) {
+    appState.fields = fields || RegionEditor.getRegions();
+    document.getElementById('field-list').innerHTML = appState.fields.map(function(f) {
+        return '<li class="border rounded p-1">' + (f.displayName || f.id) + ' (' + f.width + '×' + f.height + ')</li>';
+    }).join('');
+}
+
+async function saveAnswerFieldsToServer() {
+    var fields = RegionEditor.getRegions();
+    if (!fields.length) { setStatus('記述欄がありません', true); return; }
+    try {
+        appState.fields = await gasRun('saveAnswerFields', fields);
+        setStatus('記述欄を保存しました（' + fields.length + '欄）');
+        markStepDone(1);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+function renderPointsTable() {
+    var fields = appState.fields;
+    if (!fields.length) {
+        gasRun('getTestInfo').then(function(info) { appState.fields = info.fields || []; renderPointsTableInner(); });
+    } else renderPointsTableInner();
+}
+function renderPointsTableInner() {
+    gasRun('getTestInfo').then(function(info) {
+        var pts = info.points || {};
+        document.getElementById('points-table').innerHTML = '<table class="w-full text-sm border"><tr class="bg-gray-100"><th class="p-2">記述欄</th><th class="p-2">満点</th></tr>' +
+            (info.fields || []).map(function(f) {
+                return '<tr><td class="p-2 border">' + (f.displayName || f.id) + '</td><td class="p-2 border"><input type="number" class="point-input w-20 border rounded p-1" data-id="' + f.id + '" value="' + (pts[f.id] != null ? pts[f.id] : 5) + '" min="0"></td></tr>';
+            }).join('') + '</table>';
+    });
+}
+
+async function savePointsToServer() {
+    var map = {};
+    document.querySelectorAll('.point-input').forEach(function(el) { map[el.dataset.id] = el.value; });
+    try {
+        await gasRun('savePoints', map);
+        setStatus('配点を保存しました');
+        markStepDone(2);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function listDriveFiles() {
+    var folderId = document.getElementById('drive-folder-id').value.trim();
+    if (!folderId) { setStatus('フォルダIDを入力してください', true); return; }
+    try {
+        await gasRun('saveStudentFolderId', folderId);
+        appState.batchFiles = await gasRun('listFolderFiles', folderId);
+        document.getElementById('batch-file-count').textContent = appState.batchFiles.length + ' ファイル検出';
+        setStatus(appState.batchFiles.length + ' 件のファイルを検出');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+function startBatchOcr() {
+    if (!appState.batchFiles.length) { setStatus('先にファイル一覧を取得してください', true); return; }
+    if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
+    BatchProcessor.configure({
+        orientation: document.getElementById('orientation-1') ? document.getElementById('orientation-1').value : 'landscape',
+        threshVal: parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10),
+        onProgress: function(ev) {
+            var s = ev.stats;
+            var pct = s.total ? Math.round((s.done + s.skipped + s.failed) / s.total * 100) : 0;
+            document.getElementById('batch-bar').style.width = pct + '%';
+            document.getElementById('batch-progress').textContent = '処理中: ' + (ev.file ? ev.file.name : '') + ' | 完了' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed + ' / ' + s.total;
+        },
+        onComplete: function(s) {
+            setStatus('バッチ完了: 成功' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed);
+            markStepDone(3);
+        },
+        onError: function(f, err) { console.error(f, err); }
+    });
+    BatchProcessor.setQueue(appState.batchFiles);
+    BatchProcessor.start();
+}
+
+function populateCriteriaSelect() {
+    gasRun('getTestInfo').then(function(info) {
+        appState.fields = info.fields || [];
+        document.getElementById('criteria-field-select').innerHTML = appState.fields.map(function(f) {
+            return '<option value="' + f.id + '">' + (f.displayName || f.id) + '</option>';
+        }).join('');
+    });
+}
+
+async function fetchUniqueForCriteria() {
+    var fid = document.getElementById('criteria-field-select').value;
+    try {
+        appState.criteriaList = await gasRun('getUniqueAnswers', fid);
+        renderCriteriaTable();
+        setStatus(appState.criteriaList.length + ' 種類の解答を検出');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+function renderCriteriaTable(aiList) {
+    var tbody = document.getElementById('criteria-tbody');
+    tbody.innerHTML = appState.criteriaList.map(function(item, idx) {
+        var score = 0, judgment = '×', reason = item.answer_text === 'なし' ? '未記入' : '';
+        if (aiList) {
+            var m = aiList.find(function(a) { return a.answer_text === item.answer_text; });
+            if (m) { score = m.recommended_score; judgment = m.judgment || '△'; reason = m.reason || ''; }
+        }
+        return '<tr><td class="p-2 border font-mono">' + item.answer_text + '</td><td class="p-2 border text-center">' + item.count + '</td>' +
+            '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (judgment==='○'?' selected':'') + '>○</option><option' + (judgment==='△'?' selected':'') + '>△</option><option' + (judgment==='×'?' selected':'') + '>×</option></select></td>' +
+            '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + score + '"></td>' +
+            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + (reason||'').replace(/"/g,'&quot;') + '"></td></tr>';
+    }).join('');
+}
+
+async function askGeminiCriteria() {
+    var fid = document.getElementById('criteria-field-select').value;
+    setStatus('Gemini が採点原案を生成中...');
+    try {
+        var res = await gasRun('generateRubricWithGemini', fid, appState.criteriaList);
+        renderCriteriaTable(res.scrutinized_list);
+        setStatus('AI原案を反映しました');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function saveCriteriaToServer() {
+    var fid = document.getElementById('criteria-field-select').value;
+    var rules = appState.criteriaList.map(function(item, idx) {
+        var jEl = document.querySelector('.crit-judgment[data-idx="' + idx + '"]');
+        var sEl = document.querySelector('.crit-score[data-idx="' + idx + '"]');
+        var rEl = document.querySelector('.crit-reason[data-idx="' + idx + '"]');
+        return { answer_text: item.answer_text, judgment: jEl ? jEl.value : '×', score: sEl ? sEl.value : 0, reason: rEl ? rEl.value : '' };
+    });
+    try {
+        await gasRun('saveGradingCriteria', fid, rules);
+        setStatus('採点基準を保存しました');
+        markStepDone(4);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function runGrading() {
+    setStatus('一括採点中...');
+    try {
+        var res = await gasRun('executeGrading');
+        var summary = await gasRun('getSummaryData');
+        document.getElementById('summary-preview').innerHTML = summary.map(function(r) {
+            return '<div class="py-0.5"><b>' + r.category + '</b> ' + r.item + ': ' + r.value + '</div>';
+        }).join('');
+        setStatus('採点完了: ' + res.gradedCount + '名（未登録パターン ' + res.unregisteredCount + '件）');
+        markStepDone(5);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+function loadDomainTable() {
+    gasRun('getDomainSettingsForUi').then(function(rows) {
+        document.getElementById('domain-table').innerHTML = '<table class="w-full text-xs border"><tr class="bg-gray-100"><th class="p-2">記述欄</th><th class="p-2">大問</th><th class="p-2">範囲</th><th class="p-2">能力</th></tr>' +
+            rows.map(function(r, i) {
+                return '<tr><td class="p-2 border">' + r.displayName + '</td>' +
+                    '<td class="p-2 border"><input class="dom-dai border rounded w-full p-1" data-i="' + i + '" value="' + (r.daiMon||'') + '"></td>' +
+                    '<td class="p-2 border"><input class="dom-han border rounded w-full p-1" data-i="' + i + '" value="' + (r.hanI||'') + '"></td>' +
+                    '<td class="p-2 border"><input class="dom-noryoku border rounded w-full p-1" data-i="' + i + '" value="' + (r.noryoku||'') + '"></td></tr>';
+            }).join('') + '</table>';
+        appState.domainRows = rows;
+    });
+}
+
+async function saveDomainsToServer() {
+    var settings = (appState.domainRows || []).map(function(r, i) {
+        return {
+            fieldId: r.fieldId,
+            daiMon: (document.querySelector('.dom-dai[data-i="' + i + '"]') || {}).value || '',
+            hanI: (document.querySelector('.dom-han[data-i="' + i + '"]') || {}).value || '',
+            noryoku: (document.querySelector('.dom-noryoku[data-i="' + i + '"]') || {}).value || ''
+        };
+    });
+    try {
+        await gasRun('saveDomainSettings', settings);
+        await gasRun('calculateDomainScores');
+        setStatus('領域設定を保存し得点を再計算しました');
+        markStepDone(6);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function recalcDomains() {
+    try {
+        await gasRun('calculateDomainScores');
+        setStatus('領域合計・総計点を再計算しました');
+        markStepDone(7);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function importExternalCsv() {
+    var csv = document.getElementById('external-csv').value;
+    try {
+        var n = await gasRun('importExternalScoresFromCsv', csv);
+        setStatus('外部得点 ' + n + ' 行を取込みました');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function loadModelFromServerIfNeeded() {
+    if (appState.warpedImageEl) return;
+    var info = await gasRun('getTestInfo');
+    var fileId = info.info['模範解答画像FileID'];
+    if (!fileId) throw new Error('模範解答が未登録です。①で模範解答を読み込んでください。');
+    var fileData = await gasRun('getDriveFileBase64', fileId);
+    var img = await driveFileToImageElement(fileData);
+    var c = document.createElement('canvas');
+    c.width = img.width || img.naturalWidth;
+    c.height = img.height || img.naturalHeight;
+    c.getContext('2d').drawImage(img, 0, 0);
+    appState.warpedImageEl = c;
+    appState.warpedBase64 = c.toDataURL('image/jpeg', 0.85);
+}
+
+async function loadModelForIdentity() {
+    try {
+        await loadModelFromServerIfNeeded();
+        var identityFields = await gasRun('getIdentityFields');
+        RegionEditor.init('identity-canvas', { mode: 'identity', initialRegions: identityFields.map(function(f) {
+            return { type: f.type, x: f.x, y: f.y, w: f.width, h: f.height };
+        })});
+        RegionEditor.setImage(appState.warpedImageEl);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function saveIdentityToServer() {
+    var fields = RegionEditor.getRegions();
+    try {
+        await gasRun('saveIdentityFields', fields);
+        setStatus('本人確認欄を保存しました');
+        markStepDone(8);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function runVerification() {
+    var rosterCsv = document.getElementById('roster-csv').value;
+    var roster = rosterCsv.trim() ? await gasRun('parseRosterCsv', rosterCsv) : [];
+    try {
+        var results = await gasRun('verifyIdentityWithRoster', roster);
+        var identityFields = (await gasRun('getIdentityFields'));
+        var html = '<table class="w-full border text-xs"><tr class="bg-gray-100"><th>状態</th><th>生徒ID</th><th>氏名</th><th>名簿氏名</th><th>ファイル</th><th>本人欄</th></tr>';
+        for (var i = 0; i < results.length; i++) {
+            var r = results[i];
+            var cls = r.status === 'ok' ? 'bg-green-50' : 'bg-red-50';
+            var crops = '';
+            if (identityFields.length && r.fileId) {
+                try {
+                    var warped = await gasRun('getWarpedImageBase64', r.fileId);
+                    var b64 = 'data:image/jpeg;base64,' + warped.base64;
+                    for (var j = 0; j < identityFields.length; j++) {
+                        var f = identityFields[j];
+                        var crop = await cropRegionFromBase64(b64, { x: f.x, y: f.y, width: f.width, height: f.height });
+                        crops += '<img src="' + crop + '" class="h-8 inline mr-1" title="' + f.type + '">';
+                    }
+                } catch (e) { crops = '-'; }
+            }
+            html += '<tr class="' + cls + '"><td class="p-1 border">' + r.status + '</td><td class="p-1 border"><input class="verify-id w-20 border text-xs" data-row="' + r.rowIndex + '" value="' + r.studentId + '"></td>' +
+                '<td class="p-1 border"><input class="verify-name w-24 border text-xs" data-row="' + r.rowIndex + '" value="' + r.name + '"></td><td class="p-1 border">' + (r.rosterName||'-') + '</td><td class="p-1 border truncate max-w-[120px]">' + r.fileName + '</td><td class="p-1 border">' + crops + '</td></tr>';
+        }
+        html += '</table><button onclick="saveVerificationEdits()" class="mt-2 bg-green-600 text-white px-3 py-1 rounded text-xs">修正を保存</button>';
+        document.getElementById('verify-results').innerHTML = html;
+        setStatus('照合完了: ' + results.filter(function(x){return x.status!=='ok';}).length + ' 件要確認');
+        markStepDone(9);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function saveVerificationEdits() {
+    var ids = document.querySelectorAll('.verify-id');
+    for (var i = 0; i < ids.length; i++) {
+        var row = ids[i].dataset.row;
+        var nameEl = document.querySelector('.verify-name[data-row="' + row + '"]');
+        await gasRun('updateStudentIdentity', parseInt(row, 10), ids[i].value, nameEl ? nameEl.value : '');
+    }
+    setStatus('ID・氏名の修正を保存しました');
+}
+
+document.addEventListener('DOMContentLoaded', function() {
+    initStepNav();
+    refreshTestList();
+    gasRun('getActiveTestSsId').then(function(id) {
+        if (id) selectTest(id);
+    }).catch(function(){});
+});
+</script>
+</body>
+</html>

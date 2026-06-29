@@ -1,0 +1,214 @@
+/** Canvas 上の記述欄・本人確認欄矩形エディタ */
+var RegionEditor = (function() {
+  var canvas, ctx, image, regions, selectedIdx, mode, dragState, onChange;
+  var HANDLE = 8;
+  var IDENTITY_TYPES = ['学年', '組', '番号', '氏名'];
+
+  function init(canvasId, options) {
+    canvas = document.getElementById(canvasId);
+    if (!canvas) return;
+    ctx = canvas.getContext('2d');
+    regions = (options && options.initialRegions) ? JSON.parse(JSON.stringify(options.initialRegions)) : [];
+    mode = (options && options.mode) || 'answer';
+    selectedIdx = -1;
+    onChange = options && options.onChange;
+
+    canvas.onmousedown = onMouseDown;
+    canvas.onmousemove = onMouseMove;
+    canvas.onmouseup = onMouseUp;
+    canvas.onmouseleave = onMouseUp;
+    redraw();
+  }
+
+  function setImage(img) {
+    image = img;
+    canvas.width = img.width || img.naturalWidth;
+    canvas.height = img.height || img.naturalHeight;
+    redraw();
+  }
+
+  function setRegions(list) {
+    regions = JSON.parse(JSON.stringify(list || []));
+    selectedIdx = -1;
+    redraw();
+    notifyChange();
+  }
+
+  function getRegions() {
+    return regions.map(function(r, i) {
+      if (mode === 'identity') {
+        return { type: r.type || r.id, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height) };
+      }
+      return {
+        id: r.id || ('記述欄' + (i + 1)),
+        displayName: r.displayName || r.id || ('記述欄' + (i + 1)),
+        x: Math.round(r.x), y: Math.round(r.y),
+        width: Math.round(r.w || r.width), height: Math.round(r.h || r.height),
+        order: r.order != null ? r.order : i + 1
+      };
+    });
+  }
+
+  function addRegion(x, y, w, h) {
+    if (mode === 'identity') {
+      var used = regions.map(function(r) { return r.type; });
+      var nextType = IDENTITY_TYPES.find(function(t) { return used.indexOf(t) < 0; });
+      if (!nextType) return;
+      regions.push({ type: nextType, x: x, y: y, w: w, h: h, id: nextType });
+    } else {
+      var num = regions.length + 1;
+      var id = '記述欄' + num;
+      regions.push({ id: id, displayName: id, x: x, y: y, w: w, h: h, order: num });
+    }
+    selectedIdx = regions.length - 1;
+    redraw();
+    notifyChange();
+  }
+
+  function deleteSelected() {
+    if (selectedIdx < 0) return;
+    regions.splice(selectedIdx, 1);
+    selectedIdx = -1;
+    redraw();
+    notifyChange();
+  }
+
+  function notifyChange() {
+    if (onChange) onChange(getRegions());
+  }
+
+  function redraw() {
+    if (!ctx || !canvas) return;
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (image) ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+    regions.forEach(function(r, idx) {
+      var x = r.x, y = r.y, w = r.w || r.width, h = r.h || r.height;
+      ctx.strokeStyle = idx === selectedIdx ? '#2563eb' : '#16a34a';
+      ctx.lineWidth = 2;
+      ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = idx === selectedIdx ? 'rgba(37,99,235,0.15)' : 'rgba(22,163,74,0.12)';
+      ctx.fillRect(x, y, w, h);
+      var label = mode === 'identity' ? (r.type || r.id) : (r.displayName || r.id);
+      ctx.fillStyle = '#1e40af';
+      ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(label, x + 4, y + 14);
+    });
+
+    if (selectedIdx >= 0) drawHandles(regions[selectedIdx]);
+  }
+
+  function drawHandles(r) {
+    var x = r.x, y = r.y, w = r.w || r.width, h = r.h || r.height;
+    var points = [
+      [x, y], [x + w / 2, y], [x + w, y],
+      [x + w, y + h / 2], [x + w, y + h],
+      [x + w / 2, y + h], [x, y + h], [x, y + h / 2]
+    ];
+    ctx.fillStyle = '#2563eb';
+    points.forEach(function(p) {
+      ctx.fillRect(p[0] - HANDLE / 2, p[1] - HANDLE / 2, HANDLE, HANDLE);
+    });
+  }
+
+  function getCanvasCoords(e) {
+    var rect = canvas.getBoundingClientRect();
+    var scaleX = canvas.width / rect.width;
+    var scaleY = canvas.height / rect.height;
+    return { x: (e.clientX - rect.left) * scaleX, y: (e.clientY - rect.top) * scaleY };
+  }
+
+  function hitTestHandle(r, px, py) {
+    var x = r.x, y = r.y, w = r.w || r.width, h = r.h || r.height;
+    var handles = [
+      { k: 'nw', x: x, y: y }, { k: 'n', x: x + w / 2, y: y }, { k: 'ne', x: x + w, y: y },
+      { k: 'e', x: x + w, y: y + h / 2 }, { k: 'se', x: x + w, y: y + h },
+      { k: 's', x: x + w / 2, y: y + h }, { k: 'sw', x: x, y: y + h }, { k: 'w', x: x, y: y + h / 2 }
+    ];
+    for (var i = 0; i < handles.length; i++) {
+      if (Math.abs(handles[i].x - px) <= HANDLE && Math.abs(handles[i].y - py) <= HANDLE) {
+        return handles[i].k;
+      }
+    }
+    return null;
+  }
+
+  function hitTestRegion(px, py) {
+    for (var i = regions.length - 1; i >= 0; i--) {
+      var r = regions[i];
+      var w = r.w || r.width, h = r.h || r.height;
+      if (px >= r.x && px <= r.x + w && py >= r.y && py <= r.y + h) return i;
+    }
+    return -1;
+  }
+
+  function onMouseDown(e) {
+    var p = getCanvasCoords(e);
+    if (selectedIdx >= 0) {
+      var handle = hitTestHandle(regions[selectedIdx], p.x, p.y);
+      if (handle) {
+        dragState = { type: 'resize', handle: handle, startX: p.x, startY: p.y, orig: JSON.parse(JSON.stringify(regions[selectedIdx])) };
+        return;
+      }
+    }
+    var idx = hitTestRegion(p.x, p.y);
+    if (idx >= 0) {
+      selectedIdx = idx;
+      dragState = { type: 'move', startX: p.x, startY: p.y, orig: JSON.parse(JSON.stringify(regions[idx])) };
+      redraw();
+      return;
+    }
+    selectedIdx = -1;
+    dragState = { type: 'create', startX: p.x, startY: p.y };
+    redraw();
+  }
+
+  function onMouseMove(e) {
+    if (!dragState) return;
+    var p = getCanvasCoords(e);
+    if (dragState.type === 'create') {
+      redraw();
+      var x = Math.min(dragState.startX, p.x), y = Math.min(dragState.startY, p.y);
+      var w = Math.abs(p.x - dragState.startX), h = Math.abs(p.y - dragState.startY);
+      ctx.strokeStyle = '#9333ea'; ctx.lineWidth = 2; ctx.setLineDash([6, 4]);
+      ctx.strokeRect(x, y, w, h); ctx.setLineDash([]);
+      return;
+    }
+    var r = regions[selectedIdx];
+    if (dragState.type === 'move') {
+      r.x = dragState.orig.x + (p.x - dragState.startX);
+      r.y = dragState.orig.y + (p.y - dragState.startY);
+    } else if (dragState.type === 'resize') {
+      applyResize(r, dragState.orig, dragState.handle, p.x - dragState.startX, p.y - dragState.startY);
+    }
+    redraw();
+  }
+
+  function applyResize(r, orig, handle, dx, dy) {
+    var x = orig.x, y = orig.y, w = orig.w || orig.width, h = orig.h || orig.height;
+    if (handle.indexOf('e') >= 0) w = Math.max(20, w + dx);
+    if (handle.indexOf('s') >= 0) h = Math.max(20, h + dy);
+    if (handle.indexOf('w') >= 0) { x = x + dx; w = Math.max(20, w - dx); }
+    if (handle.indexOf('n') >= 0) { y = y + dy; h = Math.max(20, h - dy); }
+    r.x = x; r.y = y; r.w = w; r.h = h; r.width = w; r.height = h;
+  }
+
+  function onMouseUp(e) {
+    if (!dragState) return;
+    if (dragState.type === 'create') {
+      var p = getCanvasCoords(e);
+      var x = Math.min(dragState.startX, p.x), y = Math.min(dragState.startY, p.y);
+      var w = Math.abs(p.x - dragState.startX), h = Math.abs(p.y - dragState.startY);
+      if (w > 15 && h > 15) addRegion(x, y, w, h);
+      else redraw();
+    } else {
+      notifyChange();
+    }
+    dragState = null;
+  }
+
+  return {
+    init: init, setImage: setImage, setRegions: setRegions, getRegions: getRegions,
+    deleteSelected: deleteSelected, redraw: redraw, IDENTITY_TYPES: IDENTITY_TYPES
+  };
+})();

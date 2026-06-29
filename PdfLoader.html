@@ -1,0 +1,40 @@
+/** PDF.js で1ページ目を Canvas 化 */
+async function loadPdfFirstPageAsImage(base64OrBytes, mimeType) {
+  if (typeof pdfjsLib === 'undefined') {
+    throw new Error('PDF.js が読み込まれていません。');
+  }
+  pdfjsLib.GlobalWorkerOptions.workerSrc =
+    'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+  var raw = base64OrBytes;
+  if (typeof raw === 'string' && raw.indexOf(',') >= 0) raw = raw.split(',')[1];
+  var binary = atob(raw);
+  var len = binary.length;
+  var bytes = new Uint8Array(len);
+  for (var i = 0; i < len; i++) bytes[i] = binary.charCodeAt(i);
+
+  var pdf = await pdfjsLib.getDocument({ data: bytes }).promise;
+  var page = await pdf.getPage(1);
+  var viewport = page.getViewport({ scale: 2.0 });
+  var canvas = document.createElement('canvas');
+  canvas.width = viewport.width;
+  canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+
+async function driveFileToImageElement(fileData) {
+  var dataUrl;
+  if (fileData.isPdf) {
+    dataUrl = await loadPdfFirstPageAsImage(fileData.base64, fileData.mimeType);
+  } else {
+    var mime = fileData.mimeType || 'image/jpeg';
+    dataUrl = 'data:' + mime + ';base64,' + fileData.base64;
+  }
+  return new Promise(function(resolve, reject) {
+    var img = new Image();
+    img.onload = function() { resolve(img); };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}

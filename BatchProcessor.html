@@ -1,0 +1,91 @@
+/** Drive フォルダ内ファイルのバッチ OCR キュー */
+var BatchProcessor = (function() {
+  var queue = [], running = false, paused = false, stats = { total: 0, done: 0, skipped: 0, failed: 0 };
+  var onProgress, onComplete, onError;
+  var orientation = 'landscape', threshVal = 128, fillThreshold = 0.35;
+
+  function configure(opts) {
+    orientation = opts.orientation || orientation;
+    threshVal = opts.threshVal != null ? opts.threshVal : threshVal;
+    fillThreshold = opts.fillThreshold != null ? opts.fillThreshold : fillThreshold;
+    onProgress = opts.onProgress;
+    onComplete = opts.onComplete;
+    onError = opts.onError;
+  }
+
+  function setQueue(files) {
+    queue = files.slice();
+    stats = { total: queue.length, done: 0, skipped: 0, failed: 0 };
+  }
+
+  function pause() { paused = true; }
+  function resume() { paused = false; if (!running) processNext(); }
+
+  function sleep(ms) {
+    return new Promise(function(r) { setTimeout(r, ms); });
+  }
+
+  async function processNext() {
+    if (paused || queue.length === 0) {
+      running = false;
+      if (onComplete) onComplete(stats);
+      return;
+    }
+    running = true;
+    var file = queue.shift();
+    try {
+      if (onProgress) onProgress({ file: file, stats: stats, status: 'processing' });
+
+      var fileData = await gasRun('getDriveFileBase64', file.id);
+      var img = await driveFileToImageElement(fileData);
+      var result = warpImageFromElement(img, orientation, threshVal);
+      var base64 = matToBase64Jpeg(result.warpedMat);
+      var studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold);
+      result.warpedMat.delete();
+
+      var res = await gasRun('processStudentPaper', file, studentId, base64, true);
+      if (res.skipped) stats.skipped++;
+      else if (res.success) stats.done++;
+      else { stats.failed++; if (onError) onError(file, res.error); }
+
+      if (onProgress) onProgress({ file: file, stats: stats, status: 'done', result: res });
+    } catch (err) {
+      stats.failed++;
+      if (onError) onError(file, err.message || String(err));
+      if (onProgress) onProgress({ file: file, stats: stats, status: 'error', error: err.message });
+    }
+    await sleep(300);
+    processNext();
+  }
+
+  function start() {
+    if (running) return;
+    processNext();
+  }
+
+  function gasRun(fn) {
+    var args = Array.prototype.slice.call(arguments, 1);
+    return new Promise(function(resolve, reject) {
+      if (typeof google === 'undefined' || !google.script || !google.script.run) {
+        reject(new Error('GAS 環境ではありません'));
+        return;
+      }
+      var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+      runner[fn].apply(runner, args);
+    });
+  }
+
+  return { configure: configure, setQueue: setQueue, start: start, pause: pause, resume: resume, getStats: function() { return stats; } };
+})();
+
+function gasRun(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function(resolve, reject) {
+    if (typeof google === 'undefined' || !google.script || !google.script.run) {
+      reject(new Error('GAS 環境ではありません'));
+      return;
+    }
+    var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+    runner[fn].apply(runner, args);
+  });
+}
