@@ -538,9 +538,29 @@ function createTest(testName, subject, dateTime) {
   };
 }
 
-function listTests(limit) {
-  initializeHub();
-  syncHubTestList();
+function cellToClientString_(value) {
+  if (value == null || value === '') return '';
+  if (value instanceof Date) {
+    return Utilities.formatDate(value, 'JST', 'yyyy-MM-dd HH:mm:ss');
+  }
+  return String(value);
+}
+
+function serializeForClient_(value) {
+  if (value == null) return value;
+  if (value instanceof Date) return cellToClientString_(value);
+  if (Array.isArray(value)) return value.map(serializeForClient_);
+  if (typeof value === 'object') {
+    var out = {};
+    Object.keys(value).forEach(function(k) {
+      out[k] = serializeForClient_(value[k]);
+    });
+    return out;
+  }
+  return value;
+}
+
+function listTestsFromHubSheet_(limit) {
   var hubSs = getHubSs();
   setupHubSheets(hubSs);
   var sheet = hubSs.getSheetByName(SHEET_HUB_TEST_LIST);
@@ -555,14 +575,14 @@ function listTests(limit) {
   for (var i = 1; i < data.length; i++) {
     if (!data[i][1]) continue;
     list.push({
-      testName: data[i][0],
-      testSsId: data[i][1],
-      url: data[i][2],
-      createdAt: data[i][3],
-      status: data[i][4],
-      currentStep: colStep >= 0 ? data[i][colStep] : '',
-      lastSavedAt: colSaved >= 0 ? data[i][colSaved] : '',
-      isActive: data[i][1] === activeId
+      testName: cellToClientString_(data[i][0]),
+      testSsId: cellToClientString_(data[i][1]),
+      url: cellToClientString_(data[i][2]),
+      createdAt: cellToClientString_(data[i][3]),
+      status: cellToClientString_(data[i][4]),
+      currentStep: colStep >= 0 ? cellToClientString_(data[i][colStep]) : '',
+      lastSavedAt: colSaved >= 0 ? cellToClientString_(data[i][colSaved]) : '',
+      isActive: cellToClientString_(data[i][1]) === activeId
     });
   }
   list.sort(function(a, b) {
@@ -574,25 +594,32 @@ function listTests(limit) {
   return list;
 }
 
+function listTests(limit) {
+  initializeHub();
+  syncHubTestList();
+  return listTestsFromHubSheet_(limit);
+}
+
 function getRecentTests(limit) {
-  return listTests(limit || 20);
+  initializeHub();
+  return listTestsFromHubSheet_(limit || 20);
 }
 
 function getAppBootstrap() {
   try {
     initializeHub();
     var hubSs = getHubSs();
-    var tests = listTests(50);
-    return {
+    var tests = listTestsFromHubSheet_(50);
+    return serializeForClient_({
       ok: true,
       hubSsId: hubSs.getId(),
       hubUrl: hubSs.getUrl(),
       hubName: hubSs.getName(),
       activeTestSsId: getActiveTestSsId(),
       tests: tests
-    };
+    });
   } catch (e) {
-    return {
+    return serializeForClient_({
       ok: false,
       error: e.message || String(e),
       hubSsId: '',
@@ -600,7 +627,7 @@ function getAppBootstrap() {
       hubName: '',
       activeTestSsId: getActiveTestSsId(),
       tests: []
-    };
+    });
   }
 }
 
@@ -697,7 +724,7 @@ function setActiveTest(testSsId) {
   if (!testSsId) throw new Error('テストIDが指定されていません。');
   SpreadsheetApp.openById(testSsId);
   PropertiesService.getScriptProperties().setProperty('ACTIVE_TEST_SS_ID', testSsId);
-  return getTestRestoreData(testSsId);
+  return serializeForClient_(getTestRestoreData(testSsId));
 }
 
 function touchTestProgress_(ss, stepNum) {

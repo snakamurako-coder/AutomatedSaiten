@@ -585,7 +585,19 @@ function gasRun(fn) {
   var args = Array.prototype.slice.call(arguments, 1);
   return new Promise(function(resolve, reject) {
     if (typeof google === 'undefined' || !google.script || !google.script.run) { reject(new Error('GAS 環境ではありません')); return; }
-    var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+    if (typeof google.script.run[fn] !== 'function') {
+      reject(new Error('サーバー関数が見つかりません: ' + fn + '（clasp push 後、Webアプリを開き直してください）'));
+      return;
+    }
+    var runner = google.script.run
+      .withSuccessHandler(function(result) {
+        if (result === null || result === undefined) {
+          reject(new Error('サーバーから応答がありません（タイムアウトまたはデプロイ未反映）。メニュー「自動採点 → Webアプリを開く」で開き直してください。'));
+        } else {
+          resolve(result);
+        }
+      })
+      .withFailureHandler(reject);
     runner[fn].apply(runner, args);
   });
 }
@@ -800,9 +812,16 @@ async function refreshRecentTestsDropdown() {
 async function loadAppBootstrap() {
     try {
         var boot = await gasRun('getAppBootstrap');
-        if (!boot.ok) {
-            document.getElementById('hub-label').innerHTML = '<span class="text-red-600">ハブ未登録</span>';
-            setStatus(boot.error || 'ハブの初期化に失敗しました。スプレッドシートから「自動採点 → Webアプリを開く」を実行してください。', true);
+        if (!boot || boot.ok === false) {
+            if (boot && boot.tests && boot.tests.length) applyTestsToUi(boot.tests);
+            document.getElementById('hub-label').innerHTML = boot && boot.error
+                ? '<span class="text-red-600">ハブ: ' + escapeHtml(boot.error) + '</span>'
+                : '<span class="text-red-600">ハブ未登録</span>';
+            if (!boot || !boot.tests || !boot.tests.length) {
+                await loadAppBootstrapFallback(boot && boot.error);
+            } else {
+                setStatus(boot.error || 'ハブの初期化に問題がありますが、テスト一覧は表示しました。', true);
+            }
             return;
         }
         document.getElementById('hub-label').innerHTML = 'ハブ: <a href="' + boot.hubUrl + '" target="_blank" class="text-blue-600 underline">' + escapeHtml(boot.hubName) + '</a>';
@@ -816,7 +835,22 @@ async function loadAppBootstrap() {
             setStatus('テストがありません。⓪ テスト作成から始めてください。');
         }
     } catch (e) {
-        setStatus('初期化に失敗: ' + (e.message || e), true);
+        try {
+            await loadAppBootstrapFallback(e.message || String(e));
+        } catch (e2) {
+            setStatus('初期化に失敗: ' + (e2.message || e2), true);
+        }
+    }
+}
+
+async function loadAppBootstrapFallback(reason) {
+    var list = await gasRun('getRecentTests', 50);
+    applyTestsToUi(list);
+    document.getElementById('hub-label').innerHTML = '<span class="text-gray-500">ハブ: 一覧のみ取得</span>';
+    if (list.length) {
+        setStatus('テスト一覧を表示しました（' + list.length + ' 件）' + (reason ? ' — ' + reason : ''));
+    } else {
+        setStatus((reason || 'テストがありません') + '。⓪ テスト作成から始めるか、スプレッドシートで「テスト一覧を再同期」を実行してください。', true);
     }
 }
 
@@ -1342,9 +1376,11 @@ async function refreshTestList() {
 }
 
 async function selectTest(testSsId, targetStep) {
+    if (!testSsId) return;
     try {
         setStatus('テストデータを読み込み中...');
         var data = await gasRun('setActiveTest', testSsId);
+        if (!data) throw new Error('テストデータの取得に失敗しました');
         await restoreTestUi(data);
         document.getElementById('active-test-label').textContent = '現在: ' + (data.info['テスト名'] || testSsId);
         document.getElementById('recent-test-select').value = testSsId;
