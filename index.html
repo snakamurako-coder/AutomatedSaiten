@@ -87,6 +87,42 @@
             font-size: 3rem; font-weight: 800; color: #2563eb; line-height: 1;
             font-variant-numeric: tabular-nums;
         }
+        /* 解答集約・外れ値リスト: 内容に合わせたコンパクト列幅 */
+        .compact-table {
+            width: max-content;
+            max-width: 100%;
+            border-collapse: collapse;
+            font-size: 0.75rem;
+            line-height: 1.25;
+        }
+        .compact-table th,
+        .compact-table td {
+            padding: 2px 5px;
+            border: 1px solid #e5e7eb;
+            vertical-align: middle;
+        }
+        .compact-table .col-check { width: 1%; text-align: center; padding-left: 2px; padding-right: 2px; white-space: nowrap; }
+        .compact-table .col-num { width: 1%; text-align: center; white-space: nowrap; }
+        .compact-table .col-answer { white-space: nowrap; }
+        .compact-table .col-student { white-space: nowrap; max-width: 8rem; overflow: hidden; text-overflow: ellipsis; }
+        .compact-table .col-action { width: 1%; text-align: center; white-space: nowrap; }
+        .compact-table .col-judgment select { width: auto; min-width: 0; padding: 1px 2px; }
+        .compact-table .col-score input { width: 3rem; padding: 1px 2px; }
+        .compact-table .col-reason { white-space: normal; min-width: 10rem; }
+        .compact-table .col-reason input { width: 100%; min-width: 10rem; }
+        #criteria-table-wrap { overflow: auto; max-height: calc(100vh - 14rem); }
+        #outlier-groups-list {
+            max-height: 9rem;
+            overflow: auto;
+            padding: 0;
+        }
+        #outlier-groups-list .compact-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #f9fafb;
+            box-shadow: inset 0 -1px 0 #e5e7eb;
+        }
     </style>
 </head>
 <body>
@@ -232,8 +268,22 @@
                 </div>
             </div>
 
-            <div class="overflow-auto max-h-[calc(100vh-14rem)] border rounded">
-                <table class="w-full text-xs"><thead class="bg-gray-100"><tr><th class="p-2">みなし</th><th class="p-2">不正解</th><th class="p-2">解答</th><th class="p-2">人数</th><th class="p-2">判定</th><th class="p-2">得点</th><th class="p-2">備考</th><th class="p-2">画像</th></tr></thead><tbody id="criteria-tbody"></tbody></table>
+            <div id="criteria-table-wrap" class="border rounded">
+                <table class="compact-table criteria-table">
+                    <thead class="bg-gray-100">
+                        <tr>
+                            <th class="col-check">みなし</th>
+                            <th class="col-check">不正解</th>
+                            <th class="col-answer">解答</th>
+                            <th class="col-num">人数</th>
+                            <th class="col-judgment">判定</th>
+                            <th class="col-score">得点</th>
+                            <th class="col-reason">備考</th>
+                            <th class="col-action">画像</th>
+                        </tr>
+                    </thead>
+                    <tbody id="criteria-tbody"></tbody>
+                </table>
             </div>
 
             <div class="border rounded p-3 bg-slate-50 space-y-2">
@@ -251,7 +301,7 @@
                     <button type="button" onclick="selectAllOutlierRows(false)" class="bg-white border px-2 py-1 rounded">表示を解除</button>
                     <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showSelectedOutlierCrops)" class="bg-blue-600 text-white px-2 py-1 rounded font-bold">選択を画像表示</button>
                 </div>
-                <div id="outlier-groups-list" class="max-h-36 overflow-auto text-xs border rounded bg-white p-2"></div>
+                <div id="outlier-groups-list" class="text-xs border rounded bg-white"></div>
                 <div class="flex flex-wrap gap-3 items-center text-xs border rounded bg-white px-2 py-1.5">
                     <span class="font-semibold text-slate-700">表示倍率</span>
                     <input type="range" id="crop-inline-zoom" min="30" max="400" value="100" class="w-36">
@@ -1266,7 +1316,7 @@ function loadCriteriaUiForField(fieldId) {
         return;
     }
     appState.criteriaList = [];
-    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="8" class="p-2 text-gray-400">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
+    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="8" class="p-2 text-gray-400" style="white-space:normal">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
 }
 
 function getDeemedCanonicalUi() {
@@ -1598,39 +1648,41 @@ function collectOcrReplacementRulesFromUi() {
 function clearOutlierPanel() {
     appState.outlierGroups = [];
     appState.cropGridResults = [];
-    document.getElementById('outlier-groups-list').innerHTML = '<p class="text-gray-400">「外れ値を検出」で少数派解答を一覧します</p>';
+    document.getElementById('outlier-groups-list').innerHTML = '<p class="text-gray-400 p-2">「外れ値を検出」で少数派解答を一覧します</p>';
     document.getElementById('outlier-crop-grid').innerHTML = '';
 }
 
 function renderOutlierGroupsList() {
     var container = document.getElementById('outlier-groups-list');
     if (!appState.outlierGroups.length) {
-        container.innerHTML = '<p class="text-gray-500">該当する外れ値はありません</p>';
+        container.innerHTML = '<p class="text-gray-500 p-2">該当する外れ値はありません</p>';
         return;
     }
     var fid = getCriteriaFieldId();
-    var html = '<table class="w-full"><tr class="bg-gray-50"><th class="p-1 w-8">みなし</th><th class="p-1 w-8">不正解</th><th class="p-1 text-left">解答</th><th class="p-1 w-10">人数</th><th class="p-1 w-8">表示</th><th class="p-1">生徒</th><th class="p-1"></th></tr>';
+    var html = '<table class="compact-table outlier-table"><thead><tr class="bg-gray-50">' +
+        '<th class="col-check">みなし</th><th class="col-check">不正解</th><th class="col-answer">解答</th><th class="col-num">人数</th>' +
+        '<th class="col-check">表示</th><th class="col-student">生徒</th><th class="col-action"></th></tr></thead><tbody>';
     appState.outlierGroups.forEach(function(group, gi) {
         var rowSpan = group.rows.length;
         group.rows.forEach(function(row, ri) {
             var key = gi + ':' + ri;
             var skipImg = shouldSkipCropLoadForAnswer(group.answer_text);
-            html += '<tr class="border-t' + (isIncorrectChecked(fid, group.answer_text) ? ' crit-row-incorrect-checked' : '') + '">';
+            html += '<tr class="' + (isIncorrectChecked(fid, group.answer_text) ? 'crit-row-incorrect-checked' : '') + '">';
             if (ri === 0) {
-                html += '<td class="p-1 text-center align-top" rowspan="' + rowSpan + '">' + renderDeemedCheckboxHtml(fid, group.answer_text, 'outlier-deemed') + '</td>';
-                html += '<td class="p-1 text-center align-top" rowspan="' + rowSpan + '">' + renderIncorrectCheckboxHtml(fid, group.answer_text, 'outlier-incorrect') + '</td>';
-                html += '<td class="p-1 font-mono align-top truncate max-w-[200px]" rowspan="' + rowSpan + '" title="' + escapeHtml(group.answer_text) + '">' + escapeHtml(group.answer_text) + '</td>';
-                html += '<td class="p-1 text-center align-top" rowspan="' + rowSpan + '">' + group.count + '</td>';
+                html += '<td class="col-check align-top" rowspan="' + rowSpan + '">' + renderDeemedCheckboxHtml(fid, group.answer_text, 'outlier-deemed') + '</td>';
+                html += '<td class="col-check align-top" rowspan="' + rowSpan + '">' + renderIncorrectCheckboxHtml(fid, group.answer_text, 'outlier-incorrect') + '</td>';
+                html += '<td class="col-answer font-mono align-top" rowspan="' + rowSpan + '" title="' + escapeHtml(group.answer_text) + '">' + escapeHtml(group.answer_text) + '</td>';
+                html += '<td class="col-num align-top" rowspan="' + rowSpan + '">' + group.count + '</td>';
             }
-            html += '<td class="p-1 text-center"><input type="checkbox" class="outlier-row-cb" data-key="' + key + '"' + (skipImg ? '' : ' checked') + (skipImg ? ' disabled title="不正解対象のため非表示"' : '') + '></td>' +
-                '<td class="p-1 truncate max-w-[120px]" title="' + escapeHtml(row.fileName) + '">' + escapeHtml(row.studentId || '-') + '</td>' +
-                '<td class="p-1">' + (skipImg
+            html += '<td class="col-check"><input type="checkbox" class="outlier-row-cb" data-key="' + key + '"' + (skipImg ? '' : ' checked') + (skipImg ? ' disabled title="不正解対象のため非表示"' : '') + '></td>' +
+                '<td class="col-student" title="' + escapeHtml(row.fileName) + '">' + escapeHtml(row.studentId || '-') + '</td>' +
+                '<td class="col-action">' + (skipImg
                     ? '<span class="text-gray-400 text-[10px]">除外</span>'
                     : '<button type="button" class="text-blue-600 underline outlier-show-one" data-key="' + key + '">1枚</button>') +
                 '</td></tr>';
         });
     });
-    html += '</table>';
+    html += '</tbody></table>';
     container.innerHTML = html;
 }
 
@@ -1806,12 +1858,11 @@ async function applyReplacementsAndReaggregate() {
 function renderCriteriaTableFromSaved(rules) {
     var tbody = document.getElementById('criteria-tbody');
     tbody.innerHTML = rules.map(function(item, idx) {
-        var enc = encodeAnswerAttr(item.answer_text);
-        return '<tr><td class="p-2 border text-center">—</td><td class="p-2 border text-center">—</td><td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">—</td>' +
-            '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (item.judgment==='○'?' selected':'') + '>○</option><option' + (item.judgment==='△'?' selected':'') + '>△</option><option' + (item.judgment==='×'?' selected':'') + '>×</option></select></td>' +
-            '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + (item.score != null ? item.score : 0) + '"></td>' +
-            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + escapeHtml(item.reason || '') + '"></td>' +
-            '<td class="p-2 border text-center">—</td></tr>';
+        return '<tr><td class="col-check">—</td><td class="col-check">—</td><td class="col-answer font-mono">' + escapeHtml(item.answer_text) + '</td><td class="col-num">—</td>' +
+            '<td class="col-judgment"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (item.judgment==='○'?' selected':'') + '>○</option><option' + (item.judgment==='△'?' selected':'') + '>△</option><option' + (item.judgment==='×'?' selected':'') + '>×</option></select></td>' +
+            '<td class="col-score"><input type="number" class="crit-score border rounded" data-idx="' + idx + '" value="' + (item.score != null ? item.score : 0) + '"></td>' +
+            '<td class="col-reason"><input class="crit-reason border rounded" data-idx="' + idx + '" value="' + escapeHtml(item.reason || '') + '"></td>' +
+            '<td class="col-action">—</td></tr>';
     }).join('');
     appState.criteriaList = rules.map(function(r) { return { answer_text: r.answer_text, count: '—' }; });
 }
@@ -2289,13 +2340,13 @@ function renderCriteriaTable(aiList) {
             : (showImg && shouldSkipCropLoadForAnswer(item.answer_text)
                 ? '<span class="text-gray-400 text-[10px]" title="不正解対象">除外</span>'
                 : '—');
-        return '<tr class="' + rowCls.trim() + '"><td class="p-2 border text-center">' + deemedCell + '</td>' +
-            '<td class="p-2 border text-center">' + incorrectCell + '</td>' +
-            '<td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">' + item.count + '</td>' +
-            '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (judgment==='○'?' selected':'') + '>○</option><option' + (judgment==='△'?' selected':'') + '>△</option><option' + (judgment==='×'?' selected':'') + '>×</option></select></td>' +
-            '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + score + '"></td>' +
-            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + escapeHtml(reason || '') + '"></td>' +
-            '<td class="p-2 border text-center">' + confirmCell + '</td></tr>';
+        return '<tr class="' + rowCls.trim() + '"><td class="col-check">' + deemedCell + '</td>' +
+            '<td class="col-check">' + incorrectCell + '</td>' +
+            '<td class="col-answer font-mono">' + escapeHtml(item.answer_text) + '</td><td class="col-num">' + item.count + '</td>' +
+            '<td class="col-judgment"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (judgment==='○'?' selected':'') + '>○</option><option' + (judgment==='△'?' selected':'') + '>△</option><option' + (judgment==='×'?' selected':'') + '>×</option></select></td>' +
+            '<td class="col-score"><input type="number" class="crit-score border rounded" data-idx="' + idx + '" value="' + score + '"></td>' +
+            '<td class="col-reason"><input class="crit-reason border rounded" data-idx="' + idx + '" value="' + escapeHtml(reason || '') + '"></td>' +
+            '<td class="col-action">' + confirmCell + '</td></tr>';
     }).join('');
     updateDeemedApplyButtonState();
 }
