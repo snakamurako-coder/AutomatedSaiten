@@ -92,9 +92,14 @@
                 <button type="button" onclick="withBusyButton(event.currentTarget, startBatchOcr)" id="batch-start-btn" data-busy-label="OCR実行中..." data-keep-busy="0" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">バッチOCR開始</button>
                 <button type="button" onclick="BatchProcessor.pause()" class="bg-orange-200 px-3 py-2 rounded">一時停止</button>
             </div>
-            <div class="text-xs"><span id="batch-progress">待機中</span></div>
+            <div class="text-xs"><span id="batch-progress">待機中</span> <span id="batch-elapsed" class="text-gray-400"></span></div>
             <div class="w-full bg-gray-200 rounded h-2"><div id="batch-bar" class="bg-blue-600 h-2 rounded transition-all" style="width:0%"></div></div>
             <p id="batch-file-count" class="text-xs text-gray-500"></p>
+            <p id="batch-flush-status" class="text-xs text-gray-600"></p>
+            <button type="button" id="batch-flush-btn" data-busy-label="書込中..." onclick="withBusyButton(event.currentTarget, manualFlushToSheet)" class="bg-teal-600 text-white px-3 py-1 rounded text-xs hidden">未反映分をシートに反映 (<span id="batch-pending-count">0</span>件)</button>
+            <div class="overflow-auto max-h-80 border rounded">
+                <table class="w-full text-xs"><thead id="batch-results-thead" class="bg-gray-100 sticky top-0"></thead><tbody id="batch-results-tbody"></tbody></table>
+            </div>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(3); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
 
@@ -394,31 +399,156 @@ var RegionEditor = (function() {
   return { init: init, setImage: setImage, setRegions: setRegions, getRegions: getRegions, deleteSelected: deleteSelected, redraw: redraw, IDENTITY_TYPES: IDENTITY_TYPES };
 })();
 var BatchProcessor = (function() {
-  var queue = [], running = false, paused = false, stats = { total: 0, done: 0, skipped: 0, failed: 0 };
-  var onProgress, onComplete, onError, orientation = 'landscape', threshVal = 128, fillThreshold = 0.35;
+  var FLUSH_CHUNK = 15;
+  var queue = [], running = false, paused = false;
+  var stats = { total: 0, done: 0, skipped: 0, failed: 0, flushed: 0 };
+  var pendingRows = [], processedIds = {}, startTime = 0;
+  var onProgress, onComplete, onError, onItemUpdate, onFlush;
+  var orientation = 'landscape', threshVal = 128, fillThreshold = 0.35;
+
   function configure(opts) {
-    orientation = opts.orientation || orientation; threshVal = opts.threshVal != null ? opts.threshVal : threshVal;
+    orientation = opts.orientation || orientation;
+    threshVal = opts.threshVal != null ? opts.threshVal : threshVal;
     fillThreshold = opts.fillThreshold != null ? opts.fillThreshold : fillThreshold;
-    onProgress = opts.onProgress; onComplete = opts.onComplete; onError = opts.onError;
+    onProgress = opts.onProgress;
+    onComplete = opts.onComplete;
+    onError = opts.onError;
+    onItemUpdate = opts.onItemUpdate;
+    onFlush = opts.onFlush;
   }
-  function setQueue(files) { queue = files.slice(); stats = { total: queue.length, done: 0, skipped: 0, failed: 0 }; }
+
+  function setProcessedIds(idList) {
+    processedIds = {};
+    (idList || []).forEach(function(id) { if (id) processedIds[String(id)] = true; });
+  }
+
+  function setQueue(files) {
+    queue = files.slice();
+    stats = { total: queue.length, done: 0, skipped: 0, failed: 0, flushed: 0 };
+  }
+
   function pause() { paused = true; }
+
+  function getPendingStorageKey() {
+    var testId = (typeof appState !== 'undefined' && appState.test) ? appState.test.testSsId : '';
+    return testId ? 'ocrPending_' + testId : '';
+  }
+
+  function savePendingToStorage() {
+    var key = getPendingStorageKey();
+    if (!key) return;
+    if (pendingRows.length === 0) { localStorage.removeItem(key); return; }
+    try { localStorage.setItem(key, JSON.stringify(pendingRows)); } catch (e) { /* ignore quota */ }
+  }
+
+  function loadPendingFromStorage() {
+    var key = getPendingStorageKey();
+    if (!key) return [];
+    try {
+      var raw = localStorage.getItem(key);
+      return raw ? JSON.parse(raw) : [];
+    } catch (e) { return []; }
+  }
+
+  function clearPendingStorage() {
+    var key = getPendingStorageKey();
+    if (key) localStorage.removeItem(key);
+  }
+
+  async function flushPending(forceAll) {
+    if (pendingRows.length === 0) return { written: 0 };
+    if (!forceAll && pendingRows.length < FLUSH_CHUNK) return { written: 0 };
+    var toWrite = pendingRows.splice(0, pendingRows.length);
+    try {
+      var res = await gasRun('flushResultRows', toWrite);
+      stats.flushed += res.written;
+      toWrite.forEach(function(r) { if (r.fileId) processedIds[String(r.fileId)] = true; });
+      clearPendingStorage();
+      if (onFlush) onFlush({ written: res.written, pending: pendingRows.length, rows: toWrite });
+      return res;
+    } catch (e) {
+      pendingRows = toWrite.concat(pendingRows);
+      savePendingToStorage();
+      throw e;
+    }
+  }
+
   async function processNext() {
-    if (paused || queue.length === 0) { running = false; if (onComplete) onComplete(stats); return; }
-    running = true; var file = queue.shift();
+    if (paused || queue.length === 0) {
+      running = false;
+      try {
+        await flushPending(true);
+      } catch (flushErr) {
+        if (onError) onError(null, '最終書き込み失敗: ' + (flushErr.message || flushErr));
+      }
+      if (onComplete) onComplete(stats);
+      return;
+    }
+    running = true;
+    var file = queue.shift();
     try {
       if (onProgress) onProgress({ file: file, stats: stats, status: 'processing' });
-      var fileData = await gasRun('getDriveFileBase64', file.id), img = await driveFileToImageElement(fileData);
-      var result = warpImageFromElement(img, orientation, threshVal), base64 = matToBase64Jpeg(result.warpedMat);
-      var studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold); result.warpedMat.delete();
-      var res = await gasRun('processStudentPaper', file, studentId, base64, true);
-      if (res.skipped) stats.skipped++; else if (res.success) stats.done++; else { stats.failed++; if (onError) onError(file, res.error); }
-      if (onProgress) onProgress({ file: file, stats: stats, status: 'done', result: res });
-    } catch (err) { stats.failed++; if (onError) onError(file, err.message || String(err)); }
-    await new Promise(function(r) { setTimeout(r, 300); }); processNext();
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing' });
+
+      if (processedIds[String(file.id)]) {
+        stats.skipped++;
+        if (onProgress) onProgress({ file: file, stats: stats, status: 'skipped' });
+        if (onItemUpdate) onItemUpdate({ file: file, status: 'skipped' });
+      } else {
+        var fileData = await gasRun('getDriveFileBase64', file.id);
+        var img = await driveFileToImageElement(fileData);
+        var result = warpImageFromElement(img, orientation, threshVal);
+        var base64 = matToBase64Jpeg(result.warpedMat);
+        var studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold);
+        result.warpedMat.delete();
+
+        var res = await gasRun('ocrStudentPaper', file, studentId, base64);
+        if (res.success) {
+          stats.done++;
+          pendingRows.push({
+            fileName: res.fileName,
+            fileId: res.fileId,
+            warpedFileId: res.warpedFileId,
+            studentId: res.studentId,
+            textMapping: res.textMapping
+          });
+          savePendingToStorage();
+          if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false });
+          try {
+            await flushPending(false);
+          } catch (flushErr) {
+            if (onError) onError(file, 'チャンク書き込み失敗: ' + (flushErr.message || flushErr));
+            if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false, flushError: true });
+          }
+        } else {
+          stats.failed++;
+          if (onError) onError(file, res.error);
+          if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: res.error });
+        }
+        if (onProgress) onProgress({ file: file, stats: stats, status: 'done', result: res });
+      }
+    } catch (err) {
+      stats.failed++;
+      if (onError) onError(file, err.message || String(err));
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: err.message || String(err) });
+    }
+    await new Promise(function(r) { setTimeout(r, 200); });
+    processNext();
   }
-  return { configure: configure, setQueue: setQueue, start: function() { if (!running) processNext(); }, pause: pause,
-    getStats: function() { return stats; } };
+
+  return {
+    configure: configure,
+    setQueue: setQueue,
+    setProcessedIds: setProcessedIds,
+    start: function() { if (!running) { startTime = Date.now(); processNext(); } },
+    pause: pause,
+    flushNow: function() { return flushPending(true); },
+    getPendingCount: function() { return pendingRows.length; },
+    getStats: function() { return stats; },
+    getStartTime: function() { return startTime; },
+    restorePendingFromStorage: loadPendingFromStorage,
+    clearPendingStorage: clearPendingStorage
+  };
 })();
 function gasRun(fn) {
   var args = Array.prototype.slice.call(arguments, 1);
@@ -458,7 +588,145 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0 };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {} };
+
+function escapeHtml(s) {
+    return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+function truncateText(s, len) {
+    s = String(s == null ? '' : s);
+    return s.length > len ? s.substring(0, len) + '…' : s;
+}
+
+function formatBatchElapsed(startTime) {
+    if (!startTime) return '';
+    var sec = Math.floor((Date.now() - startTime) / 1000);
+    var m = Math.floor(sec / 60), s = sec % 60;
+    return '(' + m + '分' + s + '秒経過)';
+}
+
+function updateBatchFlushStatus() {
+    var pending = BatchProcessor.getPendingCount();
+    var el = document.getElementById('batch-pending-count');
+    var btn = document.getElementById('batch-flush-btn');
+    var status = document.getElementById('batch-flush-status');
+    if (el) el.textContent = String(pending);
+    if (btn) btn.classList.toggle('hidden', pending === 0);
+    if (status) {
+        var st = BatchProcessor.getStats();
+        status.textContent = pending > 0
+            ? 'シート未反映: ' + pending + ' 件（15件ごとに自動反映 / 手動反映も可）'
+            : (st.flushed > 0 ? 'シート反映済: ' + st.flushed + ' 件' : '');
+    }
+}
+
+async function ensureBatchFields() {
+    if (appState.fields && appState.fields.length) return appState.fields;
+    var info = await gasRun('getTestInfo');
+    appState.fields = info.fields || [];
+    return appState.fields;
+}
+
+function initBatchResultsTable(files) {
+    var fields = appState.fields || [];
+    var head = '<tr><th class="p-1 border">状態</th><th class="p-1 border">ファイル名</th><th class="p-1 border">生徒ID</th>';
+    fields.forEach(function(f) {
+        head += '<th class="p-1 border">' + escapeHtml(f.displayName || f.id) + '</th>';
+    });
+    head += '<th class="p-1 border">SS</th></tr>';
+    document.getElementById('batch-results-thead').innerHTML = head;
+
+    var tbody = document.getElementById('batch-results-tbody');
+    tbody.innerHTML = files.map(function(f) {
+        var cells = fields.map(function() { return '<td class="p-1 border text-gray-400">—</td>'; }).join('');
+        return '<tr id="batch-row-' + f.id + '" class="bg-gray-50"><td class="p-1 border batch-status">待機</td>' +
+            '<td class="p-1 border truncate max-w-[140px]" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + '</td>' +
+            '<td class="p-1 border batch-student-id">—</td>' + cells +
+            '<td class="p-1 border batch-sheet-status text-gray-400">—</td></tr>';
+    }).join('');
+}
+
+function updateBatchResultRow(ev) {
+    if (!ev || !ev.file) return;
+    var row = document.getElementById('batch-row-' + ev.file.id);
+    if (!row) return;
+    var fields = appState.fields || [];
+    var statusCell = row.querySelector('.batch-status');
+    var idCell = row.querySelector('.batch-student-id');
+    var sheetCell = row.querySelector('.batch-sheet-status');
+
+    if (ev.status === 'processing') {
+        row.className = 'bg-blue-50';
+        if (statusCell) statusCell.innerHTML = '<span class="text-blue-600"><i class="fa-solid fa-spinner fa-spin"></i> 処理中</span>';
+    } else if (ev.status === 'skipped') {
+        row.className = 'bg-gray-100';
+        if (statusCell) statusCell.textContent = 'スキップ';
+        if (sheetCell) sheetCell.textContent = '済';
+    } else if (ev.status === 'failed') {
+        row.className = 'bg-red-50';
+        if (statusCell) statusCell.innerHTML = '<span class="text-red-600" title="' + escapeHtml(ev.error) + '">失敗</span>';
+        if (sheetCell) sheetCell.textContent = '—';
+    } else if (ev.status === 'done' && ev.result) {
+        row.className = 'bg-green-50';
+        if (statusCell) statusCell.textContent = '完了';
+        if (idCell) idCell.textContent = ev.result.studentId || '—';
+        var tds = row.querySelectorAll('td');
+        fields.forEach(function(f, i) {
+            var txt = (ev.result.textMapping && ev.result.textMapping[f.id]) || 'なし';
+            if (tds[3 + i]) {
+                tds[3 + i].textContent = truncateText(txt, 24);
+                tds[3 + i].title = txt;
+            }
+        });
+        if (sheetCell) {
+            sheetCell.textContent = ev.flushError ? '未反映!' : '未反映';
+            sheetCell.className = 'p-1 border batch-sheet-status text-orange-600';
+        }
+    }
+    updateBatchFlushStatus();
+}
+
+function markBatchRowsFlushed(fileIds) {
+    (fileIds || []).forEach(function(fid) {
+        appState.batchFlushedIds[fid] = true;
+        var row = document.getElementById('batch-row-' + fid);
+        if (!row) return;
+        var sheetCell = row.querySelector('.batch-sheet-status');
+        if (sheetCell) {
+            sheetCell.textContent = '反映済';
+            sheetCell.className = 'p-1 border batch-sheet-status text-green-600';
+        }
+    });
+}
+
+async function tryRestorePendingFlush() {
+    var stored = BatchProcessor.restorePendingFromStorage();
+    if (!stored.length) return;
+    try {
+        var res = await gasRun('flushResultRows', stored);
+        BatchProcessor.clearPendingStorage();
+        setStatus('前回未反映だった ' + res.written + ' 件をシートに書き込みました');
+    } catch (e) {
+        setStatus('未反映データの復元書き込みに失敗: ' + (e.message || e), true);
+    }
+}
+
+async function manualFlushToSheet() {
+    var pending = BatchProcessor.getPendingCount();
+    if (pending === 0) { setStatus('未反映のデータはありません'); return; }
+    try {
+        var res = await BatchProcessor.flushNow();
+        setStatus(res.written + ' 件をシートに反映しました');
+        document.querySelectorAll('#batch-results-tbody .batch-sheet-status').forEach(function(el) {
+            if (el.textContent === '未反映' || el.textContent === '未反映!') {
+                el.textContent = '反映済';
+                el.className = 'p-1 border batch-sheet-status text-green-600';
+            }
+        });
+        updateBatchFlushStatus();
+    } catch (e) { setStatus('シート反映に失敗: ' + (e.message || e), true); }
+}
 
 function onOpenCvReady() {
     opencvReady = true;
@@ -750,6 +1018,8 @@ async function listDriveFiles() {
     try {
         await gasRun('saveStudentFolderId', folderId);
         appState.batchFiles = await gasRun('listFolderFiles', folderId);
+        await ensureBatchFields();
+        initBatchResultsTable(appState.batchFiles);
         document.getElementById('batch-file-count').textContent = appState.batchFiles.length + ' ファイル検出';
         setStatus(appState.batchFiles.length + ' 件のファイルを検出');
     } catch (e) { setStatus(e.message || e, true); }
@@ -759,6 +1029,15 @@ async function startBatchOcr() {
     if (!visionKeyOk) { setStatus('Vision API キーが未設定のためバッチOCRを実行できません', true); return; }
     if (!appState.batchFiles.length) { setStatus('先にファイル一覧を取得してください', true); return; }
     if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
+
+    await tryRestorePendingFlush();
+    await ensureBatchFields();
+    if (!appState.fields.length) { setStatus('記述欄が未設定です。①で設定してください。', true); return; }
+
+    var processedIds = await gasRun('getProcessedFileIdList');
+    BatchProcessor.setProcessedIds(processedIds);
+    appState.batchFlushedIds = {};
+
     var batchBtn = document.getElementById('batch-start-btn');
     if (batchBtn) {
         batchBtn.dataset.keepBusy = '1';
@@ -766,6 +1045,16 @@ async function startBatchOcr() {
         batchBtn.dataset.originalHtml = batchBtn.innerHTML;
         batchBtn.innerHTML = '<span class="loader inline-block mr-1"></span>' + (batchBtn.dataset.busyLabel || 'OCR実行中...');
     }
+
+    if (!document.getElementById('batch-results-tbody').children.length) {
+        initBatchResultsTable(appState.batchFiles);
+    }
+
+    var elapsedTimer = setInterval(function() {
+        var el = document.getElementById('batch-elapsed');
+        if (el) el.textContent = formatBatchElapsed(BatchProcessor.getStartTime());
+    }, 1000);
+
     BatchProcessor.configure({
         orientation: document.getElementById('orientation-1') ? document.getElementById('orientation-1').value : 'landscape',
         threshVal: parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10),
@@ -773,14 +1062,27 @@ async function startBatchOcr() {
             var s = ev.stats;
             var pct = s.total ? Math.round((s.done + s.skipped + s.failed) / s.total * 100) : 0;
             document.getElementById('batch-bar').style.width = pct + '%';
-            document.getElementById('batch-progress').textContent = '処理中: ' + (ev.file ? ev.file.name : '') + ' | 完了' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed + ' / ' + s.total;
+            var avg = (s.done + s.failed) > 0 ? Math.round((Date.now() - BatchProcessor.getStartTime()) / 1000 / (s.done + s.skipped + s.failed)) : 0;
+            document.getElementById('batch-progress').textContent =
+                (ev.file ? ev.file.name + ' | ' : '') + '完了' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed + ' / ' + s.total +
+                (avg ? ' （約' + avg + '秒/件）' : '');
+            updateBatchFlushStatus();
+        },
+        onItemUpdate: function(ev) {
+            updateBatchResultRow(ev);
+        },
+        onFlush: function(info) {
+            if (info.rows) markBatchRowsFlushed(info.rows.map(function(r) { return r.fileId; }));
+            updateBatchFlushStatus();
         },
         onComplete: function(s) {
+            clearInterval(elapsedTimer);
             releaseBusyButton(batchBtn);
-            setStatus('バッチ完了: 成功' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed);
+            updateBatchFlushStatus();
+            setStatus('OCR完了: 成功' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed + '（シート反映' + s.flushed + '件）');
             markStepDone(3);
         },
-        onError: function(f, err) { console.error(f, err); }
+        onError: function(f, err) { console.error(f, err); if (f) setStatus(String(err), true); }
     });
     BatchProcessor.setQueue(appState.batchFiles);
     BatchProcessor.start();

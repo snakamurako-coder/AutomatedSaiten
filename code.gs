@@ -944,22 +944,35 @@ function extractTextFromBoxes(visionResult, targetBoxes) {
   return result;
 }
 
-function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists) {
+function getProcessedFileIdList() {
+  return Object.keys(getProcessedFileIds());
+}
+
+function buildResultRowArray(headers, map, fields, fileMeta, studentId, textMapping) {
+  var row = new Array(headers.length).fill('');
+  if (map.studentId >= 0) row[map.studentId] = studentId || '';
+  if (map.fileName >= 0) row[map.fileName] = fileMeta.fileName || '';
+  if (map.fileId >= 0) row[map.fileId] = fileMeta.fileId || '';
+  if (map.warpedFileId >= 0) row[map.warpedFileId] = fileMeta.warpedFileId || '';
+  fields.forEach(function(f) {
+    var label = f.displayName || f.id;
+    var fieldMap = map.fields[label];
+    if (!fieldMap) return;
+    if (fieldMap.text >= 0) row[fieldMap.text] = (textMapping && textMapping[f.id]) || 'なし';
+  });
+  return row;
+}
+
+function ocrStudentPaper(fileMeta, studentId, warpedBase64) {
   try {
     var ss = getActiveTestSs();
     var sourceFileId = fileMeta.id || fileMeta.fileId;
     var sourceFileName = fileMeta.name || fileMeta.fileName || '';
-
-    if (skipIfExists !== false && sourceFileId && isFileAlreadyProcessed(ss, sourceFileId)) {
-      return { success: true, skipped: true, fileId: sourceFileId };
-    }
-
     var fields = getAnswerFields(ss);
     if (fields.length === 0) throw new Error('記述欄が設定されていません。');
 
     var imageBytes = warpedBase64.split(',')[1];
     var saved = saveWarpedImage(warpedBase64, sourceFileName, studentId);
-
     var boxes = fieldsToBoxes(fields);
     var visionResult = callVisionAPI(imageBytes);
     var extracted = extractTextFromBoxes(visionResult, boxes);
@@ -968,21 +981,76 @@ function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists) {
     extracted.forEach(function(item) {
       textMapping[item.q_id] = item.student_answer;
     });
-
     var cleanStudentId = (studentId && !String(studentId).includes('?')) ? String(studentId) : '';
 
-    appendResultRow(ss, {
-      fileName: sourceFileName,
-      fileId: sourceFileId,
-      warpedFileId: saved.fileId
-    }, cleanStudentId, textMapping);
-
-    updateTestStatus('テキスト化中');
     return {
       success: true,
       studentId: cleanStudentId,
       fileId: sourceFileId,
+      fileName: sourceFileName,
+      warpedFileId: saved.fileId,
       textMapping: textMapping,
+      skipped: false
+    };
+  } catch (error) {
+    return {
+      success: false,
+      error: error.toString(),
+      fileId: fileMeta ? (fileMeta.id || fileMeta.fileId) : ''
+    };
+  }
+}
+
+function flushResultRows(rows) {
+  if (!rows || rows.length === 0) return { written: 0 };
+
+  var ss = getActiveTestSs();
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  var fields = getAnswerFields(ss);
+  if (sheet.getLastRow() === 0) {
+    initResultsSheet(sheet, fields, getDynamicResultExtraColumns(ss));
+  }
+  ensureWarpedFileIdColumn(sheet);
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var map = getResultColumnMap(headers);
+  var startRow = sheet.getLastRow() + 1;
+
+  var dataRows = rows.map(function(r) {
+    return buildResultRowArray(headers, map, fields, {
+      fileName: r.fileName,
+      fileId: r.fileId,
+      warpedFileId: r.warpedFileId
+    }, r.studentId, r.textMapping);
+  });
+
+  sheet.getRange(startRow, 1, startRow + dataRows.length - 1, headers.length).setValues(dataRows);
+  updateTestStatus('テキスト化中');
+  return { written: dataRows.length };
+}
+
+function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists) {
+  try {
+    var ss = getActiveTestSs();
+    var sourceFileId = fileMeta.id || fileMeta.fileId;
+
+    if (skipIfExists !== false && sourceFileId && isFileAlreadyProcessed(ss, sourceFileId)) {
+      return { success: true, skipped: true, fileId: sourceFileId };
+    }
+
+    var ocrResult = ocrStudentPaper(fileMeta, studentId, warpedBase64);
+    if (!ocrResult.success) return ocrResult;
+
+    appendResultRow(ss, {
+      fileName: ocrResult.fileName,
+      fileId: ocrResult.fileId,
+      warpedFileId: ocrResult.warpedFileId
+    }, ocrResult.studentId, ocrResult.textMapping);
+
+    return {
+      success: true,
+      studentId: ocrResult.studentId,
+      fileId: ocrResult.fileId,
+      textMapping: ocrResult.textMapping,
       skipped: false
     };
   } catch (error) {
@@ -1013,21 +1081,8 @@ function appendResultRow(ss, fileMeta, studentId, textMapping) {
 
   ensureWarpedFileIdColumn(sheet);
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  var row = new Array(headers.length).fill('');
-
   var map = getResultColumnMap(headers);
-  if (map.studentId >= 0) row[map.studentId] = studentId;
-  if (map.fileName >= 0) row[map.fileName] = fileMeta.fileName || '';
-  if (map.fileId >= 0) row[map.fileId] = fileMeta.fileId || '';
-  if (map.warpedFileId >= 0) row[map.warpedFileId] = fileMeta.warpedFileId || '';
-
-  fields.forEach(function(f) {
-    var label = f.displayName || f.id;
-    var fieldMap = map.fields[label];
-    if (!fieldMap) return;
-    if (fieldMap.text >= 0) row[fieldMap.text] = textMapping[f.id] || 'なし';
-  });
-
+  var row = buildResultRowArray(headers, map, fields, fileMeta, studentId, textMapping);
   sheet.appendRow(row);
 }
 
