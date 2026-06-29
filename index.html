@@ -9,13 +9,52 @@
     <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
-        body { font-family: 'Noto Sans JP', sans-serif; background: #f3f4f6; }
+        body { font-family: 'Noto Sans JP', sans-serif; background: #f3f4f6; margin: 0; }
         .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 18px; height: 18px; animation: spin 1s linear infinite; display: inline-block; }
         @keyframes spin { to { transform: rotate(360deg); } }
         .step-btn.active { background: #2563eb; color: white; }
         .step-btn.done { background: #dcfce7; color: #166534; }
         #editor-canvas, #batch-preview-canvas { max-width: 100%; cursor: crosshair; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
-        .workspace-scroll { overflow: auto; max-height: calc(100vh - 120px); }
+        .workspace-scroll { overflow: auto; max-height: calc(100vh - 1.5rem); }
+        /* 左ナビ: 付箋グラバー + 自動格納 */
+        #app-shell { min-height: 100vh; width: 100%; }
+        #side-nav {
+            position: fixed; left: 0; top: 0; bottom: 0; width: 17rem; z-index: 9000;
+            transform: translateX(calc(-100% + 1.75rem));
+            transition: transform 0.28s ease, box-shadow 0.28s ease;
+            pointer-events: auto;
+        }
+        #side-nav.expanded {
+            transform: translateX(0);
+            z-index: 9100;
+            box-shadow: 4px 0 24px rgba(0,0,0,0.18);
+        }
+        #side-nav-inner {
+            height: 100%; background: #f9fafb; border-right: 1px solid #e5e7eb;
+            padding: 1rem; display: flex; flex-direction: column; overflow: hidden;
+        }
+        #nav-grabber {
+            position: absolute; right: 0; top: 50%; transform: translateY(-50%);
+            width: 1.75rem; min-height: 5.5rem; padding: 0.5rem 0.2rem;
+            background: linear-gradient(135deg, #fef08a 0%, #fde047 100%);
+            border: 1px solid #eab308; border-left: none; border-radius: 0 8px 8px 0;
+            box-shadow: 2px 2px 8px rgba(0,0,0,0.12); cursor: pointer;
+            writing-mode: vertical-rl; text-orientation: mixed;
+            font-size: 10px; font-weight: 700; color: #713f12; letter-spacing: 0.05em;
+            display: flex; align-items: center; justify-content: center; z-index: 1;
+        }
+        #nav-grabber:hover { background: linear-gradient(135deg, #fef9c3 0%, #facc15 100%); }
+        #main-workspace {
+            min-height: 100vh; width: 100%; box-sizing: border-box;
+            padding: 0.75rem 0.75rem 0.75rem 2rem;
+            background: #fff;
+        }
+        .section-toggle-btn {
+            width: 1.75rem; height: 1.75rem; line-height: 1; border-radius: 4px;
+            border: 1px solid #d97706; background: #fff; color: #92400e;
+            font-weight: bold; font-size: 14px; cursor: pointer; flex-shrink: 0;
+        }
+        .section-toggle-btn:hover { background: #fef3c7; }
         #crop-gallery-modal { display: none; position: fixed; inset: 0; z-index: 10000; background: #111827; flex-direction: column; }
         #crop-gallery-modal.open { display: flex; }
         #crop-gallery-toolbar { flex-shrink: 0; background: #1f2937; color: #f9fafb; padding: 0.75rem 1rem; display: flex; flex-wrap: wrap; gap: 0.75rem; align-items: center; border-bottom: 1px solid #374151; }
@@ -33,24 +72,27 @@
         .crit-row-deemed-checked { background: #eff6ff; }
     </style>
 </head>
-<body class="p-4">
-<div class="max-w-[1600px] mx-auto bg-white rounded-xl shadow-lg flex flex-col lg:flex-row min-h-[90vh]">
+<body>
+<div id="app-shell">
 
-    <!-- 左: ステップナビ -->
-    <div class="w-full lg:w-80 bg-gray-50 border-r p-4 flex flex-col shrink-0">
-        <h1 class="text-lg font-bold text-gray-800 mb-1"><i class="fa-solid fa-graduation-cap text-blue-600 mr-2"></i>自動採点システム</h1>
-        <p id="opencv-status" class="text-xs text-orange-600 mb-2"><i class="fa-solid fa-spinner fa-spin"></i> OpenCV.js 読込中...</p>
-        <select id="recent-test-select" class="w-full text-xs border rounded p-1 mb-1" onchange="onRecentTestChange(this.value)">
-            <option value="">-- 作業中のテスト --</option>
-        </select>
-        <p id="active-test-label" class="text-xs text-gray-600 mb-1 truncate">テスト未選択</p>
-        <p id="hub-label" class="text-xs text-gray-400 mb-3 truncate"></p>
-        <nav id="step-nav" class="space-y-1 text-xs flex-1 overflow-y-auto"></nav>
-        <div id="status-msg" class="mt-3 text-xs text-center text-gray-600 min-h-[2rem] border-t pt-2"></div>
-    </div>
+    <!-- 左: ステップナビ（付箋グラバー付き・自動格納） -->
+    <aside id="side-nav" aria-label="ステップナビ">
+        <button type="button" id="nav-grabber" title="メニューを表示（5秒間）">メニュー</button>
+        <div id="side-nav-inner">
+            <h1 class="text-lg font-bold text-gray-800 mb-1 pr-6"><i class="fa-solid fa-graduation-cap text-blue-600 mr-2"></i>自動採点</h1>
+            <p id="opencv-status" class="text-xs text-orange-600 mb-2"><i class="fa-solid fa-spinner fa-spin"></i> OpenCV.js 読込中...</p>
+            <select id="recent-test-select" class="w-full text-xs border rounded p-1 mb-1" onchange="onRecentTestChange(this.value)">
+                <option value="">-- 作業中のテスト --</option>
+            </select>
+            <p id="active-test-label" class="text-xs text-gray-600 mb-1 truncate">テスト未選択</p>
+            <p id="hub-label" class="text-xs text-gray-400 mb-3 truncate"></p>
+            <nav id="step-nav" class="space-y-1 text-xs flex-1 overflow-y-auto"></nav>
+            <div id="status-msg" class="mt-3 text-xs text-center text-gray-600 min-h-[2rem] border-t pt-2"></div>
+        </div>
+    </aside>
 
-    <!-- 右: ワークスペース -->
-    <div class="flex-1 p-4 workspace-scroll">
+    <!-- 右: ワークスペース（全幅） -->
+    <main id="main-workspace" class="workspace-scroll">
         <!-- ⓪ テスト作成 -->
         <div id="step-0" class="step-panel space-y-4">
             <h2 class="font-bold text-gray-800">⓪ テスト作成</h2>
@@ -129,8 +171,15 @@
                 <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveCriteriaToServer)" class="bg-green-600 text-white px-3 py-1 rounded font-bold">基準を保存</button>
             </div>
 
-            <div class="border rounded p-3 bg-amber-50 space-y-2">
-                <div class="text-xs font-bold text-amber-900">OCRテキスト置換（例: muchfasterthan → much faster than）</div>
+            <div class="border rounded p-3 bg-amber-50">
+                <div class="flex items-center justify-between gap-2">
+                    <div class="text-xs font-bold text-amber-900">OCRテキスト置換（例: muchfasterthan → much faster than）</div>
+                    <div class="flex gap-1 shrink-0">
+                        <button type="button" id="ocr-collapse-btn" class="section-toggle-btn" onclick="setOcrReplaceExpanded(false)" title="折りたたむ">ー</button>
+                        <button type="button" id="ocr-expand-btn" class="section-toggle-btn hidden" onclick="setOcrReplaceExpanded(true)" title="展開">＋</button>
+                    </div>
+                </div>
+                <div id="ocr-replace-body" class="hidden space-y-2 mt-2">
                 <p class="text-xs text-amber-800">「置換ルールを保存」はルールのみ保存します。「置換を適用して再集約（SS書換）」で <b>採点結果シートの {記述欄名}_テキスト 列</b> のセル値を直接書き換えます（③のOCR結果も同期更新）。</p>
                 <div class="overflow-auto max-h-40 border rounded bg-white">
                     <table class="w-full text-xs">
@@ -142,6 +191,7 @@
                     <button type="button" onclick="addOcrReplacementRow()" class="bg-white border px-2 py-1 rounded">行を追加</button>
                     <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveOcrReplacementsOnly)" class="bg-amber-200 text-amber-900 px-2 py-1 rounded font-bold">置換ルールを保存（シート書換なし）</button>
                     <button type="button" data-busy-label="適用中..." onclick="withBusyButton(event.currentTarget, applyReplacementsAndReaggregate)" class="bg-amber-600 text-white px-2 py-1 rounded font-bold">置換を適用して再集約（SS書換）</button>
+                </div>
                 </div>
             </div>
 
@@ -156,7 +206,7 @@
                 </div>
             </div>
 
-            <div class="overflow-auto max-h-96 border rounded">
+            <div class="overflow-auto max-h-[calc(100vh-14rem)] border rounded">
                 <table class="w-full text-xs"><thead class="bg-gray-100"><tr><th class="p-2">みなし</th><th class="p-2">解答</th><th class="p-2">人数</th><th class="p-2">判定</th><th class="p-2">得点</th><th class="p-2">備考</th><th class="p-2">画像</th></tr></thead><tbody id="criteria-tbody"></tbody></table>
             </div>
 
@@ -172,7 +222,7 @@
                     <button type="button" id="crop-gallery-open-btn" onclick="openCropGallery()" class="bg-blue-800 text-white px-2 py-1 rounded font-bold disabled:opacity-40" disabled>全画面ギャラリー</button>
                 </div>
                 <div id="outlier-groups-list" class="max-h-36 overflow-auto text-xs border rounded bg-white p-2"></div>
-                <div id="outlier-crop-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-[28rem] overflow-auto"></div>
+                <div id="outlier-crop-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-2 max-h-[calc(100vh-16rem)] overflow-auto"></div>
             </div>
 
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(4); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
@@ -229,7 +279,7 @@
             <h2 class="font-bold">⑩ 出力（未実装）</h2>
             <p class="text-gray-500 text-sm">採点判定結果・合計点を解答用紙画像に上書きする機能は今後実装予定です。</p>
         </div>
-    </div>
+    </main>
 </div>
 
 <img id="hidden-source-img" style="display:none">
@@ -933,6 +983,60 @@ function initStepNav() {
     nav.innerHTML = STEPS.map(function(s) {
         return '<button type="button" class="step-btn w-full text-left px-3 py-2 rounded border mb-1 ' + (s.id === 0 ? 'active' : '') + '" data-step="' + s.id + '" onclick="goToStep(' + s.id + ')">' + s.label + '</button>';
     }).join('');
+}
+
+var sideNavPinTimer = null;
+var SIDE_NAV_PIN_MS = 5000;
+
+function pinSideNav() {
+    var nav = document.getElementById('side-nav');
+    if (!nav) return;
+    nav.classList.add('expanded');
+    clearTimeout(sideNavPinTimer);
+    sideNavPinTimer = setTimeout(collapseSideNavIfIdle, SIDE_NAV_PIN_MS);
+}
+
+function collapseSideNavIfIdle() {
+    var nav = document.getElementById('side-nav');
+    var grabber = document.getElementById('nav-grabber');
+    if (!nav) return;
+    if (nav.matches(':hover') || (grabber && grabber.matches(':hover'))) {
+        sideNavPinTimer = setTimeout(collapseSideNavIfIdle, SIDE_NAV_PIN_MS);
+        return;
+    }
+    nav.classList.remove('expanded');
+}
+
+function initCollapsibleSideNav() {
+    var nav = document.getElementById('side-nav');
+    var grabber = document.getElementById('nav-grabber');
+    if (!nav || !grabber) return;
+    nav.addEventListener('mouseenter', pinSideNav);
+    grabber.addEventListener('mouseenter', pinSideNav);
+    grabber.addEventListener('click', function(e) {
+        e.preventDefault();
+        e.stopPropagation();
+        pinSideNav();
+    });
+    nav.addEventListener('mousemove', function() {
+        if (nav.classList.contains('expanded')) pinSideNav();
+    });
+}
+
+function setOcrReplaceExpanded(expanded) {
+    var body = document.getElementById('ocr-replace-body');
+    var collapseBtn = document.getElementById('ocr-collapse-btn');
+    var expandBtn = document.getElementById('ocr-expand-btn');
+    if (!body) return;
+    if (expanded) {
+        body.classList.remove('hidden');
+        if (collapseBtn) collapseBtn.classList.remove('hidden');
+        if (expandBtn) expandBtn.classList.add('hidden');
+    } else {
+        body.classList.add('hidden');
+        if (collapseBtn) collapseBtn.classList.add('hidden');
+        if (expandBtn) expandBtn.classList.remove('hidden');
+    }
 }
 
 function resetStepNavDone() {
@@ -2040,6 +2144,8 @@ async function saveVerificationEdits() {
 
 document.addEventListener('DOMContentLoaded', function() {
     initStepNav();
+    initCollapsibleSideNav();
+    setOcrReplaceExpanded(false);
     var critSel = document.getElementById('criteria-field-select');
     if (critSel) critSel.addEventListener('change', function() { loadCriteriaUiForField(this.value); });
     var deemedInput = document.getElementById('deemed-canonical-input');
