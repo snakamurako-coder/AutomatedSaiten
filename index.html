@@ -589,7 +589,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {} };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -782,10 +782,6 @@ async function loadAppBootstrap() {
         if (!resumeId && boot.tests.length > 0) resumeId = boot.tests[0].testSsId;
         if (resumeId) {
             await selectTest(resumeId);
-            var t = boot.tests.find(function(x) { return x.testSsId === resumeId; });
-            if (t && t.currentStep !== '' && t.currentStep != null) {
-                setStatus('作業を再開: ' + t.testName + '（Step ' + t.currentStep + '）');
-            }
         } else if (!boot.tests.length) {
             setStatus('テストがありません。⓪ テスト作成から始めてください。');
         }
@@ -828,7 +824,12 @@ function initStepNav() {
     }).join('');
 }
 
-function goToStep(n) {
+function resetStepNavDone() {
+    document.querySelectorAll('.step-btn').forEach(function(btn) { btn.classList.remove('done'); });
+}
+
+function goToStep(n, options) {
+    options = options || {};
     currentStep = n;
     appState.currentStep = n;
     document.querySelectorAll('.step-panel').forEach(function(el) { el.classList.add('hidden'); });
@@ -836,10 +837,184 @@ function goToStep(n) {
     document.querySelectorAll('.step-btn').forEach(function(btn) {
         btn.classList.toggle('active', parseInt(btn.dataset.step, 10) === n);
     });
-    if (n === 2) { autoSaveFieldsForStep2().then(function() { renderPointsTable(); }); }
-    else if (n === 4) populateCriteriaSelect();
-    else if (n === 6) loadDomainTable();
-    else if (n === 3) refreshVisionKeyStatus();
+    if (n === 2) {
+        if (options.skipAutoSave || appState.restoring) renderPointsTableFromCache();
+        else autoSaveFieldsForStep2().then(function() { renderPointsTableFromCache(); });
+    } else if (n === 3) refreshVisionKeyStatus();
+    else if (n === 4) populateCriteriaSelectFromCache();
+    else if (n === 6) renderDomainTableFromCache();
+    else if (n === 8) loadIdentityEditorFromState();
+}
+
+function renderPointsTableFromCache() {
+    var fields = appState.fields || [];
+    var pts = (appState.test && appState.test.points) || appState.points || {};
+    if (!fields.length) {
+        document.getElementById('points-table').innerHTML = '<p class="text-sm text-gray-500">記述欄がありません</p>';
+        return;
+    }
+    document.getElementById('points-table').innerHTML = '<table class="w-full text-sm border"><tr class="bg-gray-100"><th class="p-2">記述欄</th><th class="p-2">満点</th></tr>' +
+        fields.map(function(f) {
+            return '<tr><td class="p-2 border">' + escapeHtml(f.displayName || f.id) + '</td><td class="p-2 border"><input type="number" class="point-input w-20 border rounded p-1" data-id="' + f.id + '" value="' + (pts[f.id] != null ? pts[f.id] : 5) + '" min="0"></td></tr>';
+        }).join('') + '</table>';
+}
+
+function populateCriteriaSelectFromCache() {
+    var fields = appState.fields || [];
+    var sel = document.getElementById('criteria-field-select');
+    sel.innerHTML = fields.map(function(f) {
+        return '<option value="' + f.id + '">' + escapeHtml(f.displayName || f.id) + '</option>';
+    }).join('');
+    var firstWith = fields.find(function(f) { return appState.criteriaByField[f.id] && appState.criteriaByField[f.id].length; });
+    var fid = firstWith ? firstWith.id : (fields[0] ? fields[0].id : '');
+    if (fid) {
+        sel.value = fid;
+        loadCriteriaUiForField(fid);
+    }
+}
+
+function loadCriteriaUiForField(fieldId) {
+    var saved = (appState.criteriaByField || {})[fieldId];
+    if (saved && saved.length) {
+        appState.criteriaList = saved.map(function(r) { return { answer_text: r.answer_text, count: '—' }; });
+        renderCriteriaTableFromSaved(saved);
+        return;
+    }
+    appState.criteriaList = [];
+    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="5" class="p-2 text-gray-400">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
+}
+
+function renderCriteriaTableFromSaved(rules) {
+    var tbody = document.getElementById('criteria-tbody');
+    tbody.innerHTML = rules.map(function(item, idx) {
+        return '<tr><td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">—</td>' +
+            '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (item.judgment==='○'?' selected':'') + '>○</option><option' + (item.judgment==='△'?' selected':'') + '>△</option><option' + (item.judgment==='×'?' selected':'') + '>×</option></select></td>' +
+            '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + (item.score != null ? item.score : 0) + '"></td>' +
+            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + escapeHtml(item.reason || '') + '"></td></tr>';
+    }).join('');
+    appState.criteriaList = rules.map(function(r) { return { answer_text: r.answer_text, count: '—' }; });
+}
+
+function renderDomainTableFromCache() {
+    var rows = appState.domainRows || [];
+    document.getElementById('domain-table').innerHTML = rows.length ? (
+        '<table class="w-full text-xs border"><tr class="bg-gray-100"><th class="p-2">記述欄</th><th class="p-2">大問</th><th class="p-2">範囲</th><th class="p-2">能力</th></tr>' +
+        rows.map(function(r, i) {
+            return '<tr><td class="p-2 border">' + escapeHtml(r.displayName) + '</td>' +
+                '<td class="p-2 border"><input class="dom-dai border rounded w-full p-1" data-i="' + i + '" value="' + escapeHtml(r.daiMon || '') + '"></td>' +
+                '<td class="p-2 border"><input class="dom-han border rounded w-full p-1" data-i="' + i + '" value="' + escapeHtml(r.hanI || '') + '"></td>' +
+                '<td class="p-2 border"><input class="dom-noryoku border rounded w-full p-1" data-i="' + i + '" value="' + escapeHtml(r.noryoku || '') + '"></td></tr>';
+        }).join('') + '</table>'
+    ) : '<p class="text-sm text-gray-500">領域設定がありません</p>';
+}
+
+async function loadIdentityEditorFromState() {
+    if (!appState.identityFields || !appState.identityFields.length) return;
+    try {
+        await loadModelFromServerIfNeeded();
+        RegionEditor.init('identity-canvas', { mode: 'identity', initialRegions: appState.identityFields.map(function(f) {
+            return { type: f.type, x: f.x, y: f.y, w: f.width, h: f.height };
+        })});
+        RegionEditor.setImage(appState.warpedImageEl);
+    } catch (e) { /* model not available */ }
+}
+
+function restoreBatchResultsFromPreview(preview, processedIds) {
+    var previewMap = {};
+    (preview || []).forEach(function(r) { if (r.fileId) previewMap[r.fileId] = r; });
+    var procSet = {};
+    (processedIds || []).forEach(function(id) { procSet[id] = true; });
+    (appState.batchFiles || []).forEach(function(f) {
+        if (previewMap[f.id]) {
+            updateBatchResultRow({
+                file: f, status: 'done',
+                result: { success: true, studentId: previewMap[f.id].studentId, textMapping: previewMap[f.id].textMapping }
+            });
+            markBatchRowsFlushed([f.id]);
+        } else if (procSet[f.id]) {
+            updateBatchResultRow({ file: f, status: 'skipped' });
+        }
+    });
+}
+
+async function restoreTestUi(data) {
+    appState.restoring = true;
+    appState.test = data;
+    appState.fields = data.fields || [];
+    appState.points = data.points || {};
+    appState.identityFields = data.identityFields || [];
+    appState.criteriaByField = data.criteriaByField || {};
+    appState.domainRows = data.domainSettings || [];
+    appState.criteriaList = [];
+    appState.warpedBase64 = null;
+    appState.warpedImageEl = null;
+    appState.batchFlushedIds = {};
+
+    if (data.info) {
+        document.getElementById('test-name').value = data.info['テスト名'] || '';
+        document.getElementById('test-subject').value = data.info['科目名'] || '';
+        var dt = data.info['実施日時'] || '';
+        if (dt) {
+            var localDt = dt.indexOf('T') >= 0 ? dt : dt.replace(' ', 'T').substring(0, 16);
+            document.getElementById('test-datetime').value = localDt;
+        }
+    }
+
+    try {
+        if (data.info && data.info['模範解答画像FileID'] && appState.fields.length) {
+            await loadModelFromServerIfNeeded();
+            RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields, onChange: renderFieldList });
+            RegionEditor.setImage(appState.warpedImageEl);
+            renderFieldList(appState.fields);
+        }
+    } catch (e) { /* step1 partial */ }
+
+    renderPointsTableFromCache();
+
+    var br = data.batchRestore || {};
+    if (br.folderId) document.getElementById('drive-folder-id').value = br.folderId;
+    appState.batchFiles = br.files || [];
+    if (appState.batchFiles.length) {
+        await ensureBatchFields();
+        initBatchResultsTable(appState.batchFiles);
+        restoreBatchResultsFromPreview(br.resultPreview, br.processedFileIds);
+        document.getElementById('batch-file-count').textContent =
+            appState.batchFiles.length + ' ファイル検出（処理済 ' + (br.processedCount || 0) + ' / OCR結果 ' + (data.resultRowCount || 0) + '行）';
+        var pct = appState.batchFiles.length ? Math.round((br.processedCount || 0) / appState.batchFiles.length * 100) : 0;
+        document.getElementById('batch-bar').style.width = pct + '%';
+        document.getElementById('batch-progress').textContent = '再開: 処理済 ' + (br.processedCount || 0) + ' / ' + appState.batchFiles.length;
+    } else {
+        document.getElementById('batch-results-thead').innerHTML = '';
+        document.getElementById('batch-results-tbody').innerHTML = '';
+        document.getElementById('batch-file-count').textContent = data.resultRowCount ? ('採点結果 ' + data.resultRowCount + ' 行保存済み') : '';
+    }
+    updateBatchFlushStatus();
+
+    populateCriteriaSelectFromCache();
+
+    if (data.summary && data.summary.length) {
+        document.getElementById('summary-preview').innerHTML = data.summary.map(function(r) {
+            return '<div class="py-0.5"><b>' + escapeHtml(r.category) + '</b> ' + escapeHtml(r.item) + ': ' + escapeHtml(r.value) + '</div>';
+        }).join('');
+    } else {
+        document.getElementById('summary-preview').innerHTML = '';
+    }
+
+    renderDomainTableFromCache();
+
+    if (data.externalScores && data.externalScores.length) {
+        document.getElementById('external-csv').value = data.externalScores.map(function(r) {
+            return r.studentId + ',' + r.score + (r.source && r.source !== 'CSV取込' ? ',' + r.source : '');
+        }).join('\n');
+    } else {
+        document.getElementById('external-csv').value = '';
+    }
+
+    resetStepNavDone();
+    (data.completedSteps || []).forEach(function(s) { markStepDone(s); });
+
+    appState.currentStep = data.currentStep != null ? parseInt(data.currentStep, 10) : 0;
+    appState.restoring = false;
 }
 
 async function autoSaveFieldsForStep2() {
@@ -925,26 +1100,15 @@ async function refreshTestList() {
 
 async function selectTest(testSsId, targetStep) {
     try {
-        var info = await gasRun('setActiveTest', testSsId);
-        appState.test = info;
-        appState.fields = info.fields || [];
-        appState.currentStep = info.currentStep != null ? parseInt(info.currentStep, 10) : 0;
-        document.getElementById('active-test-label').textContent = '現在: ' + (info.info['テスト名'] || testSsId);
+        setStatus('テストデータを読み込み中...');
+        var data = await gasRun('setActiveTest', testSsId);
+        await restoreTestUi(data);
+        document.getElementById('active-test-label').textContent = '現在: ' + (data.info['テスト名'] || testSsId);
         document.getElementById('recent-test-select').value = testSsId;
-        if (info.info['生徒解答フォルダID']) document.getElementById('drive-folder-id').value = info.info['生徒解答フォルダID'];
-        setStatus('テストを選択しました');
-        await refreshTestList();
         await refreshRecentTestsDropdown();
-        var step = targetStep != null ? targetStep : (appState.currentStep || 0);
-        goToStep(step);
-        if (step === 1 && appState.fields.length) {
-            try {
-                await loadModelFromServerIfNeeded();
-                RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields, onChange: renderFieldList });
-                RegionEditor.setImage(appState.warpedImageEl);
-                renderFieldList(appState.fields);
-            } catch (e) { /* model not loaded yet */ }
-        }
+        var step = targetStep != null ? targetStep : (data.currentStep || 0);
+        goToStep(step, { skipAutoSave: true });
+        setStatus('作業を再開: ' + (data.info['テスト名'] || testSsId) + '（Step ' + step + '）');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -1122,12 +1286,7 @@ async function startBatchOcr() {
 }
 
 function populateCriteriaSelect() {
-    gasRun('getTestInfo').then(function(info) {
-        appState.fields = info.fields || [];
-        document.getElementById('criteria-field-select').innerHTML = appState.fields.map(function(f) {
-            return '<option value="' + f.id + '">' + (f.displayName || f.id) + '</option>';
-        }).join('');
-    });
+    populateCriteriaSelectFromCache();
 }
 
 async function fetchUniqueForCriteria() {
@@ -1193,15 +1352,13 @@ async function runGrading() {
 }
 
 function loadDomainTable() {
+    if (appState.domainRows && appState.domainRows.length) {
+        renderDomainTableFromCache();
+        return;
+    }
     gasRun('getDomainSettingsForUi').then(function(rows) {
-        document.getElementById('domain-table').innerHTML = '<table class="w-full text-xs border"><tr class="bg-gray-100"><th class="p-2">記述欄</th><th class="p-2">大問</th><th class="p-2">範囲</th><th class="p-2">能力</th></tr>' +
-            rows.map(function(r, i) {
-                return '<tr><td class="p-2 border">' + r.displayName + '</td>' +
-                    '<td class="p-2 border"><input class="dom-dai border rounded w-full p-1" data-i="' + i + '" value="' + (r.daiMon||'') + '"></td>' +
-                    '<td class="p-2 border"><input class="dom-han border rounded w-full p-1" data-i="' + i + '" value="' + (r.hanI||'') + '"></td>' +
-                    '<td class="p-2 border"><input class="dom-noryoku border rounded w-full p-1" data-i="' + i + '" value="' + (r.noryoku||'') + '"></td></tr>';
-            }).join('') + '</table>';
         appState.domainRows = rows;
+        renderDomainTableFromCache();
     });
 }
 
@@ -1317,6 +1474,8 @@ async function saveVerificationEdits() {
 
 document.addEventListener('DOMContentLoaded', function() {
     initStepNav();
+    var critSel = document.getElementById('criteria-field-select');
+    if (critSel) critSel.addEventListener('change', function() { loadCriteriaUiForField(this.value); });
     loadAppBootstrap();
     refreshVisionKeyStatus();
 });

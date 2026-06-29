@@ -680,21 +680,179 @@ function setActiveTest(testSsId) {
   if (!testSsId) throw new Error('テストIDが指定されていません。');
   SpreadsheetApp.openById(testSsId);
   PropertiesService.getScriptProperties().setProperty('ACTIVE_TEST_SS_ID', testSsId);
-  return getTestInfo(testSsId);
+  return getTestRestoreData(testSsId);
 }
 
-function getTestInfo(testSsId) {
+function touchTestProgress_(ss, stepNum) {
+  var current = parseInt(getTestInfoValue(ss, '現在ステップ'), 10) || 0;
+  if (stepNum <= current) return;
+  var now = Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss');
+  setTestInfoValue(ss, '現在ステップ', String(stepNum));
+  setTestInfoValue(ss, '最終保存日時', now);
+  updateHubTestProgress(ss.getId(), stepNum, now);
+}
+
+function hasGradedResults_(ss) {
+  var summary = ss.getSheetByName(SHEET_SUMMARY);
+  if (summary && summary.getLastRow() > 1) return true;
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  if (!sheet || sheet.getLastRow() <= 1) return false;
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colMap = getResultColumnMap(headers);
+  var sampleRows = Math.min(sheet.getLastRow() - 1, 10);
+  if (sampleRows <= 0) return false;
+  var data = sheet.getRange(2, 1, sampleRows, sheet.getLastColumn()).getValues();
+  for (var r = 0; r < data.length; r++) {
+    var labels = Object.keys(colMap.fields);
+    for (var i = 0; i < labels.length; i++) {
+      var jIdx = colMap.fields[labels[i]].judgment;
+      if (jIdx >= 0 && data[r][jIdx]) return true;
+    }
+  }
+  return false;
+}
+
+function inferCompletedSteps_(ss) {
+  var list = [0];
+  var fields = getAnswerFields(ss);
+  if (fields.length && getTestInfoValue(ss, '模範解答画像FileID')) list.push(1);
+  if (Object.keys(getPointsMap(ss)).length > 0) list.push(2);
+  var results = ss.getSheetByName(SHEET_RESULTS);
+  if (results && results.getLastRow() > 1) list.push(3);
+  if (getGradingCriteria(ss).length > 0) list.push(4);
+  if (hasGradedResults_(ss)) list.push(5);
+  var domains = getDomainSettings(ss);
+  if (domains.some(function(d) { return d.daiMon || d.hanI || d.noryoku; })) list.push(6);
+  var extSheet = ss.getSheetByName(SHEET_EXTERNAL_SCORES);
+  if (extSheet && extSheet.getLastRow() > 1) list.push(7);
+  if (getIdentityFields(ss).length > 0) list.push(8);
+  var maxStep = 0;
+  list.forEach(function(s) { if (s > maxStep) maxStep = s; });
+  return { list: list, maxStep: maxStep };
+}
+
+function getDomainSettingsForUiFromSs(ss) {
+  var fields = getAnswerFields(ss);
+  var domains = getDomainSettings(ss);
+  var domainMap = {};
+  domains.forEach(function(d) { domainMap[d.fieldId] = d; });
+  return fields.map(function(f) {
+    var d = domainMap[f.id] || {};
+    return {
+      fieldId: f.id,
+      displayName: f.displayName || f.id,
+      daiMon: d.daiMon || '',
+      hanI: d.hanI || '',
+      noryoku: d.noryoku || ''
+    };
+  });
+}
+
+function getCriteriaGroupedByField_(ss) {
+  var rules = getGradingCriteria(ss);
+  var grouped = {};
+  rules.forEach(function(r) {
+    if (!grouped[r.fieldId]) grouped[r.fieldId] = [];
+    grouped[r.fieldId].push(r);
+  });
+  return grouped;
+}
+
+function getSummaryDataFromSs(ss) {
+  var sheet = ss.getSheetByName(SHEET_SUMMARY);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  return sheet.getRange(2, 1, sheet.getLastRow() - 1, 4).getValues().map(function(row) {
+    return { category: row[0], item: row[1], value: row[2], note: row[3] };
+  });
+}
+
+function getExternalScoresFromSs(ss) {
+  var sheet = ss.getSheetByName(SHEET_EXTERNAL_SCORES);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  var data = sheet.getDataRange().getValues();
+  var list = [];
+  for (var i = 1; i < data.length; i++) {
+    list.push({
+      studentId: String(data[i][0]),
+      score: parseFloat(data[i][1]) || 0,
+      source: String(data[i][2] || ''),
+      importedAt: data[i][3]
+    });
+  }
+  return list;
+}
+
+function getOcrResultPreview_(ss) {
+  var fields = getAnswerFields(ss);
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  if (!sheet || sheet.getLastRow() <= 1) return [];
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colMap = getResultColumnMap(headers);
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  return data.map(function(row) {
+    var textMapping = {};
+    fields.forEach(function(f) {
+      var label = f.displayName || f.id;
+      var fm = colMap.fields[label];
+      if (fm && fm.text >= 0) textMapping[f.id] = String(row[fm.text] || '');
+    });
+    return {
+      fileId: colMap.fileId >= 0 ? String(row[colMap.fileId] || '') : '',
+      fileName: colMap.fileName >= 0 ? String(row[colMap.fileName] || '') : '',
+      studentId: colMap.studentId >= 0 ? String(row[colMap.studentId] || '') : '',
+      textMapping: textMapping
+    };
+  });
+}
+
+function getBatchRestoreSnapshot_(ss) {
+  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var processedIds = Object.keys(getProcessedFileIds(ss));
+  var files = [];
+  if (folderId) {
+    try {
+      files = listFolderFiles(folderId);
+    } catch (e) { /* folder inaccessible */ }
+  }
+  return {
+    folderId: folderId,
+    files: files,
+    processedFileIds: processedIds,
+    resultPreview: getOcrResultPreview_(ss),
+    processedCount: processedIds.length,
+    totalFiles: files.length
+  };
+}
+
+function getTestRestoreData(testSsId) {
   var ss = testSsId ? SpreadsheetApp.openById(testSsId) : getActiveTestSs();
   ensureTestInfoKeys(ss);
+  var completed = inferCompletedSteps_(ss);
+  var savedStep = parseInt(getTestInfoValue(ss, '現在ステップ'), 10) || 0;
+  var resumeStep = savedStep > 0 ? savedStep : completed.maxStep;
+
   return {
     testSsId: ss.getId(),
     url: ss.getUrl(),
     info: getTestInfoObject(ss),
     fields: getAnswerFields(ss),
     points: getPointsMap(ss),
-    activeTestSsId: ss.getId(),
-    currentStep: parseInt(getTestInfoValue(ss, '現在ステップ'), 10) || 0
+    identityFields: getIdentityFields(ss),
+    domainSettings: getDomainSettingsForUiFromSs(ss),
+    criteriaByField: getCriteriaGroupedByField_(ss),
+    summary: getSummaryDataFromSs(ss),
+    externalScores: getExternalScoresFromSs(ss),
+    batchRestore: getBatchRestoreSnapshot_(ss),
+    resultRowCount: Math.max(0, (ss.getSheetByName(SHEET_RESULTS).getLastRow() || 1) - 1),
+    completedSteps: completed.list,
+    currentStep: resumeStep,
+    lastSavedAt: getTestInfoValue(ss, '最終保存日時'),
+    activeTestSsId: ss.getId()
   };
+}
+
+function getTestInfo(testSsId) {
+  return getTestRestoreData(testSsId);
 }
 
 function updateHubTestProgress(testSsId, stepNum, savedAt) {
@@ -841,6 +999,7 @@ function saveAnswerFields(fields) {
 
   syncPointsSheet(ss, fields);
   rebuildResultsSheetHeaders(ss);
+  touchTestProgress_(ss, 1);
   return getAnswerFields(ss);
 }
 
@@ -870,6 +1029,7 @@ function savePoints(pointsMap) {
       sheet.getRange(i + 1, 2).setValue(parseInt(pointsMap[id], 10) || 0);
     }
   }
+  touchTestProgress_(ss, 2);
   return getPointsMap(ss);
 }
 
@@ -912,6 +1072,7 @@ function saveIdentityFields(fields) {
   fields.forEach(function(f) {
     sheet.appendRow([f.type, f.x, f.y, f.width, f.height]);
   });
+  touchTestProgress_(ss, 8);
   return getIdentityFields(ss);
 }
 
@@ -1193,6 +1354,7 @@ function flushResultRows(rows) {
 
   sheet.getRange(startRow, 1, startRow + dataRows.length - 1, headers.length).setValues(dataRows);
   updateTestStatus('テキスト化中');
+  touchTestProgress_(ss, 3);
   return { written: dataRows.length };
 }
 
@@ -1366,6 +1528,7 @@ function saveGradingCriteria(fieldId, confirmedRules) {
       rule.reason || ''
     ]);
   });
+  touchTestProgress_(ss, 4);
   return true;
 }
 
@@ -1436,6 +1599,7 @@ function executeGrading() {
   applyExternalScoresToResults();
   buildSummary(ss, unregisteredCount);
   updateTestStatus('採点完了');
+  touchTestProgress_(ss, 5);
   return { gradedCount: data.length, unregisteredCount: unregisteredCount };
 }
 
@@ -1555,6 +1719,7 @@ function saveDomainSettings(settings) {
     sheet.appendRow([s.fieldId, s.daiMon || '', s.hanI || '', s.noryoku || '']);
   });
   rebuildResultsSheetHeaders(ss);
+  touchTestProgress_(ss, 6);
   return getDomainSettings(ss);
 }
 
@@ -1679,6 +1844,7 @@ function importExternalScores(rows) {
   });
 
   applyExternalScoresToResults();
+  touchTestProgress_(getActiveTestSs(), 7);
   return sheet.getLastRow() - 1;
 }
 
