@@ -79,7 +79,7 @@
 
     <!-- 左: ステップナビ（付箋グラバー付き・自動格納） -->
     <aside id="side-nav" aria-label="ステップナビ">
-        <button type="button" id="nav-grabber" title="メニューを表示（5秒間）">メニュー</button>
+        <button type="button" id="nav-grabber" title="メニューを格納">メニュー</button>
         <div id="side-nav-inner">
             <h1 class="text-lg font-bold text-gray-800 mb-1 pr-6"><i class="fa-solid fa-graduation-cap text-blue-600 mr-2"></i>自動採点</h1>
             <p id="opencv-status" class="text-xs text-orange-600 mb-2"><i class="fa-solid fa-spinner fa-spin"></i> OpenCV.js 読込中...</p>
@@ -694,6 +694,77 @@ function gasRun(fn) {
   });
 }
 
+/** セッション限定のテスト再開キャッシュ（タブを閉じると破棄・メモリのみ） */
+var TestSessionCache = (function() {
+  var mem = {};
+
+  return {
+    get: function(testSsId) {
+      var data = mem[testSsId];
+      return data ? JSON.parse(JSON.stringify(data)) : null;
+    },
+    set: function(testSsId, data) {
+      mem[testSsId] = data;
+    },
+    patch: function(testSsId, updater) {
+      var cur = mem[testSsId];
+      if (!cur) return;
+      mem[testSsId] = typeof updater === 'function' ? updater(JSON.parse(JSON.stringify(cur))) : Object.assign({}, cur, updater);
+    },
+    clear: function() {
+      mem = {};
+    },
+    has: function(testSsId) {
+      return !!mem[testSsId];
+    }
+  };
+})();
+
+function clearTestSessionCacheOnExit() {
+  TestSessionCache.clear();
+}
+
+function getCurrentTestSsId() {
+  return (appState.test && (appState.test.testSsId || appState.test.activeTestSsId)) || '';
+}
+
+async function ensureServerActiveTest() {
+  var id = getCurrentTestSsId();
+  if (!id) throw new Error('テストが選択されていません');
+  await gasRun('setActiveTestIdOnly', id);
+  return id;
+}
+
+function patchCurrentTestSessionCache(updater) {
+  var id = getCurrentTestSsId();
+  if (!id) return;
+  TestSessionCache.patch(id, updater);
+}
+
+async function preloadTestsToSessionCache(tests) {
+  var ids = (tests || []).map(function(t) { return t.testSsId; }).filter(Boolean);
+  if (!ids.length) return;
+  setStatus('テスト再開情報を読み込み中... (' + ids.length + ' 件)');
+  try {
+    var map = await gasRun('getBatchTestRestoreSnapshots', ids);
+    Object.keys(map || {}).forEach(function(id) {
+      TestSessionCache.set(id, map[id]);
+    });
+  } catch (e) {
+    setStatus('テスト再開情報の一括読込に失敗: ' + (e.message || e), true);
+  }
+}
+
+async function refreshCurrentTestInCache() {
+  var id = appState.test && appState.test.testSsId;
+  if (!id) return;
+  try {
+    var data = await gasRun('getTestRestoreSnapshot', id);
+    TestSessionCache.set(id, data);
+    return data;
+  } catch (e) { return null; }
+}
+
 async function withBusyButton(btn, fn) {
   if (!btn || btn.disabled) return;
   btn.disabled = true;
@@ -905,19 +976,29 @@ async function loadAppBootstrap() {
     try {
         var boot = await gasRun('getAppBootstrap');
         if (!boot || boot.ok === false) {
-            if (boot && boot.tests && boot.tests.length) applyTestsToUi(boot.tests);
+            if (boot && boot.tests && boot.tests.length) {
+                applyTestsToUi(boot.tests);
+                TestSessionCache.clear();
+                await preloadTestsToSessionCache(boot.tests);
+                var resumePartial = boot.activeTestSsId || boot.tests[0].testSsId;
+                if (resumePartial) {
+                    await selectTest(resumePartial);
+                } else {
+                    setStatus(boot.error || 'ハブの初期化に問題がありますが、テスト一覧は表示しました。', true);
+                }
+            }
             document.getElementById('hub-label').innerHTML = boot && boot.error
                 ? '<span class="text-red-600">ハブ: ' + escapeHtml(boot.error) + '</span>'
                 : '<span class="text-red-600">ハブ未登録</span>';
             if (!boot || !boot.tests || !boot.tests.length) {
                 await loadAppBootstrapFallback(boot && boot.error);
-            } else {
-                setStatus(boot.error || 'ハブの初期化に問題がありますが、テスト一覧は表示しました。', true);
             }
             return;
         }
         document.getElementById('hub-label').innerHTML = 'ハブ: <a href="' + boot.hubUrl + '" target="_blank" class="text-blue-600 underline">' + escapeHtml(boot.hubName) + '</a>';
         applyTestsToUi(boot.tests);
+        TestSessionCache.clear();
+        await preloadTestsToSessionCache(boot.tests);
 
         var resumeId = boot.activeTestSsId;
         if (!resumeId && boot.tests.length > 0) resumeId = boot.tests[0].testSsId;
@@ -938,6 +1019,8 @@ async function loadAppBootstrap() {
 async function loadAppBootstrapFallback(reason) {
     var list = await gasRun('getRecentTests', 50);
     applyTestsToUi(list);
+    TestSessionCache.clear();
+    await preloadTestsToSessionCache(list);
     document.getElementById('hub-label').innerHTML = '<span class="text-gray-500">ハブ: 一覧のみ取得</span>';
     if (list.length) {
         setStatus('テスト一覧を表示しました（' + list.length + ' 件）' + (reason ? ' — ' + reason : ''));
@@ -991,6 +1074,13 @@ function pinSideNav() {
     sideNavPinTimer = setTimeout(collapseSideNavIfIdle, SIDE_NAV_PIN_MS);
 }
 
+function collapseSideNavNow() {
+    var nav = document.getElementById('side-nav');
+    clearTimeout(sideNavPinTimer);
+    sideNavPinTimer = null;
+    if (nav) nav.classList.remove('expanded');
+}
+
 function collapseSideNavIfIdle() {
     var nav = document.getElementById('side-nav');
     var grabber = document.getElementById('nav-grabber');
@@ -999,7 +1089,7 @@ function collapseSideNavIfIdle() {
         sideNavPinTimer = setTimeout(collapseSideNavIfIdle, SIDE_NAV_PIN_MS);
         return;
     }
-    nav.classList.remove('expanded');
+    collapseSideNavNow();
 }
 
 function initCollapsibleSideNav() {
@@ -1011,7 +1101,7 @@ function initCollapsibleSideNav() {
     grabber.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopPropagation();
-        pinSideNav();
+        collapseSideNavNow();
     });
     nav.addEventListener('mousemove', function() {
         if (nav.classList.contains('expanded')) pinSideNav();
@@ -1075,7 +1165,11 @@ function populateCriteriaSelectFromCache() {
     sel.innerHTML = fields.map(function(f) {
         return '<option value="' + f.id + '">' + escapeHtml(f.displayName || f.id) + '</option>';
     }).join('');
-    var firstWith = fields.find(function(f) { return appState.criteriaByField[f.id] && appState.criteriaByField[f.id].length; });
+    var firstWith = fields.find(function(f) {
+        var byField = appState.criteriaByField || {};
+        return (byField[f.id] && byField[f.id].length) ||
+            Object.keys(byField).some(function(k) { return String(k) === String(f.id) && byField[k].length; });
+    });
     var fid = firstWith ? firstWith.id : (fields[0] ? fields[0].id : '');
     if (fid) {
         sel.value = fid;
@@ -1088,6 +1182,15 @@ function loadCriteriaUiForField(fieldId) {
     loadDeemedUiForField(fieldId);
     clearOutlierPanel();
     var saved = (appState.criteriaByField || {})[fieldId];
+    if (!saved || !saved.length) {
+        var keys = Object.keys(appState.criteriaByField || {});
+        for (var i = 0; i < keys.length; i++) {
+            if (String(keys[i]) === String(fieldId)) {
+                saved = appState.criteriaByField[keys[i]];
+                break;
+            }
+        }
+    }
     if (saved && saved.length) {
         appState.criteriaList = saved.map(function(r) { return { answer_text: r.answer_text, count: '—' }; });
         renderCriteriaTableFromSaved(saved);
@@ -1212,6 +1315,7 @@ async function applyDeemedScoringAndReaggregate() {
         await syncBatchTableFromSheet();
         await fetchOutlierGroups();
         setStatus('みなし採点: 採点結果シート ' + (res.updatedCount || 0) + ' セルを正答例「' + canonical + '」に更新、' + appState.criteriaList.length + ' 種類に再集約');
+        refreshCurrentTestInCache().catch(function() {});
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -1489,6 +1593,7 @@ async function applyReplacementsAndReaggregate() {
         var n = res.replacedCount != null ? res.replacedCount : '—';
         var colMsg = res.textColName ? '（列: ' + res.textColName + '）' : '';
         setStatus('採点結果シート' + colMsg + ' を更新: ' + n + ' セル、' + appState.criteriaList.length + ' 種類の解答に再集約');
+        refreshCurrentTestInCache().catch(function() {});
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -1653,6 +1758,7 @@ async function autoSaveFieldsForStep2() {
 
 async function saveCurrentStepProgress(stepNum) {
     if (!appState.test && stepNum > 0) { setStatus('先にテストを選択または作成してください', true); return; }
+    if (stepNum > 0) await ensureServerActiveTest();
     var payload = {};
     if (stepNum === 1) {
         var fields = RegionEditor.getRegions();
@@ -1683,6 +1789,7 @@ async function saveCurrentStepProgress(stepNum) {
         var res = await gasRun('saveStepProgress', stepNum, payload);
         markStepDone(stepNum);
         setStatus('Step ' + stepNum + ' まで保存しました（' + res.savedAt + '）');
+        refreshCurrentTestInCache().catch(function() {});
         await refreshRecentTestsDropdown();
         await refreshTestList();
     } catch (e) { setStatus(e.message || e, true); }
@@ -1698,7 +1805,9 @@ async function createNewTest() {
     if (!name) { setStatus('テスト名を入力してください', true); return; }
     try {
         var res = await gasRun('createTest', name, document.getElementById('test-subject').value, document.getElementById('test-datetime').value);
-        appState.test = res;
+        var snapshot = await gasRun('getTestRestoreSnapshot', res.testSsId);
+        TestSessionCache.set(res.testSsId, snapshot);
+        await restoreTestUi(snapshot);
         document.getElementById('active-test-label').textContent = '現在: ' + res.testName;
         setStatus('テスト「' + res.testName + '」を作成しました');
         markStepDone(0);
@@ -1715,9 +1824,22 @@ async function refreshTestList() {
 async function selectTest(testSsId, targetStep) {
     if (!testSsId) return;
     try {
+        await gasRun('setActiveTestIdOnly', testSsId);
+        var cached = TestSessionCache.get(testSsId);
+        if (cached) {
+            await restoreTestUi(cached);
+            document.getElementById('active-test-label').textContent = '現在: ' + (cached.info['テスト名'] || testSsId);
+            document.getElementById('recent-test-select').value = testSsId;
+            var stepCached = targetStep != null ? targetStep : (cached.currentStep || 0);
+            goToStep(stepCached, { skipAutoSave: true });
+            setStatus('作業を再開: ' + (cached.info['テスト名'] || testSsId) + '（Step ' + stepCached + '）');
+            refreshRecentTestsDropdown().catch(function() {});
+            return;
+        }
         setStatus('テストデータを読み込み中...');
-        var data = await gasRun('setActiveTest', testSsId);
+        var data = await gasRun('getTestRestoreSnapshot', testSsId);
         if (!data) throw new Error('テストデータの取得に失敗しました');
+        TestSessionCache.set(testSsId, data);
         await restoreTestUi(data);
         document.getElementById('active-test-label').textContent = '現在: ' + (data.info['テスト名'] || testSsId);
         document.getElementById('recent-test-select').value = testSsId;
@@ -1793,7 +1915,12 @@ async function saveAnswerFieldsToServer() {
     var fields = RegionEditor.getRegions();
     if (!fields.length) { setStatus('記述欄がありません', true); return; }
     try {
+        await ensureServerActiveTest();
         appState.fields = await gasRun('saveAnswerFields', fields);
+        patchCurrentTestSessionCache(function(cur) {
+            cur.fields = appState.fields;
+            return cur;
+        });
         setStatus('記述欄を保存しました（' + fields.length + '欄）');
         markStepDone(1);
     } catch (e) { setStatus(e.message || e, true); }
@@ -1819,7 +1946,12 @@ async function savePointsToServer() {
     var map = {};
     document.querySelectorAll('.point-input').forEach(function(el) { map[el.dataset.id] = el.value; });
     try {
+        await ensureServerActiveTest();
         await gasRun('savePoints', map);
+        patchCurrentTestSessionCache(function(cur) {
+            cur.points = map;
+            return cur;
+        });
         setStatus('配点を保存しました');
         markStepDone(2);
     } catch (e) { setStatus(e.message || e, true); }
@@ -1969,8 +2101,15 @@ async function saveCriteriaToServer() {
         return { answer_text: item.answer_text, judgment: jEl ? jEl.value : '×', score: sEl ? sEl.value : 0, reason: rEl ? rEl.value : '' };
     });
     try {
-        await gasRun('saveGradingCriteria', fid, rules);
-        setStatus('採点基準を保存しました');
+        var testSsId = await ensureServerActiveTest();
+        var saved = await gasRun('saveGradingCriteria', fid, rules, testSsId);
+        appState.criteriaByField[fid] = saved && saved.length ? saved : rules;
+        patchCurrentTestSessionCache(function(cur) {
+            if (!cur.criteriaByField) cur.criteriaByField = {};
+            cur.criteriaByField[fid] = appState.criteriaByField[fid];
+            return cur;
+        });
+        setStatus('採点基準を保存しました（' + rules.length + ' 件）');
         markStepDone(4);
     } catch (e) { setStatus(e.message || e, true); }
 }
@@ -1978,11 +2117,16 @@ async function saveCriteriaToServer() {
 async function runGrading() {
     setStatus('一括採点中...');
     try {
+        await ensureServerActiveTest();
         var res = await gasRun('executeGrading');
         var summary = await gasRun('getSummaryData');
         document.getElementById('summary-preview').innerHTML = summary.map(function(r) {
             return '<div class="py-0.5"><b>' + r.category + '</b> ' + r.item + ': ' + r.value + '</div>';
         }).join('');
+        patchCurrentTestSessionCache(function(cur) {
+            cur.summary = summary;
+            return cur;
+        });
         setStatus('採点完了: ' + res.gradedCount + '名（未登録パターン ' + res.unregisteredCount + '件）');
         markStepDone(5);
     } catch (e) { setStatus(e.message || e, true); }
@@ -2009,8 +2153,13 @@ async function saveDomainsToServer() {
         };
     });
     try {
+        await ensureServerActiveTest();
         await gasRun('saveDomainSettings', settings);
         await gasRun('calculateDomainScores');
+        patchCurrentTestSessionCache(function(cur) {
+            cur.domainSettings = appState.domainRows;
+            return cur;
+        });
         setStatus('領域設定を保存し得点を再計算しました');
         markStepDone(6);
     } catch (e) { setStatus(e.message || e, true); }
@@ -2110,6 +2259,8 @@ async function saveVerificationEdits() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    TestSessionCache.clear();
+    window.addEventListener('pagehide', clearTestSessionCacheOnExit);
     initStepNav();
     initCollapsibleSideNav();
     initCropInlineZoomControls();

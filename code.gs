@@ -276,6 +276,15 @@ function getAllTestSheetNames() {
   };
 }
 
+function ensureCriteriaSheet(ss) {
+  var sheet = ss.getSheetByName(SHEET_CRITERIA);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_CRITERIA);
+  }
+  initCriteriaSheet(sheet);
+  return sheet;
+}
+
 function ensureOcrReplacementsSheet(ss) {
   if (!ss.getSheetByName(SHEET_OCR_REPLACEMENTS)) {
     var sheet = ss.insertSheet(SHEET_OCR_REPLACEMENTS);
@@ -742,11 +751,32 @@ function syncHubTestList() {
   return discovered.length;
 }
 
-function setActiveTest(testSsId) {
+function setActiveTestIdOnly(testSsId) {
   if (!testSsId) throw new Error('テストIDが指定されていません。');
   SpreadsheetApp.openById(testSsId);
   PropertiesService.getScriptProperties().setProperty('ACTIVE_TEST_SS_ID', testSsId);
+  return true;
+}
+
+function setActiveTest(testSsId) {
+  setActiveTestIdOnly(testSsId);
   return serializeForClient_(getTestRestoreData(testSsId));
+}
+
+function getTestRestoreSnapshot(testSsId) {
+  if (!testSsId) throw new Error('テストIDが指定されていません。');
+  return serializeForClient_(getTestRestoreData(testSsId));
+}
+
+function getBatchTestRestoreSnapshots(testSsIds) {
+  var out = {};
+  (testSsIds || []).forEach(function(id) {
+    if (!id) return;
+    try {
+      out[id] = serializeForClient_(getTestRestoreData(id));
+    } catch (e) { /* skip inaccessible test */ }
+  });
+  return out;
 }
 
 function touchTestProgress_(ss, stepNum) {
@@ -818,8 +848,9 @@ function getCriteriaGroupedByField_(ss) {
   var rules = getGradingCriteria(ss);
   var grouped = {};
   rules.forEach(function(r) {
-    if (!grouped[r.fieldId]) grouped[r.fieldId] = [];
-    grouped[r.fieldId].push(r);
+    var key = String(r.fieldId);
+    if (!grouped[key]) grouped[key] = [];
+    grouped[key].push(r);
   });
   return grouped;
 }
@@ -893,6 +924,10 @@ function getBatchRestoreSnapshot_(ss) {
 function getTestRestoreData(testSsId) {
   var ss = testSsId ? SpreadsheetApp.openById(testSsId) : getActiveTestSs();
   ensureTestInfoKeys(ss);
+  ensureCriteriaSheet(ss);
+  ensureOcrReplacementsSheet(ss);
+  ensureDeemedScoringSheet(ss);
+  ensureDeemedDraftSheet(ss);
   var completed = inferCompletedSteps_(ss);
   var savedStep = parseInt(getTestInfoValue(ss, '現在ステップ'), 10) || 0;
   var resumeStep = savedStep > 0 ? savedStep : completed.maxStep;
@@ -1947,19 +1982,23 @@ function generateRubricWithGemini(fieldId, uniqueAnswersArray) {
   return JSON.parse(body.candidates[0].content.parts[0].text);
 }
 
-function saveGradingCriteria(fieldId, confirmedRules) {
-  var ss = getActiveTestSs();
-  var sheet = ss.getSheetByName(SHEET_CRITERIA);
+function saveGradingCriteria(fieldId, confirmedRules, testSsId) {
+  var ss = testSsId ? SpreadsheetApp.openById(testSsId) : getActiveTestSs();
+  if (testSsId) {
+    PropertiesService.getScriptProperties().setProperty('ACTIVE_TEST_SS_ID', testSsId);
+  }
+  var sheet = ensureCriteriaSheet(ss);
   var data = sheet.getDataRange().getValues();
+  var kept = [];
 
-  for (var i = data.length - 1; i >= 1; i--) {
-    if (String(data[i][0]) === String(fieldId)) {
-      sheet.deleteRow(i + 1);
+  for (var i = 1; i < data.length; i++) {
+    if (String(data[i][0]) !== String(fieldId)) {
+      kept.push(data[i]);
     }
   }
 
-  confirmedRules.forEach(function(rule) {
-    sheet.appendRow([
+  (confirmedRules || []).forEach(function(rule) {
+    kept.push([
       fieldId,
       rule.answer_text,
       rule.judgment || '×',
@@ -1967,13 +2006,20 @@ function saveGradingCriteria(fieldId, confirmedRules) {
       rule.reason || ''
     ]);
   });
+
+  sheet.clear();
+  sheet.appendRow(['記述欄ID', '解答パターン', '判定', '付与得点', '備考']);
+  if (kept.length) {
+    sheet.getRange(2, 1, kept.length, 5).setValues(kept);
+  }
+  SpreadsheetApp.flush();
   touchTestProgress_(ss, 4);
-  return true;
+  return getCriteriaGroupedByField_(ss)[String(fieldId)] || [];
 }
 
 function getGradingCriteria(ss) {
   ss = ss || getActiveTestSs();
-  var sheet = ss.getSheetByName(SHEET_CRITERIA);
+  var sheet = ensureCriteriaSheet(ss);
   var data = sheet.getDataRange().getValues();
   var rules = [];
   for (var i = 1; i < data.length; i++) {
