@@ -1360,40 +1360,21 @@ function getOrCreateProcessedFolder_(studentFolder) {
 }
 
 function archiveOriginalFile(fileId, studentFolderId) {
-  if (!fileId || !studentFolderId) return { moved: false };
-  try {
-    var file = DriveApp.getFileById(fileId);
-    var studentFolder = DriveApp.getFolderById(studentFolderId);
-    var archiveFolder = getOrCreateOriginalArchiveFolder(studentFolder);
-    var processedFolder = getOrCreateProcessedFolder_(studentFolder);
-    var parents = file.getParents();
-    while (parents.hasNext()) {
-      var parent = parents.next();
-      if (parent.getId() === processedFolder.getId()) {
-        return { moved: false, alreadyProcessed: true };
-      }
-      if (parent.getId() === studentFolder.getId()) {
-        file.moveTo(archiveFolder);
-        return { moved: true, archiveFolderId: archiveFolder.getId() };
-      }
-    }
-  } catch (e) { /* ignore */ }
-  return { moved: false };
+  return moveSourceFileToOriginalArchive_(fileId, '', studentFolderId);
 }
 
-/** OCR成功・シート反映後、元画像を「処理済み」サブフォルダへ移動（直下・元画像/ から） */
-function moveSourceFileToProcessed_(fileId, fileName, studentFolderId) {
+/** 採点結果シートへの追記成功後のみ、フォルダ直下の元ファイルを「元画像/」へ退避 */
+function moveSourceFileToOriginalArchive_(fileId, fileName, studentFolderId) {
   if (!studentFolderId) return { moved: false };
   try {
     var studentFolder = DriveApp.getFolderById(studentFolderId);
     var archiveFolder = getOrCreateOriginalArchiveFolder(studentFolder);
-    var processedFolder = getOrCreateProcessedFolder_(studentFolder);
     var file = null;
     if (fileId) {
       try { file = DriveApp.getFileById(fileId); } catch (e) { /* stale id */ }
     }
     if (!file && fileName) {
-      var found = findSourceFileByName_(studentFolderId, fileName);
+      var found = findSourceFileInInbox_(studentFolderId, fileName);
       if (found) {
         try { file = DriveApp.getFileById(found.id); } catch (e) { /* ignore */ }
       }
@@ -1403,17 +1384,12 @@ function moveSourceFileToProcessed_(fileId, fileName, studentFolderId) {
     var parents = file.getParents();
     while (parents.hasNext()) {
       var parent = parents.next();
-      if (parent.getId() === processedFolder.getId()) {
-        return { moved: false, alreadyProcessed: true };
+      if (parent.getId() === archiveFolder.getId()) {
+        return { moved: false, alreadyArchived: true };
       }
-    }
-
-    parents = file.getParents();
-    while (parents.hasNext()) {
-      var p = parents.next();
-      if (p.getId() === studentFolder.getId() || p.getId() === archiveFolder.getId()) {
-        file.moveTo(processedFolder);
-        return { moved: true, processedFolderId: processedFolder.getId() };
+      if (parent.getId() === studentFolder.getId()) {
+        file.moveTo(archiveFolder);
+        return { moved: true, archiveFolderId: archiveFolder.getId() };
       }
     }
   } catch (e) {
@@ -1422,11 +1398,25 @@ function moveSourceFileToProcessed_(fileId, fileName, studentFolderId) {
   return { moved: false, reason: 'wrong_parent' };
 }
 
-function moveResultRowsToProcessed_(rows, studentFolderId) {
+function findSourceFileInInbox_(studentFolderId, fileName) {
+  if (!studentFolderId || !fileName) return null;
+  var target = normalizeResultFileName_(fileName);
+  var folder = DriveApp.getFolderById(studentFolderId);
+  var direct = folder.getFiles();
+  while (direct.hasNext()) {
+    var f = direct.next();
+    if (normalizeResultFileName_(f.getName()) === target) {
+      return { id: f.getId(), name: f.getName(), inArchive: false };
+    }
+  }
+  return null;
+}
+
+function moveResultRowsToOriginalArchive_(rows, studentFolderId) {
   if (!rows || !rows.length || !studentFolderId) return 0;
   var moved = 0;
   rows.forEach(function(r) {
-    var res = moveSourceFileToProcessed_(r.fileId, r.fileName, studentFolderId);
+    var res = moveSourceFileToOriginalArchive_(r.fileId, r.fileName, studentFolderId);
     if (res.moved) moved++;
   });
   return moved;
@@ -1601,17 +1591,13 @@ function buildOcrWorkQueue_(ss) {
     }
   }
 
-  // フォルダ直下 = 未処理（補正前）。サブフォルダ（元画像/・処理済み/）は listFolderFiles 対象外。
+  // フォルダ直下 = 未処理・OCR/反映待ち。元画像/ = シート追記済みの退避先。
   if (folderId) {
     try {
       listFolderFiles(folderId).forEach(function(f) {
         ensureItem(Object.assign({}, f, { inArchive: false, location: 'inbox' }));
       });
     } catch (e) { /* folder inaccessible */ }
-    // 元画像/ = 補正済み・OCR未完了（OCR再試行用）
-    listArchivedSourceFiles_(folderId).forEach(function(f) {
-      ensureItem(Object.assign({}, f, { location: 'warp_pending' }));
-    });
   }
 
   try {
@@ -1873,10 +1859,6 @@ function saveWarpedOnly(fileMeta, studentId, warpedBase64) {
     var sourceFileName = fileMeta.name || fileMeta.fileName || '';
     if (!warpedBase64) throw new Error('補正画像データがありません。');
     var saved = saveWarpedImage(warpedBase64, sourceFileName, studentId, sourceFileId);
-    if (!saved.reused && sourceFileId) {
-      var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
-      archiveOriginalFile(sourceFileId, folderId);
-    }
     return {
       success: true,
       warpedFileId: saved.fileId,
@@ -1911,10 +1893,6 @@ function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops, options)
       saved = { fileId: existingId, reused: true };
     } else {
       saved = saveWarpedImage(warpedBase64, sourceFileName, studentId, sourceFileId);
-      if (!saved.reused) {
-        var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
-        archiveOriginalFile(sourceFileId, folderId);
-      }
     }
     var ocrImage = warpedBase64;
     var hasPayload = ocrImage && String(ocrImage).indexOf('base64,') >= 0 && String(ocrImage).split(',')[1];
@@ -2030,12 +2008,14 @@ function flushResultRows(rows) {
   var writtenRows = [];
   var writtenFileNames = [];
   var skippedFileNames = [];
+  var skippedRows = [];
 
   rows.forEach(function(r, idx) {
     try {
       if (isPendingRowAlreadyInSheet_(ss, r)) {
         skipped++;
         if (r.fileName) skippedFileNames.push(String(r.fileName));
+        skippedRows.push(r);
         return;
       }
       var rowArr = padResultRow_(buildResultRowArray(headers, map, fields, {
@@ -2062,12 +2042,13 @@ function flushResultRows(rows) {
     touchTestProgress_(ss, 3);
   }
   var studentFolderId = getTestInfoValue(ss, '生徒解答フォルダID');
-  var movedToProcessed = moveResultRowsToProcessed_(writtenRows, studentFolderId);
+  var rowsToArchive = writtenRows.concat(skippedRows);
+  var movedToArchive = moveResultRowsToOriginalArchive_(rowsToArchive, studentFolderId);
   return {
     written: written,
     skipped: skipped,
     errors: errors,
-    movedToProcessed: movedToProcessed,
+    movedToArchive: movedToArchive,
     writtenFileNames: writtenFileNames,
     skippedFileNames: skippedFileNames
   };
@@ -2092,7 +2073,7 @@ function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists, fi
     }, ocrResult.studentId, ocrResult.textMapping);
 
     var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
-    moveSourceFileToProcessed_(ocrResult.fileId, ocrResult.fileName, folderId);
+    moveSourceFileToOriginalArchive_(ocrResult.fileId, ocrResult.fileName, folderId);
 
     return {
       success: true,

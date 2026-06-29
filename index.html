@@ -208,7 +208,7 @@
         <div class="loader mx-auto mb-4" style="width:28px;height:28px;border-width:4px;"></div>
         <p id="load-countdown-msg" class="text-gray-700 font-medium mb-2">読み込み中...</p>
         <p class="text-sm text-gray-500 mb-1">残り</p>
-        <p id="load-countdown-sec" class="mb-2">40</p>
+        <p id="load-countdown-sec" class="mb-2">60</p>
         <p class="text-xs text-gray-400">秒</p>
     </div>
 </div>
@@ -294,7 +294,7 @@
                 <button type="button" onclick="BatchProcessor.pause()" class="bg-orange-200 px-3 py-2 rounded">一時停止</button>
             </div>
             <p id="batch-ocr-lang-hint" class="text-xs text-gray-500"></p>
-            <p class="text-xs text-gray-600">フォルダ直下＝未処理。成功後は「処理済み」へ、補正のみ完了は「元画像」へ自動移動（サブフォルダは一覧対象外）。</p>
+            <p class="text-xs text-gray-600">フォルダ直下＝未処理・反映待ち。採点結果シートへ追記できたものだけ「元画像/」へ退避（サブフォルダは一覧対象外）。</p>
             <div class="text-xs"><span id="batch-progress">待機中</span> <span id="batch-elapsed" class="text-gray-400"></span></div>
             <div class="w-full bg-gray-200 rounded h-2"><div id="batch-bar" class="bg-blue-600 h-2 rounded transition-all" style="width:0%"></div></div>
             <p id="batch-file-count" class="text-xs text-gray-500"></p>
@@ -311,6 +311,10 @@
             </div>
             <div class="overflow-auto max-h-80 border rounded">
                 <table class="w-full text-xs"><thead id="batch-results-thead" class="bg-gray-100 sticky top-0"></thead><tbody id="batch-results-tbody"></tbody></table>
+            </div>
+            <div id="batch-manual-warp-panel" class="hidden border rounded p-2 bg-sky-50 text-xs space-y-2">
+                <div class="font-bold text-sky-900">補正に失敗したファイル — 手動で枠・傾きを調整</div>
+                <ul id="batch-manual-warp-list" class="space-y-1"></ul>
             </div>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(3); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
@@ -522,6 +526,38 @@
     </div>
 </div>
 
+<div id="manual-warp-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-2" style="background:rgba(0,0,0,0.55)" role="dialog" aria-modal="true">
+    <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[96vh] overflow-auto p-4 space-y-3">
+        <div class="flex items-start justify-between gap-2">
+            <h3 id="manual-warp-title" class="font-bold text-sm">手動補正</h3>
+            <button type="button" onclick="ManualWarpEditor.close()" class="text-gray-500 hover:text-gray-800 text-lg leading-none px-2" title="閉じる">×</button>
+        </div>
+        <p id="manual-warp-status" class="text-xs text-gray-600">—</p>
+        <div class="flex flex-wrap gap-4 items-start">
+            <div class="space-y-2 shrink-0">
+                <p class="text-xs font-semibold">原画像（四隅ドラッグ・枠線調整）</p>
+                <canvas id="manual-warp-source" class="border rounded bg-gray-100 cursor-crosshair max-w-full"></canvas>
+                <div class="flex flex-wrap gap-3 text-xs items-center">
+                    <label>二値化閾値 <span id="manual-warp-thresh-val">128</span>
+                        <input type="range" id="manual-warp-thresh" min="50" max="200" value="128" class="align-middle ml-1 w-24"></label>
+                    <label>傾き(°) <span id="manual-warp-rotate-val">0</span>
+                        <input type="range" id="manual-warp-rotate" min="-12" max="12" step="0.5" value="0" class="align-middle ml-1 w-24"></label>
+                </div>
+            </div>
+            <div class="space-y-2 shrink-0">
+                <p class="text-xs font-semibold">補正プレビュー</p>
+                <canvas id="manual-warp-preview" class="border rounded bg-gray-50 max-w-full"></canvas>
+            </div>
+        </div>
+        <div class="flex flex-wrap gap-2 text-xs">
+            <button type="button" onclick="ManualWarpEditor.autoDetect()" class="bg-gray-200 px-3 py-1 rounded">自動枠検出</button>
+            <button type="button" onclick="ManualWarpEditor.resetCorners()" class="bg-gray-200 px-3 py-1 rounded">四隅リセット</button>
+            <button type="button" onclick="ManualWarpEditor.updatePreview()" class="bg-gray-200 px-3 py-1 rounded">プレビュー更新</button>
+            <button type="button" id="manual-warp-save-btn" data-busy-label="処理中..." onclick="withBusyButton(event.currentTarget, function(){ return ManualWarpEditor.saveAndOcr(); })" class="bg-blue-600 text-white px-4 py-1 rounded font-bold ml-auto">保存してOCR再実行</button>
+        </div>
+    </div>
+</div>
+
 <img id="hidden-source-img" style="display:none">
 
 <script>
@@ -533,33 +569,99 @@ function getPaperConfig(orientation) {
     warpW: (isPortrait ? 51 : 73) * CELL_PX, warpH: (isPortrait ? 73 : 51) * CELL_PX,
     idStartCol: isPortrait ? 42 : 64, idStartRow: 3 };
 }
-function warpImageFromElement(imgElement, orientation, threshVal) {
-  var cfg = getPaperConfig(orientation); threshVal = threshVal != null ? threshVal : 128;
+function detectPaperCorners(imgElement, threshVal) {
+  threshVal = threshVal != null ? threshVal : 128;
   var src = cv.imread(imgElement), gray = new cv.Mat(), thresh = new cv.Mat();
   var contours = new cv.MatVector(), hierarchy = new cv.Mat();
   cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
   cv.threshold(gray, thresh, threshVal, 255, cv.THRESH_BINARY_INV);
   cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
   var maxArea = 0, maxContour = null;
-  for (var i = 0; i < contours.size(); ++i) { var cnt = contours.get(i), area = cv.contourArea(cnt);
-    if (area > maxArea) { maxArea = area; maxContour = cnt; } }
-  if (!maxContour) { src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
-    throw new Error('用紙外周の黒い太枠線を検知できません。'); }
+  for (var i = 0; i < contours.size(); ++i) {
+    var cnt = contours.get(i), area = cv.contourArea(cnt);
+    if (area > maxArea) { maxArea = area; maxContour = cnt; }
+  }
+  if (!maxContour) {
+    src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+    throw new Error('用紙外周の黒い太枠線を検知できません。');
+  }
   var approx = new cv.Mat();
   cv.approxPolyDP(maxContour, approx, 0.02 * cv.arcLength(maxContour, true), true);
-  if (approx.rows !== 4) { src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); approx.delete();
-    throw new Error('四角形外枠の検出に失敗しました。'); }
-  var pts = []; for (var j = 0; j < 4; j++) pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+  if (approx.rows !== 4) {
+    src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); approx.delete();
+    throw new Error('四角形外枠の検出に失敗しました。');
+  }
+  var pts = [];
+  for (var j = 0; j < 4; j++) pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
   pts.sort(function(a, b) { return a.y - b.y; });
   var topPts = pts.slice(0, 2).sort(function(a, b) { return a.x - b.x; });
   var botPts = pts.slice(2, 4).sort(function(a, b) { return b.x - a.x; });
-  var srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [topPts[0].x, topPts[0].y, topPts[1].x, topPts[1].y, botPts[0].x, botPts[0].y, botPts[1].x, botPts[1].y]);
+  src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); approx.delete();
+  return { tl: topPts[0], tr: topPts[1], br: botPts[0], bl: botPts[1] };
+}
+
+function defaultPaperCorners(imgW, imgH) {
+  var mX = Math.max(8, imgW * 0.03);
+  var mY = Math.max(8, imgH * 0.03);
+  return {
+    tl: { x: mX, y: mY },
+    tr: { x: imgW - mX, y: mY },
+    br: { x: imgW - mX, y: imgH - mY },
+    bl: { x: mX, y: imgH - mY }
+  };
+}
+
+function cloneCorners(c) {
+  return {
+    tl: { x: c.tl.x, y: c.tl.y },
+    tr: { x: c.tr.x, y: c.tr.y },
+    br: { x: c.br.x, y: c.br.y },
+    bl: { x: c.bl.x, y: c.bl.y }
+  };
+}
+
+function rotateCornersAroundCenter(corners, imgW, imgH, deg) {
+  if (!deg || Math.abs(deg) < 0.01) return cloneCorners(corners);
+  var rad = deg * Math.PI / 180;
+  var cx = imgW / 2, cy = imgH / 2;
+  function rot(p) {
+    var dx = p.x - cx, dy = p.y - cy;
+    return {
+      x: cx + dx * Math.cos(rad) - dy * Math.sin(rad),
+      y: cy + dx * Math.sin(rad) + dy * Math.cos(rad)
+    };
+  }
+  return { tl: rot(corners.tl), tr: rot(corners.tr), br: rot(corners.br), bl: rot(corners.bl) };
+}
+
+function warpMatFromCorners(cvSrc, corners, cfg) {
+  var srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [
+    corners.tl.x, corners.tl.y, corners.tr.x, corners.tr.y,
+    corners.br.x, corners.br.y, corners.bl.x, corners.bl.y
+  ]);
   var dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, cfg.warpW, 0, cfg.warpW, cfg.warpH, 0, cfg.warpH]);
-  var M = cv.getPerspectiveTransform(srcTri, dstTri), warpedColor = new cv.Mat();
-  cv.warpPerspective(src, warpedColor, M, new cv.Size(cfg.warpW, cfg.warpH));
-  src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
-  approx.delete(); srcTri.delete(); dstTri.delete(); M.delete();
-  return { warpedMat: warpedColor, cfg: cfg };
+  var M = cv.getPerspectiveTransform(srcTri, dstTri);
+  var warpedColor = new cv.Mat();
+  cv.warpPerspective(cvSrc, warpedColor, M, new cv.Size(cfg.warpW, cfg.warpH));
+  srcTri.delete(); dstTri.delete(); M.delete();
+  return warpedColor;
+}
+
+function warpImageFromCorners(imgElement, corners, orientation) {
+  var cfg = getPaperConfig(orientation);
+  var src = cv.imread(imgElement);
+  var warpedMat = warpMatFromCorners(src, corners, cfg);
+  src.delete();
+  return { warpedMat: warpedMat, cfg: cfg };
+}
+
+function warpImageFromElement(imgElement, orientation, threshVal) {
+  var corners = detectPaperCorners(imgElement, threshVal);
+  var cfg = getPaperConfig(orientation);
+  var src = cv.imread(imgElement);
+  var warpedMat = warpMatFromCorners(src, corners, cfg);
+  src.delete();
+  return { warpedMat: warpedMat, cfg: cfg };
 }
 function matToBase64Jpeg(warpedMat, quality) {
   quality = quality || 0.85; var canvas = document.createElement('canvas');
@@ -680,6 +782,257 @@ async function driveFileToImageElement(fileData) {
     var img = new Image(); img.onload = function() { resolve(img); }; img.onerror = reject; img.src = dataUrl;
   });
 }
+
+var ManualWarpEditor = (function() {
+  var sourceCanvas, previewCanvas, sctx, img, fileMeta, baseCorners, corners, rotationDeg = 0;
+  var threshVal = 128, orientation = 'landscape', scale = 1, dragHandle = null;
+  var previewMat = null, previewBase64 = null, HANDLE_R = 10;
+  var CORNER_KEYS = ['tl', 'tr', 'br', 'bl'];
+  var CORNER_COLORS = { tl: '#ef4444', tr: '#22c55e', br: '#3b82f6', bl: '#eab308' };
+
+  function getOrientation() {
+    var el = document.getElementById('orientation-1');
+    return el ? el.value : orientation;
+  }
+
+  function getEffectiveCorners() {
+    if (!baseCorners || !img) return null;
+    return rotateCornersAroundCenter(baseCorners, img.width, img.height, rotationDeg);
+  }
+
+  function imageToCanvas(p) {
+    return { x: p.x * scale, y: p.y * scale };
+  }
+
+  function canvasToImage(p) {
+    return { x: p.x / scale, y: p.y / scale };
+  }
+
+  function drawSource() {
+    if (!sctx || !img) return;
+    sourceCanvas.width = Math.round(img.width * scale);
+    sourceCanvas.height = Math.round(img.height * scale);
+    sctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
+    sctx.drawImage(img, 0, 0, sourceCanvas.width, sourceCanvas.height);
+    var c = getEffectiveCorners();
+    if (!c) return;
+    sctx.lineWidth = 2;
+    sctx.strokeStyle = '#06b6d4';
+    sctx.beginPath();
+    CORNER_KEYS.forEach(function(k, i) {
+      var p = imageToCanvas(c[k]);
+      if (i === 0) sctx.moveTo(p.x, p.y); else sctx.lineTo(p.x, p.y);
+    });
+    sctx.closePath();
+    sctx.stroke();
+    CORNER_KEYS.forEach(function(k) {
+      var p = imageToCanvas(c[k]);
+      sctx.beginPath();
+      sctx.fillStyle = CORNER_COLORS[k];
+      sctx.arc(p.x, p.y, HANDLE_R, 0, Math.PI * 2);
+      sctx.fill();
+      sctx.strokeStyle = '#fff';
+      sctx.lineWidth = 2;
+      sctx.stroke();
+    });
+  }
+
+  function hitHandle(mx, my) {
+    var c = getEffectiveCorners();
+    if (!c) return null;
+    for (var i = 0; i < CORNER_KEYS.length; i++) {
+      var k = CORNER_KEYS[i];
+      var p = imageToCanvas(c[k]);
+      if (Math.hypot(mx - p.x, my - p.y) <= HANDLE_R + 4) return k;
+    }
+    return null;
+  }
+
+  function updatePreview() {
+    if (!opencvReady || !img) return;
+    var c = getEffectiveCorners();
+    if (!c) return;
+    try {
+      if (previewMat) { previewMat.delete(); previewMat = null; }
+      var result = warpImageFromCorners(img, c, getOrientation());
+      previewMat = result.warpedMat;
+      previewCanvas.width = previewMat.cols;
+      previewCanvas.height = previewMat.rows;
+      cv.imshow(previewCanvas, previewMat);
+      previewBase64 = matToBase64Jpeg(previewMat);
+    } catch (e) {
+      previewBase64 = null;
+    }
+  }
+
+  function onMouseDown(e) {
+    var rect = sourceCanvas.getBoundingClientRect();
+    var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    dragHandle = hitHandle(mx, my);
+    if (dragHandle) sourceCanvas.style.cursor = 'grabbing';
+  }
+
+  function onMouseMove(e) {
+    var rect = sourceCanvas.getBoundingClientRect();
+    var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (dragHandle) {
+      var ip = canvasToImage({ x: mx, y: my });
+      ip.x = Math.max(0, Math.min(img.width, ip.x));
+      ip.y = Math.max(0, Math.min(img.height, ip.y));
+      if (Math.abs(rotationDeg) < 0.01) {
+        baseCorners[dragHandle] = ip;
+      } else {
+        baseCorners = getEffectiveCorners();
+        rotationDeg = 0;
+        document.getElementById('manual-warp-rotate').value = '0';
+        document.getElementById('manual-warp-rotate-val').textContent = '0';
+        baseCorners[dragHandle] = ip;
+      }
+      drawSource();
+      updatePreview();
+      return;
+    }
+    sourceCanvas.style.cursor = hitHandle(mx, my) ? 'grab' : 'crosshair';
+  }
+
+  function onMouseUp() {
+    dragHandle = null;
+    sourceCanvas.style.cursor = 'crosshair';
+  }
+
+  function setScaleForImage() {
+    var maxW = Math.min(720, (window.innerWidth || 800) * 0.45);
+    var maxH = 520;
+    scale = Math.min(maxW / img.width, maxH / img.height, 1);
+  }
+
+  async function open(file) {
+    if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
+    if (!file || !file.id) { setStatus('ファイルIDがありません', true); return; }
+    fileMeta = file;
+    orientation = getOrientation();
+    threshVal = parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10);
+    rotationDeg = 0;
+    document.getElementById('manual-warp-modal').classList.remove('hidden');
+    document.getElementById('manual-warp-title').textContent = '手動補正: ' + (file.name || '');
+    document.getElementById('manual-warp-status').textContent = '画像読込中...';
+    try {
+      var fileData = await gasRun('getDriveFileBase64', file.id);
+      img = await driveFileToImageElement(fileData);
+      setScaleForImage();
+      try {
+        baseCorners = detectPaperCorners(img, threshVal);
+      } catch (e) {
+        baseCorners = defaultPaperCorners(img.width, img.height);
+      }
+      corners = cloneCorners(baseCorners);
+      document.getElementById('manual-warp-thresh').value = String(threshVal);
+      document.getElementById('manual-warp-thresh-val').textContent = String(threshVal);
+      document.getElementById('manual-warp-rotate').value = '0';
+      document.getElementById('manual-warp-rotate-val').textContent = '0';
+      drawSource();
+      updatePreview();
+      document.getElementById('manual-warp-status').textContent = '四隅をドラッグして枠を合わせてください（赤=左上 緑=右上 青=右下 黄=左下）';
+    } catch (err) {
+      document.getElementById('manual-warp-status').textContent = '読込失敗: ' + (err.message || err);
+      setStatus(err.message || err, true);
+    }
+  }
+
+  function close() {
+    document.getElementById('manual-warp-modal').classList.add('hidden');
+    if (previewMat) { previewMat.delete(); previewMat = null; }
+    img = null; fileMeta = null; previewBase64 = null; dragHandle = null;
+  }
+
+  function autoDetect() {
+    if (!img) return;
+    threshVal = parseInt(document.getElementById('manual-warp-thresh').value, 10);
+    try {
+      baseCorners = detectPaperCorners(img, threshVal);
+      rotationDeg = 0;
+      document.getElementById('manual-warp-rotate').value = '0';
+      document.getElementById('manual-warp-rotate-val').textContent = '0';
+      drawSource();
+      updatePreview();
+      document.getElementById('manual-warp-status').textContent = '自動検出しました。必要なら四隅を微調整してください。';
+    } catch (e) {
+      document.getElementById('manual-warp-status').textContent = '自動検出失敗: ' + e.message + ' — 四隅を手動で合わせてください。';
+    }
+  }
+
+  function resetCorners() {
+    if (!img) return;
+    baseCorners = defaultPaperCorners(img.width, img.height);
+    rotationDeg = 0;
+    document.getElementById('manual-warp-rotate').value = '0';
+    document.getElementById('manual-warp-rotate-val').textContent = '0';
+    drawSource();
+    updatePreview();
+  }
+
+  function onRotateChange() {
+    rotationDeg = parseFloat(document.getElementById('manual-warp-rotate').value) || 0;
+    document.getElementById('manual-warp-rotate-val').textContent = String(rotationDeg);
+    drawSource();
+    updatePreview();
+  }
+
+  function onThreshChange() {
+    threshVal = parseInt(document.getElementById('manual-warp-thresh').value, 10);
+    document.getElementById('manual-warp-thresh-val').textContent = String(threshVal);
+  }
+
+  async function saveAndOcr() {
+    if (!fileMeta || !previewBase64) {
+      setStatus('補正プレビューがありません。四隅を調整してください。', true);
+      return;
+    }
+    var btn = document.getElementById('manual-warp-save-btn');
+    if (btn) btn.disabled = true;
+    document.getElementById('manual-warp-status').textContent = '保存・OCR実行中...';
+    try {
+      var cfg = getPaperConfig(getOrientation());
+      var studentId = '';
+      if (previewMat) {
+        studentId = detectOmrId(previewMat, cfg, 0.35);
+      }
+      var saveRes = await gasRun('saveWarpedOnly', fileMeta, studentId, previewBase64);
+      if (!saveRes.success) throw new Error(saveRes.error || '補正画像の保存に失敗');
+      await runOcrAfterManualWarp(fileMeta, previewBase64, studentId, saveRes.warpedFileId);
+      close();
+    } catch (e) {
+      document.getElementById('manual-warp-status').textContent = '失敗: ' + (e.message || e);
+      setStatus(e.message || e, true);
+    } finally {
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  function init() {
+    sourceCanvas = document.getElementById('manual-warp-source');
+    previewCanvas = document.getElementById('manual-warp-preview');
+    if (!sourceCanvas || !previewCanvas) return;
+    sctx = sourceCanvas.getContext('2d');
+    sourceCanvas.addEventListener('mousedown', onMouseDown);
+    sourceCanvas.addEventListener('mousemove', onMouseMove);
+    sourceCanvas.addEventListener('mouseup', onMouseUp);
+    sourceCanvas.addEventListener('mouseleave', onMouseUp);
+    document.getElementById('manual-warp-thresh').addEventListener('input', onThreshChange);
+    document.getElementById('manual-warp-rotate').addEventListener('input', onRotateChange);
+  }
+
+  return {
+    init: init,
+    open: open,
+    close: close,
+    autoDetect: autoDetect,
+    resetCorners: resetCorners,
+    saveAndOcr: saveAndOcr,
+    updatePreview: updatePreview
+  };
+})();
+
 var RegionEditor = (function() {
   var canvas, ctx, image, regions, selectedIdx, mode, dragState, onChange, HANDLE = 8;
   var IDENTITY_TYPES = ['学年', '組', '番号', 'ID', '氏名'];
@@ -1356,8 +1709,14 @@ var BatchProcessor = (function() {
     isFileInFailedSet: isFileInFailedSet,
     getFailedCount: getFailedCount,
     getFailStepLabel: getFailStepLabel,
+    clearFailedForFile: clearFailedFile,
     clearFailedFileIds: clearFailedFileIds,
-    reloadFailedFromStorage: loadFailedFromStorage
+    reloadFailedFromStorage: loadFailedFromStorage,
+    enqueuePendingRow: function(row) {
+      if (!row) return;
+      pendingRows.push(row);
+      savePendingToStorage();
+    }
   };
 })();
 function loadImageElementFromBase64(base64) {
@@ -1647,8 +2006,8 @@ function updateBatchWorkQueueHint(stats) {
     if (!stats) { el.textContent = ''; return; }
     var inbox = stats.inInbox != null ? stats.inInbox : stats.warpAndOcr;
     el.textContent =
-        '未処理 ' + stats.pending + ' 件（フォルダ直下 ' + inbox + ' / 元画像でOCR待ち ' + stats.ocrOnly + '）' +
-        '・シート登録済 ' + stats.inSheet + ' 件（成功分は「処理済み」フォルダへ）';
+        '未処理 ' + stats.pending + ' 件（フォルダ直下 ' + inbox + ' / 補正済みOCR待ち ' + stats.ocrOnly + '）' +
+        '・シート登録済 ' + stats.inSheet + ' 件（追記成功分は「元画像/」へ）';
 }
 
 function initBatchResultsTable(files) {
@@ -1657,18 +2016,19 @@ function initBatchResultsTable(files) {
     fields.forEach(function(f) {
         head += '<th class="p-1 border">' + escapeHtml(f.displayName || f.id) + '</th>';
     });
-    head += '<th class="p-1 border">SS</th></tr>';
+    head += '<th class="p-1 border">SS</th><th class="p-1 border">操作</th></tr>';
     document.getElementById('batch-results-thead').innerHTML = head;
 
     var tbody = document.getElementById('batch-results-tbody');
     tbody.innerHTML = files.map(function(f) {
         var cells = fields.map(function() { return '<td class="p-1 border text-gray-400">—</td>'; }).join('');
-        var stageHint = f.stage === 'ocr_only' ? ' <span class="text-indigo-600">(補正済)</span>' : (f.inArchive ? ' <span class="text-gray-500">(元画像)</span>' : '');
+        var stageHint = f.stage === 'ocr_only' ? ' <span class="text-indigo-600">(補正済)</span>' : '';
         return '<tr id="' + batchRowDomId(f) + '" class="bg-gray-50"><td class="p-1 border batch-status">待機</td>' +
             '<td class="p-1 border batch-fail-detail text-gray-400">—</td>' +
             '<td class="p-1 border truncate max-w-[140px]" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + stageHint + '</td>' +
             '<td class="p-1 border batch-student-id">—</td>' + cells +
-            '<td class="p-1 border batch-sheet-status text-gray-400">—</td></tr>';
+            '<td class="p-1 border batch-sheet-status text-gray-400">—</td>' +
+            '<td class="p-1 border batch-action text-gray-400">—</td></tr>';
     }).join('');
 }
 
@@ -1681,6 +2041,19 @@ function updateBatchResultRow(ev) {
     var failCell = row.querySelector('.batch-fail-detail');
     var idCell = row.querySelector('.batch-student-id');
     var sheetCell = row.querySelector('.batch-sheet-status');
+    var actionCell = row.querySelector('.batch-action');
+
+    function setManualWarpAction(show) {
+        if (!actionCell) return;
+        if (!show || !ev.file || !ev.file.id) {
+            actionCell.textContent = '—';
+            actionCell.className = 'p-1 border batch-action text-gray-400';
+            return;
+        }
+        actionCell.innerHTML = '<button type="button" class="text-blue-700 underline whitespace-nowrap manual-warp-row-btn">手動補正</button>';
+        var btn = actionCell.querySelector('.manual-warp-row-btn');
+        if (btn) btn.onclick = function() { openManualWarpForFile(ev.file.id); };
+    }
 
     function setFailDetail(stepKey, errorMsg) {
         if (!failCell) return;
@@ -1702,19 +2075,24 @@ function updateBatchResultRow(ev) {
         var procLabel = ev.processStep ? BatchProcessor.getFailStepLabel(ev.processStep) : '処理中';
         if (statusCell) statusCell.innerHTML = '<span class="text-blue-600"><i class="fa-solid fa-spinner fa-spin"></i> ' + escapeHtml(procLabel) + '</span>';
         setFailDetail(null, null);
+        setManualWarpAction(false);
     } else if (ev.status === 'skipped') {
         row.className = 'bg-gray-100';
         if (statusCell) statusCell.textContent = 'スキップ';
         setFailDetail(null, null);
+        setManualWarpAction(false);
         if (sheetCell) sheetCell.textContent = '済';
     } else if (ev.status === 'failed') {
         row.className = 'bg-red-50';
         if (statusCell) statusCell.innerHTML = '<span class="text-red-600 font-semibold">失敗</span>';
         setFailDetail(ev.failStep || ev.failStage, ev.error || '');
         if (sheetCell) sheetCell.textContent = '—';
+        var warpSteps = ['detect_warp', 'save_warp', 'load_src', 'load_warped'];
+        setManualWarpAction(warpSteps.indexOf(ev.failStep) >= 0 || ev.failStage === 'warp');
     } else if (ev.status === 'done' && ev.result) {
         row.className = 'bg-green-50';
         if (statusCell) statusCell.textContent = '完了';
+        setManualWarpAction(false);
         if (ev.flushError) {
             setFailDetail(ev.failStep || 'flush', ev.error || 'シートへの反映に失敗');
         } else {
@@ -1735,6 +2113,155 @@ function updateBatchResultRow(ev) {
         }
     }
     updateBatchFlushStatus();
+    updateBatchManualWarpPanel();
+}
+
+function findBatchFileById(fileId) {
+    var id = String(fileId || '');
+    var found = (appState.batchFiles || []).find(function(f) { return String(f.id) === id; });
+    if (found) return found;
+    BatchProcessor.reloadFailedFromStorage();
+    var meta = BatchProcessor.getFailedFileMeta()[id];
+    if (meta && meta.fileName) {
+        return { id: id, name: meta.fileName, mimeType: 'image/jpeg', isPdf: false };
+    }
+    return null;
+}
+
+function openManualWarpForFile(fileId) {
+    var file = findBatchFileById(fileId);
+    if (!file) { setStatus('ファイルが見つかりません。一覧を再取得してください。', true); return; }
+    ManualWarpEditor.open(file);
+}
+
+async function runOcrAfterManualWarp(file, previewBase64, studentId, warpedFileId) {
+    await ensureBatchFields();
+    var fields = appState.fields || [];
+    if (!fields.length) throw new Error('記述欄が未設定です');
+    var fieldCrops = null;
+    if (fieldsNeedPerCropOcr(fields)) {
+        fieldCrops = await buildFieldCropsFromWarped(previewBase64, fields);
+    }
+    var ocrMeta = Object.assign({}, file, { warpedFileId: warpedFileId });
+    var res = await gasRun('ocrStudentPaper', ocrMeta, studentId, '', fieldCrops, { skipSaveWarped: true, warpedFileId: warpedFileId });
+    if (!res.success) throw new Error(res.error || 'OCR失敗');
+    BatchProcessor.clearFailedForFile(file);
+    var row = {
+        fileName: res.fileName || file.name,
+        fileId: res.fileId || file.id,
+        warpedFileId: res.warpedFileId || warpedFileId,
+        studentId: res.studentId,
+        textMapping: res.textMapping
+    };
+    BatchProcessor.enqueuePendingRow(row);
+    var flushError = false;
+    var flushMsg = '';
+    try {
+        var flushRes = await BatchProcessor.flushNow();
+        if (!flushRes || !(flushRes.written > 0 || (flushRes.skippedFileNames && flushRes.skippedFileNames.length))) {
+            flushError = true;
+            flushMsg = (flushRes && flushRes.error) || 'シートへの反映に失敗';
+        }
+    } catch (e) {
+        flushError = true;
+        flushMsg = e.message || String(e);
+    }
+    updateBatchResultRow({
+        file: file,
+        status: 'done',
+        result: res,
+        flushError: flushError,
+        failStep: flushError ? 'flush' : null,
+        error: flushError ? flushMsg : null
+    });
+    if (!flushError && file.id) markBatchRowsFlushed([file.id]);
+    updateBatchRetryFailedButton();
+    updateBatchManualWarpPanel();
+    updateBatchFlushStatus();
+    if (flushError) {
+        refreshBatchPendingTsv();
+        setStatus('手動補正→OCR完了（シート未反映 — TSV手動貼付または一括反映を利用）', true);
+    } else {
+        setStatus('手動補正→OCR完了（シート追記済）');
+    }
+}
+
+function updateBatchManualWarpPanel() {
+    var panel = document.getElementById('batch-manual-warp-panel');
+    var list = document.getElementById('batch-manual-warp-list');
+    if (!panel || !list) return;
+    BatchProcessor.reloadFailedFromStorage();
+    var meta = BatchProcessor.getFailedFileMeta();
+    var warpSteps = ['detect_warp', 'save_warp', 'load_src', 'load_warped'];
+    var seen = {};
+    var items = [];
+    Object.keys(meta).forEach(function(k) {
+        var m = meta[k];
+        if (!m) return;
+        if (warpSteps.indexOf(m.failStep) < 0 && m.stage !== 'warp') return;
+        var name = m.fileName || k;
+        if (seen[name]) return;
+        seen[name] = true;
+        var fid = k.indexOf('name:') === 0 ? '' : k;
+        items.push({ id: fid, name: name, error: m.error, failStep: m.failStep });
+    });
+    if (!items.length) {
+        panel.classList.add('hidden');
+        list.innerHTML = '';
+        return;
+    }
+    panel.classList.remove('hidden');
+    list.innerHTML = items.map(function(it) {
+        var label = BatchProcessor.getFailStepLabel(it.failStep);
+        var btn = it.id
+            ? '<button type="button" data-manual-warp-id="' + escapeHtml(it.id) + '" class="bg-blue-600 text-white px-2 py-0.5 rounded shrink-0 manual-warp-list-btn">手動補正</button>'
+            : '<span class="text-gray-400">ID不明（一覧を再取得）</span>';
+        return '<li class="flex flex-wrap items-center gap-2 border-b border-sky-100 pb-1">' +
+            '<span class="font-medium truncate max-w-[200px]" title="' + escapeHtml(it.name) + '">' + escapeHtml(it.name) + '</span>' +
+            '<span class="text-gray-600 truncate flex-1" title="' + escapeHtml(it.error || '') + '">' + escapeHtml(label) + '</span>' + btn + '</li>';
+    }).join('');
+}
+
+function initBatchManualWarpPanel() {
+    var list = document.getElementById('batch-manual-warp-list');
+    if (!list || list._manualWarpDelegated) return;
+    list._manualWarpDelegated = true;
+    list.addEventListener('click', function(e) {
+        var btn = e.target.closest('[data-manual-warp-id]');
+        if (btn) openManualWarpForFile(btn.getAttribute('data-manual-warp-id'));
+    });
+}
+
+function restoreBatchFailedRowsFromStorage() {
+    BatchProcessor.reloadFailedFromStorage();
+    var meta = BatchProcessor.getFailedFileMeta();
+    if (!Object.keys(meta).length) {
+        updateBatchManualWarpPanel();
+        return;
+    }
+    var nameToFile = {};
+    (appState.batchFiles || []).forEach(function(f) {
+        nameToFile[normalizeBatchFileName(f.name)] = f;
+    });
+    Object.keys(meta).forEach(function(k) {
+        var m = meta[k];
+        if (!m) return;
+        var file = null;
+        if (k.indexOf('name:') !== 0) {
+            file = (appState.batchFiles || []).find(function(f) { return String(f.id) === k; });
+        }
+        if (!file && m.fileName) file = nameToFile[normalizeBatchFileName(m.fileName)];
+        if (!file && m.fileName) file = { id: k.indexOf('name:') === 0 ? '' : k, name: m.fileName, mimeType: 'image/jpeg', isPdf: false };
+        if (!file) return;
+        updateBatchResultRow({
+            file: file,
+            status: 'failed',
+            failStep: m.failStep || 'unknown',
+            failStage: m.stage || 'warp',
+            error: m.error || ''
+        });
+    });
+    updateBatchManualWarpPanel();
 }
 
 function markBatchRowsFlushed(fileIds) {
@@ -1798,6 +2325,7 @@ async function manualFlushToSheet() {
 function onOpenCvReady() {
     opencvReady = true;
     document.getElementById('opencv-status').innerHTML = '<span class="text-green-600"><i class="fa-solid fa-check"></i> OpenCV.js 準備完了</span>';
+    ManualWarpEditor.init();
 }
 
 function setStatus(msg, isError) {
@@ -1805,7 +2333,7 @@ function setStatus(msg, isError) {
 }
 
 var loadCountdownTimer = null;
-var LOAD_COUNTDOWN_SEC = 40;
+var LOAD_COUNTDOWN_SEC = 60;
 
 function startLoadCountdown(message) {
     stopLoadCountdown(false);
@@ -2833,6 +3361,7 @@ async function restoreTestUi(data) {
         }
         initBatchResultsTable(appState.batchFiles);
         restoreBatchResultsFromPreview(br.resultPreview, br.processedFileIds);
+        restoreBatchFailedRowsFromStorage();
         document.getElementById('batch-file-count').textContent =
             appState.batchFiles.length + ' ファイル（シート登録済 ' + (br.processedCount || 0) + ' / OCR結果 ' + (data.resultRowCount || 0) + '行）';
         var pct = appState.batchFiles.length ? Math.round((br.processedCount || 0) / appState.batchFiles.length * 100) : 0;
@@ -3138,25 +3667,12 @@ async function listDriveFiles() {
     try {
         await gasRun('saveStudentFolderId', folderId);
         appState.batchFiles = await gasRun('listFolderFiles', folderId);
-        await ensureBatchFields();
-        initBatchResultsTable(appState.batchFiles);
-        document.getElementById('batch-file-count').textContent = appState.batchFiles.length + ' ファイル検出';
-        updateBatchRetryFailedButton();
-        setStatus(appState.batchFiles.length + ' 件のファイルを検出');
-    } catch (e) { setStatus(e.message || e, true); }
-}
-
-async function listDriveFiles() {
-    var folderId = document.getElementById('drive-folder-id').value.trim();
-    if (!folderId) { setStatus('フォルダIDを入力してください', true); return; }
-    try {
-        await gasRun('saveStudentFolderId', folderId);
-        appState.batchFiles = await gasRun('listFolderFiles', folderId);
         var workQueue = await gasRun('getOcrWorkQueue');
         appState.ocrWorkStats = workQueue.stats;
         mergeWorkQueueIntoBatchFiles(workQueue.items);
         await ensureBatchFields();
         initBatchResultsTable(appState.batchFiles);
+        restoreBatchFailedRowsFromStorage();
         document.getElementById('batch-file-count').textContent = appState.batchFiles.length + ' ファイル（フォルダ直下＝未処理作業対象）';
         updateBatchWorkQueueHint(workQueue.stats);
         updateBatchRetryFailedButton();
@@ -3329,6 +3845,7 @@ function updateBatchRetryFailedButton() {
     });
     var breakdown = Object.keys(parts).map(function(l) { return l + parts[l]; }).join(' / ');
     btn.title = n > 0 ? ('失敗 ' + n + ' 件: ' + breakdown) : '失敗したファイルがありません';
+    updateBatchManualWarpPanel();
 }
 
 function populateCriteriaSelect() {
@@ -3759,6 +4276,8 @@ async function saveVerificationEdits() {
 
 document.addEventListener('DOMContentLoaded', function() {
     TestSessionCache.clear();
+    ManualWarpEditor.init();
+    initBatchManualWarpPanel();
     window.addEventListener('pagehide', clearTestSessionCacheOnExit);
     initStepNav();
     initCollapsibleSideNav();
