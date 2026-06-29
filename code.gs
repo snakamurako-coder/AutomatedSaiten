@@ -2617,7 +2617,8 @@ function ensureRosterHeaders_(sheet) {
     }
   }
   if (needsHeader) {
-    sheet.getRange(1, 1, 1, ROSTER_HEADERS.length).setValues([ROSTER_HEADERS]);
+    var headerRow = [ROSTER_HEADERS.slice()];
+    sheet.getRange(1, 1, 1, ROSTER_HEADERS.length).setValues(headerRow);
     sheet.setFrozenRows(1);
     formatHubRosterSheet_(sheet);
   }
@@ -2625,10 +2626,10 @@ function ensureRosterHeaders_(sheet) {
 
 function writeHubRosterTemplate_(sheet) {
   sheet.clear();
-  sheet.getRange(1, 1, 1, ROSTER_HEADERS.length).setValues([ROSTER_HEADERS]);
-  sheet.getRange(2, 1, 2, ROSTER_HEADERS.length).setValues([[
-    '（記入例・削除可）', '1001', '2', '1', '15', '山田太郎', '', '', ''
-  ]]);
+  var sampleRow = ['（記入例・削除可）', '1001', '2', '1', '15', '山田太郎', '', '', ''];
+  while (sampleRow.length < ROSTER_HEADERS.length) sampleRow.push('');
+  var templateRows = [ROSTER_HEADERS.slice(), sampleRow];
+  sheet.getRange(1, 1, templateRows.length, ROSTER_HEADERS.length).setValues(templateRows);
   sheet.setFrozenRows(1);
   formatHubRosterSheet_(sheet);
 }
@@ -2726,7 +2727,9 @@ function saveRosterRows(rosterName, rows) {
     ]);
   });
   if (out.length) {
-    sheet.getRange(2, 1, 1 + out.length, ROSTER_HEADERS.length).setValues(out);
+    var startRow = 2;
+    var endRow = startRow + out.length - 1;
+    sheet.getRange(startRow, 1, endRow, ROSTER_HEADERS.length).setValues(out);
   }
   return { saved: (rows || []).length, rosterName: rosterName };
 }
