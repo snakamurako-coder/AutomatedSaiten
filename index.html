@@ -90,10 +90,17 @@
         /* 解答集約・外れ値リスト: 内容に合わせたコンパクト列幅 */
         .compact-table {
             width: max-content;
-            max-width: 100%;
             border-collapse: collapse;
             font-size: 0.75rem;
             line-height: 1.25;
+        }
+        .compact-table-scroll {
+            display: block;
+            width: 100%;
+            max-width: 100%;
+            min-width: 0;
+            overflow: auto;
+            box-sizing: border-box;
         }
         .compact-table th,
         .compact-table td {
@@ -110,10 +117,11 @@
         .compact-table .col-score input { width: 3rem; padding: 1px 2px; }
         .compact-table .col-reason { white-space: normal; min-width: 10rem; }
         .compact-table .col-reason input { width: 100%; min-width: 10rem; }
-        #criteria-table-wrap { overflow: auto; max-height: calc(100vh - 14rem); }
+        #criteria-table-wrap {
+            max-height: calc(100vh - 14rem);
+        }
         #outlier-groups-list {
             max-height: 9rem;
-            overflow: auto;
             padding: 0;
         }
         #outlier-groups-list .compact-table thead th {
@@ -268,7 +276,7 @@
                 </div>
             </div>
 
-            <div id="criteria-table-wrap" class="border rounded">
+            <div id="criteria-table-wrap" class="compact-table-scroll border rounded">
                 <table class="compact-table criteria-table">
                     <thead class="bg-gray-100">
                         <tr>
@@ -301,7 +309,7 @@
                     <button type="button" onclick="selectAllOutlierRows(false)" class="bg-white border px-2 py-1 rounded">表示を解除</button>
                     <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showSelectedOutlierCrops)" class="bg-blue-600 text-white px-2 py-1 rounded font-bold">選択を画像表示</button>
                 </div>
-                <div id="outlier-groups-list" class="text-xs border rounded bg-white"></div>
+                <div id="outlier-groups-list" class="compact-table-scroll text-xs border rounded bg-white"></div>
                 <div class="flex flex-wrap gap-3 items-center text-xs border rounded bg-white px-2 py-1.5">
                     <span class="font-semibold text-slate-700">表示倍率</span>
                     <input type="range" id="crop-inline-zoom" min="30" max="400" value="100" class="w-36">
