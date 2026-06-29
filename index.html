@@ -55,6 +55,52 @@
             font-weight: bold; font-size: 14px; cursor: pointer; flex-shrink: 0;
         }
         .section-toggle-btn:hover { background: #fef3c7; }
+        .ocr-lang-switch {
+            display: inline-flex;
+            align-items: center;
+            gap: 0.35rem;
+            font-size: 10px;
+            user-select: none;
+        }
+        .ocr-lang-switch-label {
+            color: #9ca3af;
+            font-weight: 600;
+            min-width: 2.25rem;
+            text-align: center;
+            line-height: 1.2;
+        }
+        .ocr-lang-switch-label.active { color: #1d4ed8; }
+        .ocr-lang-switch-track {
+            position: relative;
+            display: inline-block;
+            width: 2.5rem;
+            height: 1.25rem;
+            background: #d1d5db;
+            border-radius: 9999px;
+            cursor: pointer;
+            transition: background 0.2s ease;
+            flex-shrink: 0;
+        }
+        .ocr-lang-switch-track.en { background: #93c5fd; }
+        .ocr-lang-switch-track input {
+            position: absolute;
+            opacity: 0;
+            width: 0;
+            height: 0;
+            pointer-events: none;
+        }
+        .ocr-lang-switch-thumb {
+            position: absolute;
+            top: 2px;
+            left: 2px;
+            width: calc(1.25rem - 4px);
+            height: calc(1.25rem - 4px);
+            background: #fff;
+            border-radius: 50%;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+            transition: transform 0.2s ease;
+        }
+        .ocr-lang-switch-track.en .ocr-lang-switch-thumb { transform: translateX(1.25rem); }
         #outlier-crop-panel {
             min-height: 32rem;
             height: clamp(32rem, calc(100vh - 10rem), 85vh);
@@ -194,10 +240,10 @@
                 <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveAnswerFieldsToServer)" class="bg-green-600 text-white px-3 py-1 rounded">記述欄を保存</button>
                 <button type="button" onclick="RegionEditor.deleteSelected()" class="bg-red-100 text-red-700 px-3 py-1 rounded">選択欄を削除</button>
             </div>
-            <p class="text-xs text-gray-500">Canvas上をドラッグして記述欄を追加。選択後は辺・角でリサイズ、内側で移動。</p>
+            <p class="text-xs text-gray-500">Canvas上をドラッグして記述欄を追加。選択後は辺・角でリサイズ、内側で移動。各欄のOCR言語はスイッチで切り替え（デフォルト: 英語）。</p>
             <div class="flex gap-4">
                 <canvas id="editor-canvas" class="bg-white"></canvas>
-                <ul id="field-list" class="text-xs w-48 space-y-1"></ul>
+                <ul id="field-list" class="text-xs w-56 space-y-1 shrink-0"></ul>
             </div>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(1); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
@@ -217,9 +263,11 @@
             <div class="flex flex-wrap gap-2 text-xs items-end">
                 <div class="flex-1 min-w-[200px]"><label class="font-semibold">DriveフォルダID</label><input id="drive-folder-id" class="w-full border rounded p-2 text-sm" placeholder="フォルダURLの id= 以降"></div>
                 <button type="button" id="drive-list-btn" data-busy-label="取得中..." onclick="withBusyButton(event.currentTarget, listDriveFiles)" class="bg-gray-200 px-3 py-2 rounded">ファイル一覧</button>
+                <label class="flex items-center gap-1">並列 <input type="number" id="batch-ocr-concurrency" value="4" min="1" max="5" class="w-12 border rounded p-1 text-center" title="同時処理枚数（3〜5推奨）"></label>
                 <button type="button" onclick="withBusyButton(event.currentTarget, startBatchOcr)" id="batch-start-btn" data-busy-label="OCR実行中..." data-keep-busy="0" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">バッチOCR開始</button>
                 <button type="button" onclick="BatchProcessor.pause()" class="bg-orange-200 px-3 py-2 rounded">一時停止</button>
             </div>
+            <p id="batch-ocr-lang-hint" class="text-xs text-gray-500"></p>
             <div class="text-xs"><span id="batch-progress">待機中</span> <span id="batch-elapsed" class="text-gray-400"></span></div>
             <div class="w-full bg-gray-200 rounded h-2"><div id="batch-bar" class="bg-blue-600 h-2 rounded transition-all" style="width:0%"></div></div>
             <p id="batch-file-count" class="text-xs text-gray-500"></p>
@@ -453,6 +501,73 @@ function cropRegionFromBase64(base64, region) {
     img.src = base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64;
   });
 }
+
+function normalizeOcrLangClient(lang) {
+  return String(lang || 'en').toLowerCase() === 'ja' ? 'ja' : 'en';
+}
+
+function ocrLangFromSwitchInput(input) {
+  return input && input.checked ? 'en' : 'ja';
+}
+
+function syncOcrLangSwitchVisual(input) {
+  if (!input) return;
+  var track = input.closest('.ocr-lang-switch-track');
+  var wrap = input.closest('.ocr-lang-switch');
+  if (track) track.classList.toggle('en', input.checked);
+  if (wrap) {
+    var jaLabel = wrap.querySelector('.ocr-lang-switch-label.ja');
+    var enLabel = wrap.querySelector('.ocr-lang-switch-label.en');
+    if (jaLabel) jaLabel.classList.toggle('active', !input.checked);
+    if (enLabel) enLabel.classList.toggle('active', input.checked);
+  }
+}
+
+function fieldsNeedPerCropOcr(fields) {
+  if (!fields || fields.length <= 1) return false;
+  var first = normalizeOcrLangClient(fields[0].ocrLang);
+  for (var i = 1; i < fields.length; i++) {
+    if (normalizeOcrLangClient(fields[i].ocrLang) !== first) return true;
+  }
+  return false;
+}
+
+async function buildFieldCropsFromWarped(base64, fields) {
+  var crops = [];
+  for (var i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    var crop = await cropRegionFromBase64(base64, { x: f.x, y: f.y, width: f.width, height: f.height });
+    crops.push({ fieldId: f.id, cropBase64: crop, ocrLang: normalizeOcrLangClient(f.ocrLang) });
+  }
+  return crops;
+}
+
+function mergeFieldOcrLangFromUi(fields) {
+  var prev = {};
+  (appState.fields || []).forEach(function(f) { prev[f.id] = normalizeOcrLangClient(f.ocrLang); });
+  return (fields || []).map(function(f) {
+    var inp = document.querySelector('.field-ocr-lang[data-id="' + f.id + '"]');
+    return Object.assign({}, f, { ocrLang: inp ? ocrLangFromSwitchInput(inp) : (prev[f.id] || normalizeOcrLangClient(f.ocrLang)) });
+  });
+}
+
+function updateBatchOcrLangHint() {
+  var el = document.getElementById('batch-ocr-lang-hint');
+  if (!el) return;
+  var fields = appState.fields || [];
+  if (!fields.length) {
+    el.textContent = '①で記述欄とOCR言語（日本語/英語）を設定してください。';
+    return;
+  }
+  var parts = fields.map(function(f) {
+    return (f.displayName || f.id) + '=' + (normalizeOcrLangClient(f.ocrLang) === 'en' ? '英語' : '日本語');
+  });
+  var mode = fieldsNeedPerCropOcr(fields)
+    ? '欄ごとにOCR（日英混在）'
+    : '1回OCR（全欄' + (normalizeOcrLangClient(fields[0].ocrLang) === 'en' ? '英語' : '日本語') + '）';
+  el.textContent = 'OCR言語: ' + parts.join('、') + ' — ' + mode;
+}
+
 async function loadPdfFirstPageAsImage(base64OrBytes) {
   if (typeof pdfjsLib === 'undefined') throw new Error('PDF.js が読み込まれていません。');
   pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
@@ -491,7 +606,8 @@ var RegionEditor = (function() {
     return regions.map(function(r, i) {
       if (mode === 'identity') return { type: r.type || r.id, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height) };
       return { id: r.id || ('記述欄' + (i + 1)), displayName: r.displayName || r.id || ('記述欄' + (i + 1)),
-        x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height), order: r.order != null ? r.order : i + 1 };
+        x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height),
+        order: r.order != null ? r.order : i + 1, ocrLang: r.ocrLang || 'en' };
     });
   }
   function addRegion(x, y, w, h) {
@@ -499,7 +615,7 @@ var RegionEditor = (function() {
       var used = regions.map(function(r) { return r.type; });
       var nextType = IDENTITY_TYPES.find(function(t) { return used.indexOf(t) < 0; }); if (!nextType) return;
       regions.push({ type: nextType, x: x, y: y, w: w, h: h, id: nextType });
-    } else { var num = regions.length + 1, id = '記述欄' + num; regions.push({ id: id, displayName: id, x: x, y: y, w: w, h: h, order: num }); }
+    } else { var num = regions.length + 1, id = '記述欄' + num; regions.push({ id: id, displayName: id, x: x, y: y, w: w, h: h, order: num, ocrLang: 'en' }); }
     selectedIdx = regions.length - 1; redraw(); notifyChange();
   }
   function deleteSelected() { if (selectedIdx < 0) return; regions.splice(selectedIdx, 1); selectedIdx = -1; redraw(); notifyChange(); }
@@ -610,21 +726,30 @@ var RegionEditor = (function() {
 })();
 var BatchProcessor = (function() {
   var FLUSH_CHUNK = 15;
-  var queue = [], running = false, paused = false;
+  var DEFAULT_CONCURRENCY = 4;
+  var queue = [], running = false, paused = false, activeCount = 0;
   var stats = { total: 0, done: 0, skipped: 0, failed: 0, flushed: 0 };
   var pendingRows = [], processedIds = {}, startTime = 0;
   var onProgress, onComplete, onError, onItemUpdate, onFlush;
   var orientation = 'landscape', threshVal = 128, fillThreshold = 0.35;
+  var concurrency = DEFAULT_CONCURRENCY;
 
   function configure(opts) {
     orientation = opts.orientation || orientation;
     threshVal = opts.threshVal != null ? opts.threshVal : threshVal;
     fillThreshold = opts.fillThreshold != null ? opts.fillThreshold : fillThreshold;
+    concurrency = opts.concurrency != null ? opts.concurrency : concurrency;
     onProgress = opts.onProgress;
     onComplete = opts.onComplete;
     onError = opts.onError;
     onItemUpdate = opts.onItemUpdate;
     onFlush = opts.onFlush;
+  }
+
+  function getConcurrencyLimit() {
+    var n = parseInt(concurrency, 10);
+    if (isNaN(n) || n < 1) return 1;
+    return Math.min(5, n);
   }
 
   function setProcessedIds(idList) {
@@ -683,74 +808,115 @@ var BatchProcessor = (function() {
     }
   }
 
-  async function processNext() {
-    if (paused || queue.length === 0) {
-      running = false;
+  async function finishBatch() {
+    if (!running) return;
+    running = false;
+    try {
+      await flushPending(true);
+    } catch (flushErr) {
+      if (onError) onError(null, '最終書き込み失敗: ' + (flushErr.message || flushErr));
+    }
+    if (onComplete) onComplete(stats);
+  }
+
+  async function processOneFile(file) {
+    if (onProgress) onProgress({ file: file, stats: stats, status: 'processing' });
+    if (onItemUpdate) onItemUpdate({ file: file, status: 'processing' });
+
+    if (processedIds[String(file.id)]) {
+      stats.skipped++;
+      if (onProgress) onProgress({ file: file, stats: stats, status: 'skipped' });
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'skipped' });
+      return;
+    }
+
+    var fileData = await gasRun('getDriveFileBase64', file.id);
+    var img = await driveFileToImageElement(fileData);
+    var result = warpImageFromElement(img, orientation, threshVal);
+    var base64 = matToBase64Jpeg(result.warpedMat);
+    var studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold);
+    result.warpedMat.delete();
+
+    var fields = (typeof appState !== 'undefined' && appState.fields) ? appState.fields : [];
+    var fieldCrops = null;
+    if (fieldsNeedPerCropOcr(fields)) {
+      fieldCrops = await buildFieldCropsFromWarped(base64, fields);
+    }
+
+    var res = await gasRun('ocrStudentPaper', file, studentId, base64, fieldCrops);
+    if (res.success) {
+      stats.done++;
+      pendingRows.push({
+        fileName: res.fileName,
+        fileId: res.fileId,
+        warpedFileId: res.warpedFileId,
+        studentId: res.studentId,
+        textMapping: res.textMapping
+      });
+      savePendingToStorage();
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false });
       try {
-        await flushPending(true);
+        await flushPending(false);
       } catch (flushErr) {
-        if (onError) onError(null, '最終書き込み失敗: ' + (flushErr.message || flushErr));
+        if (onError) onError(file, 'チャンク書き込み失敗: ' + (flushErr.message || flushErr));
+        if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false, flushError: true });
       }
-      if (onComplete) onComplete(stats);
+    } else {
+      stats.failed++;
+      if (onError) onError(file, res.error);
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: res.error });
+    }
+    if (onProgress) onProgress({ file: file, stats: stats, status: 'done', result: res });
+  }
+
+  async function workerLoop() {
+    while (running && !paused) {
+      if (queue.length === 0) break;
+      var file = queue.shift();
+      try {
+        await processOneFile(file);
+      } catch (err) {
+        stats.failed++;
+        if (onError) onError(file, err.message || String(err));
+        if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: err.message || String(err) });
+      }
+    }
+    activeCount--;
+    maybeFinishOrSpawn();
+  }
+
+  function maybeFinishOrSpawn() {
+    if (!running || paused) return;
+    var limit = getConcurrencyLimit();
+    while (activeCount < limit && queue.length > 0) {
+      activeCount++;
+      workerLoop();
+    }
+    if (queue.length === 0 && activeCount === 0) {
+      finishBatch();
+    }
+  }
+
+  function processNext() {
+    if (paused) {
+      running = false;
       return;
     }
     running = true;
-    var file = queue.shift();
-    try {
-      if (onProgress) onProgress({ file: file, stats: stats, status: 'processing' });
-      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing' });
-
-      if (processedIds[String(file.id)]) {
-        stats.skipped++;
-        if (onProgress) onProgress({ file: file, stats: stats, status: 'skipped' });
-        if (onItemUpdate) onItemUpdate({ file: file, status: 'skipped' });
-      } else {
-        var fileData = await gasRun('getDriveFileBase64', file.id);
-        var img = await driveFileToImageElement(fileData);
-        var result = warpImageFromElement(img, orientation, threshVal);
-        var base64 = matToBase64Jpeg(result.warpedMat);
-        var studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold);
-        result.warpedMat.delete();
-
-        var res = await gasRun('ocrStudentPaper', file, studentId, base64);
-        if (res.success) {
-          stats.done++;
-          pendingRows.push({
-            fileName: res.fileName,
-            fileId: res.fileId,
-            warpedFileId: res.warpedFileId,
-            studentId: res.studentId,
-            textMapping: res.textMapping
-          });
-          savePendingToStorage();
-          if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false });
-          try {
-            await flushPending(false);
-          } catch (flushErr) {
-            if (onError) onError(file, 'チャンク書き込み失敗: ' + (flushErr.message || flushErr));
-            if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false, flushError: true });
-          }
-        } else {
-          stats.failed++;
-          if (onError) onError(file, res.error);
-          if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: res.error });
-        }
-        if (onProgress) onProgress({ file: file, stats: stats, status: 'done', result: res });
-      }
-    } catch (err) {
-      stats.failed++;
-      if (onError) onError(file, err.message || String(err));
-      if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', error: err.message || String(err) });
-    }
-    await new Promise(function(r) { setTimeout(r, 200); });
-    processNext();
+    maybeFinishOrSpawn();
   }
 
   return {
     configure: configure,
     setQueue: setQueue,
     setProcessedIds: setProcessedIds,
-    start: function() { if (!running) { startTime = Date.now(); processNext(); } },
+    start: function() {
+      if (!running) {
+        startTime = Date.now();
+        activeCount = 0;
+        processNext();
+      }
+    },
     pause: pause,
     flushNow: function() { return flushPending(true); },
     getPendingCount: function() { return pendingRows.length; },
@@ -1266,8 +1432,10 @@ function goToStep(n, options) {
     if (n === 2) {
         if (options.skipAutoSave || appState.restoring) renderPointsTableFromCache();
         else autoSaveFieldsForStep2().then(function() { renderPointsTableFromCache(); });
-    } else if (n === 3) refreshVisionKeyStatus();
-    else if (n === 4) populateCriteriaSelectFromCache();
+    } else if (n === 3) {
+        refreshVisionKeyStatus();
+        updateBatchOcrLangHint();
+    } else if (n === 4) populateCriteriaSelectFromCache();
     else if (n === 6) renderDomainTableFromCache();
     else if (n === 8) loadIdentityEditorFromState();
 }
@@ -1976,6 +2144,7 @@ async function restoreTestUi(data) {
     updateBatchFlushStatus();
 
     populateCriteriaSelectFromCache();
+    updateBatchOcrLangHint();
 
     if (data.summary && data.summary.length) {
         document.getElementById('summary-preview').innerHTML = data.summary.map(function(r) {
@@ -2179,18 +2348,35 @@ async function loadModelFromDrive() {
 }
 
 function renderFieldList(fields) {
-    appState.fields = fields || RegionEditor.getRegions();
+    appState.fields = mergeFieldOcrLangFromUi(fields || RegionEditor.getRegions());
     document.getElementById('field-list').innerHTML = appState.fields.map(function(f) {
-        return '<li class="border rounded p-1">' + (f.displayName || f.id) + ' (' + f.width + '×' + f.height + ')</li>';
+        var lang = normalizeOcrLangClient(f.ocrLang);
+        var isEn = lang === 'en';
+        return '<li class="border rounded p-1 space-y-1">' +
+            '<div class="font-medium">' + escapeHtml(f.displayName || f.id) + '</div>' +
+            '<div class="text-gray-500">' + f.width + '×' + f.height + '</div>' +
+            '<div class="flex items-center gap-1">' +
+            '<span class="text-gray-500">OCR</span>' +
+            '<div class="ocr-lang-switch">' +
+            '<span class="ocr-lang-switch-label ja' + (isEn ? '' : ' active') + '">日本語</span>' +
+            '<label class="ocr-lang-switch-track' + (isEn ? ' en' : '') + '" title="OCR言語を切り替え">' +
+            '<input type="checkbox" class="field-ocr-lang" data-id="' + escapeHtml(f.id) + '"' + (isEn ? ' checked' : '') + '>' +
+            '<span class="ocr-lang-switch-thumb"></span>' +
+            '</label>' +
+            '<span class="ocr-lang-switch-label en' + (isEn ? ' active' : '') + '">英語</span>' +
+            '</div></div></li>';
     }).join('');
+    updateBatchOcrLangHint();
 }
 
 async function saveAnswerFieldsToServer() {
-    var fields = RegionEditor.getRegions();
+    var fields = mergeFieldOcrLangFromUi(RegionEditor.getRegions());
     if (!fields.length) { setStatus('記述欄がありません', true); return; }
     try {
         await ensureServerActiveTest();
         appState.fields = await gasRun('saveAnswerFields', fields);
+        RegionEditor.setRegions(appState.fields);
+        renderFieldList(appState.fields);
         patchCurrentTestSessionCache(function(cur) {
             cur.fields = appState.fields;
             return cur;
@@ -2277,13 +2463,16 @@ async function startBatchOcr() {
     BatchProcessor.configure({
         orientation: document.getElementById('orientation-1') ? document.getElementById('orientation-1').value : 'landscape',
         threshVal: parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10),
+        concurrency: parseInt(document.getElementById('batch-ocr-concurrency') ? document.getElementById('batch-ocr-concurrency').value : 4, 10),
         onProgress: function(ev) {
             var s = ev.stats;
             var pct = s.total ? Math.round((s.done + s.skipped + s.failed) / s.total * 100) : 0;
             document.getElementById('batch-bar').style.width = pct + '%';
-            var avg = (s.done + s.failed) > 0 ? Math.round((Date.now() - BatchProcessor.getStartTime()) / 1000 / (s.done + s.skipped + s.failed)) : 0;
+            var finished = s.done + s.skipped + s.failed;
+            var avg = finished > 0 ? Math.round((Date.now() - BatchProcessor.getStartTime()) / 1000 / finished) : 0;
             document.getElementById('batch-progress').textContent =
                 (ev.file ? ev.file.name + ' | ' : '') + '完了' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed + ' / ' + s.total +
+                '（並列' + (parseInt(document.getElementById('batch-ocr-concurrency').value, 10) || 4) + '）' +
                 (avg ? ' （約' + avg + '秒/件）' : '');
             updateBatchFlushStatus();
         },
@@ -2551,6 +2740,13 @@ document.addEventListener('DOMContentLoaded', function() {
             scheduleDeemedDraftSave();
         });
     }
+    document.getElementById('field-list').addEventListener('change', function(ev) {
+        if (ev.target.classList.contains('field-ocr-lang')) {
+            syncOcrLangSwitchVisual(ev.target);
+            appState.fields = mergeFieldOcrLangFromUi(RegionEditor.getRegions());
+            updateBatchOcrLangHint();
+        }
+    });
     document.getElementById('step-4').addEventListener('click', function(ev) {
         var t = ev.target;
         if (t.classList.contains('ocr-rep-del')) {

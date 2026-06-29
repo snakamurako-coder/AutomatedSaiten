@@ -326,8 +326,23 @@ function initTestInfoSheet(sheet) {
 
 function initAnswerFieldsSheet(sheet) {
   if (sheet.getLastRow() > 0) return;
-  sheet.appendRow(['記述欄ID', '表示名', 'x', 'y', 'width', 'height', '表示順']);
+  sheet.appendRow(['記述欄ID', '表示名', 'x', 'y', 'width', 'height', '表示順', 'OCR言語']);
   sheet.setFrozenRows(1);
+}
+
+function normalizeOcrLang_(value) {
+  var v = String(value || 'en').trim().toLowerCase();
+  return v === 'ja' ? 'ja' : 'en';
+}
+
+function ensureAnswerFieldsOcrLangColumn_(sheet) {
+  if (sheet.getLastRow() === 0) {
+    initAnswerFieldsSheet(sheet);
+    return;
+  }
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.indexOf('OCR言語') >= 0) return;
+  sheet.getRange(1, sheet.getLastColumn() + 1).setValue('OCR言語');
 }
 
 function initPointsSheet(sheet) {
@@ -1077,9 +1092,12 @@ function saveModelAnswerImage(base64Image, width, height) {
 function getAnswerFields(ss) {
   ss = ss || getActiveTestSs();
   var sheet = ss.getSheetByName(SHEET_ANSWER_FIELDS);
+  ensureAnswerFieldsOcrLangColumn_(sheet);
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
 
+  var headers = data[0];
+  var colLang = headers.indexOf('OCR言語');
   var fields = [];
   for (var i = 1; i < data.length; i++) {
     if (!data[i][0]) continue;
@@ -1090,25 +1108,37 @@ function getAnswerFields(ss) {
       y: parseInt(data[i][3], 10) || 0,
       width: parseInt(data[i][4], 10) || 0,
       height: parseInt(data[i][5], 10) || 0,
-      order: parseInt(data[i][6], 10) || i
+      order: parseInt(data[i][6], 10) || i,
+      ocrLang: colLang >= 0 ? normalizeOcrLang_(data[i][colLang]) : 'en'
     });
   }
   fields.sort(function(a, b) { return a.order - b.order; });
   return fields;
 }
 
+function fieldsNeedPerCropOcr_(fields) {
+  if (!fields || fields.length <= 1) return false;
+  var first = normalizeOcrLang_(fields[0].ocrLang);
+  for (var i = 1; i < fields.length; i++) {
+    if (normalizeOcrLang_(fields[i].ocrLang) !== first) return true;
+  }
+  return false;
+}
+
 function saveAnswerFields(fields) {
   var ss = getActiveTestSs();
   var sheet = ss.getSheetByName(SHEET_ANSWER_FIELDS);
+  ensureAnswerFieldsOcrLangColumn_(sheet);
   sheet.clear();
-  sheet.appendRow(['記述欄ID', '表示名', 'x', 'y', 'width', 'height', '表示順']);
+  sheet.appendRow(['記述欄ID', '表示名', 'x', 'y', 'width', 'height', '表示順', 'OCR言語']);
 
   fields.forEach(function(f, idx) {
     sheet.appendRow([
       f.id,
       f.displayName || f.id,
       f.x, f.y, f.width, f.height,
-      f.order != null ? f.order : idx + 1
+      f.order != null ? f.order : idx + 1,
+      normalizeOcrLang_(f.ocrLang)
     ]);
   });
 
@@ -1333,15 +1363,16 @@ function getStudentWarpedImagesMeta() {
  * Vision API OCR・生徒解答処理
  */
 
-function callVisionAPI(imageBytes) {
+function callVisionAPI(imageBytes, languageHints) {
   var apiKey = PropertiesService.getScriptProperties().getProperty('VISION_API_KEY');
   if (!apiKey) throw new Error('VISION_API_KEY 未設定');
+  var hints = languageHints && languageHints.length ? languageHints : ['ja'];
   var url = 'https://vision.googleapis.com/v1/images:annotate?key=' + apiKey;
   var payload = {
     requests: [{
       image: { content: imageBytes },
       features: [{ type: 'DOCUMENT_TEXT_DETECTION' }],
-      imageContext: { languageHints: ['ja', 'en'] }
+      imageContext: { languageHints: hints }
     }]
   };
   var response = UrlFetchApp.fetch(url, {
@@ -1354,6 +1385,45 @@ function callVisionAPI(imageBytes) {
   if (json.error) throw new Error('Vision API: ' + JSON.stringify(json.error));
   if (!json.responses || !json.responses[0]) throw new Error('Vision API 応答が空です');
   return json.responses[0];
+}
+
+function ocrLangToHints_(ocrLang) {
+  return normalizeOcrLang_(ocrLang) === 'en' ? ['en'] : ['ja'];
+}
+
+function extractTextFromSingleCrop_(visionResult) {
+  if (!visionResult || !visionResult.textAnnotations || !visionResult.textAnnotations.length) return 'なし';
+  var t = String(visionResult.textAnnotations[0].description || '').trim();
+  return t || 'なし';
+}
+
+function runOcrOnWarpedImage_(warpedBase64, fields, fieldCrops) {
+  var imageBytes = warpedBase64.split(',')[1];
+  var textMapping = {};
+  if (fieldsNeedPerCropOcr_(fields) && fieldCrops && fieldCrops.length) {
+    fieldCrops.forEach(function(fc) {
+      if (!fc || !fc.fieldId || !fc.cropBase64) return;
+      var cropBytes = String(fc.cropBase64).indexOf(',') >= 0
+        ? fc.cropBase64.split(',')[1]
+        : fc.cropBase64;
+      var visionResult = callVisionAPI(cropBytes, ocrLangToHints_(fc.ocrLang));
+      textMapping[String(fc.fieldId)] = extractTextFromSingleCrop_(visionResult);
+    });
+    fields.forEach(function(f) {
+      if (textMapping[f.id] == null) textMapping[f.id] = 'なし';
+    });
+    return textMapping;
+  }
+  var unifiedLang = fields.length ? normalizeOcrLang_(fields[0].ocrLang) : 'en';
+  var visionResult = callVisionAPI(imageBytes, ocrLangToHints_(unifiedLang));
+  var extracted = extractTextFromBoxes(visionResult, fieldsToBoxes(fields));
+  extracted.forEach(function(item) {
+    textMapping[item.q_id] = item.student_answer;
+  });
+  fields.forEach(function(f) {
+    if (textMapping[f.id] == null) textMapping[f.id] = 'なし';
+  });
+  return textMapping;
 }
 
 function extractTextFromBoxes(visionResult, targetBoxes) {
@@ -1407,7 +1477,7 @@ function buildResultRowArray(headers, map, fields, fileMeta, studentId, textMapp
   return row;
 }
 
-function ocrStudentPaper(fileMeta, studentId, warpedBase64) {
+function ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops) {
   try {
     var ss = getActiveTestSs();
     var sourceFileId = fileMeta.id || fileMeta.fileId;
@@ -1415,16 +1485,8 @@ function ocrStudentPaper(fileMeta, studentId, warpedBase64) {
     var fields = getAnswerFields(ss);
     if (fields.length === 0) throw new Error('記述欄が設定されていません。');
 
-    var imageBytes = warpedBase64.split(',')[1];
     var saved = saveWarpedImage(warpedBase64, sourceFileName, studentId);
-    var boxes = fieldsToBoxes(fields);
-    var visionResult = callVisionAPI(imageBytes);
-    var extracted = extractTextFromBoxes(visionResult, boxes);
-
-    var textMapping = {};
-    extracted.forEach(function(item) {
-      textMapping[item.q_id] = item.student_answer;
-    });
+    var textMapping = runOcrOnWarpedImage_(warpedBase64, fields, fieldCrops || []);
     var cleanStudentId = (studentId && !String(studentId).includes('?')) ? String(studentId) : '';
 
     return {
@@ -1473,7 +1535,7 @@ function flushResultRows(rows) {
   return { written: dataRows.length };
 }
 
-function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists) {
+function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists, fieldCrops) {
   try {
     var ss = getActiveTestSs();
     var sourceFileId = fileMeta.id || fileMeta.fileId;
@@ -1482,7 +1544,7 @@ function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists) {
       return { success: true, skipped: true, fileId: sourceFileId };
     }
 
-    var ocrResult = ocrStudentPaper(fileMeta, studentId, warpedBase64);
+    var ocrResult = ocrStudentPaper(fileMeta, studentId, warpedBase64, fieldCrops);
     if (!ocrResult.success) return ocrResult;
 
     appendResultRow(ss, {
