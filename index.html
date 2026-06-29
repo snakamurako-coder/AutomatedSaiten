@@ -107,15 +107,45 @@
         <!-- ④ 採点基準 -->
         <div id="step-4" class="step-panel hidden space-y-3">
             <h2 class="font-bold">④ 採点基準の設定</h2>
-            <div class="flex gap-2 text-xs">
+            <div class="flex flex-wrap gap-2 text-xs items-center">
                 <select id="criteria-field-select" class="border rounded p-2"></select>
                 <button type="button" data-busy-label="集約中..." onclick="withBusyButton(event.currentTarget, fetchUniqueForCriteria)" class="bg-purple-100 text-purple-800 px-3 py-1 rounded font-bold">解答を集約</button>
                 <button type="button" data-busy-label="AI生成中..." onclick="withBusyButton(event.currentTarget, askGeminiCriteria)" class="bg-purple-600 text-white px-3 py-1 rounded font-bold">AI原案</button>
                 <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveCriteriaToServer)" class="bg-green-600 text-white px-3 py-1 rounded font-bold">基準を保存</button>
             </div>
-            <div class="overflow-auto max-h-96 border rounded">
-                <table class="w-full text-xs"><thead class="bg-gray-100"><tr><th class="p-2">解答</th><th class="p-2">人数</th><th class="p-2">判定</th><th class="p-2">得点</th><th class="p-2">備考</th></tr></thead><tbody id="criteria-tbody"></tbody></table>
+
+            <div class="border rounded p-3 bg-amber-50 space-y-2">
+                <div class="text-xs font-bold text-amber-900">OCRテキスト置換（例: muchfasterthan → much faster than）</div>
+                <div class="overflow-auto max-h-40 border rounded bg-white">
+                    <table class="w-full text-xs">
+                        <thead class="bg-gray-100"><tr><th class="p-1">検索</th><th class="p-1">置換後</th><th class="p-1">正規表現</th><th class="p-1"></th></tr></thead>
+                        <tbody id="ocr-replace-tbody"></tbody>
+                    </table>
+                </div>
+                <div class="flex flex-wrap gap-2 text-xs">
+                    <button type="button" onclick="addOcrReplacementRow()" class="bg-white border px-2 py-1 rounded">行を追加</button>
+                    <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveOcrReplacementsOnly)" class="bg-amber-200 text-amber-900 px-2 py-1 rounded font-bold">置換ルールを保存</button>
+                    <button type="button" data-busy-label="適用中..." onclick="withBusyButton(event.currentTarget, applyReplacementsAndReaggregate)" class="bg-amber-600 text-white px-2 py-1 rounded font-bold">置換を適用して再集約</button>
+                </div>
             </div>
+
+            <div class="overflow-auto max-h-96 border rounded">
+                <table class="w-full text-xs"><thead class="bg-gray-100"><tr><th class="p-2">解答</th><th class="p-2">人数</th><th class="p-2">判定</th><th class="p-2">得点</th><th class="p-2">備考</th><th class="p-2">確認</th></tr></thead><tbody id="criteria-tbody"></tbody></table>
+            </div>
+
+            <div class="border rounded p-3 bg-slate-50 space-y-2">
+                <div class="text-xs font-bold text-slate-800">外れ値・少数派解答の確認（回答欄画像）</div>
+                <div class="flex flex-wrap gap-2 items-center text-xs">
+                    <label>人数上限 ≤ <input type="number" id="outlier-max-count" value="2" min="1" class="w-12 border rounded p-1 text-center"></label>
+                    <button type="button" data-busy-label="検出中..." onclick="withBusyButton(event.currentTarget, fetchOutlierGroups)" class="bg-slate-600 text-white px-2 py-1 rounded">外れ値を検出</button>
+                    <button type="button" onclick="selectAllOutlierRows(true)" class="bg-white border px-2 py-1 rounded">全選択</button>
+                    <button type="button" onclick="selectAllOutlierRows(false)" class="bg-white border px-2 py-1 rounded">選択解除</button>
+                    <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showSelectedOutlierCrops)" class="bg-blue-600 text-white px-2 py-1 rounded font-bold">選択を画像表示</button>
+                </div>
+                <div id="outlier-groups-list" class="max-h-36 overflow-auto text-xs border rounded bg-white p-2"></div>
+                <div id="outlier-crop-grid" class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2 max-h-[28rem] overflow-auto"></div>
+            </div>
+
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(4); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
 
@@ -589,7 +619,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2 };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -874,6 +904,8 @@ function populateCriteriaSelectFromCache() {
 }
 
 function loadCriteriaUiForField(fieldId) {
+    renderOcrReplacementTable(fieldId);
+    clearOutlierPanel();
     var saved = (appState.criteriaByField || {})[fieldId];
     if (saved && saved.length) {
         appState.criteriaList = saved.map(function(r) { return { answer_text: r.answer_text, count: '—' }; });
@@ -881,7 +913,216 @@ function loadCriteriaUiForField(fieldId) {
         return;
     }
     appState.criteriaList = [];
-    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="5" class="p-2 text-gray-400">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
+    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="6" class="p-2 text-gray-400">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
+}
+
+function getCriteriaFieldId() {
+    return document.getElementById('criteria-field-select').value;
+}
+
+function getOutlierMaxCountUi() {
+    var el = document.getElementById('outlier-max-count');
+    var n = el ? parseInt(el.value, 10) : 2;
+    return isNaN(n) || n < 1 ? 2 : n;
+}
+
+function renderOcrReplacementTable(fieldId) {
+    var rules = (appState.ocrReplacementsByField || {})[fieldId] || [];
+    var tbody = document.getElementById('ocr-replace-tbody');
+    if (!rules.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="p-2 text-gray-400">置換ルールなし。「行を追加」で登録できます</td></tr>';
+        return;
+    }
+    tbody.innerHTML = rules.map(function(r, idx) {
+        return '<tr>' +
+            '<td class="p-1 border"><input class="ocr-rep-search w-full border rounded p-1 font-mono" data-idx="' + idx + '" value="' + escapeHtml(r.search || '') + '"></td>' +
+            '<td class="p-1 border"><input class="ocr-rep-replace w-full border rounded p-1 font-mono" data-idx="' + idx + '" value="' + escapeHtml(r.replace || '') + '"></td>' +
+            '<td class="p-1 border text-center"><input type="checkbox" class="ocr-rep-regex" data-idx="' + idx + '"' + (r.useRegex ? ' checked' : '') + '></td>' +
+            '<td class="p-1 border text-center"><button type="button" class="text-red-600 ocr-rep-del" data-idx="' + idx + '">削除</button></td></tr>';
+    }).join('');
+}
+
+function addOcrReplacementRow() {
+    var fid = getCriteriaFieldId();
+    if (!fid) return;
+    if (!appState.ocrReplacementsByField[fid]) appState.ocrReplacementsByField[fid] = [];
+    appState.ocrReplacementsByField[fid].push({ search: '', replace: '', useRegex: false });
+    renderOcrReplacementTable(fid);
+}
+
+function collectOcrReplacementRulesFromUi() {
+    var fid = getCriteriaFieldId();
+    var existing = (appState.ocrReplacementsByField || {})[fid] || [];
+    return existing.map(function(r, idx) {
+        var sEl = document.querySelector('.ocr-rep-search[data-idx="' + idx + '"]');
+        var rEl = document.querySelector('.ocr-rep-replace[data-idx="' + idx + '"]');
+        var xEl = document.querySelector('.ocr-rep-regex[data-idx="' + idx + '"]');
+        return {
+            search: sEl ? sEl.value : r.search,
+            replace: rEl ? rEl.value : r.replace,
+            useRegex: xEl ? xEl.checked : !!r.useRegex
+        };
+    }).filter(function(r) { return r.search && r.search.trim(); });
+}
+
+function clearOutlierPanel() {
+    appState.outlierGroups = [];
+    document.getElementById('outlier-groups-list').innerHTML = '<p class="text-gray-400">「外れ値を検出」で少数派解答を一覧します</p>';
+    document.getElementById('outlier-crop-grid').innerHTML = '';
+}
+
+function renderOutlierGroupsList() {
+    var container = document.getElementById('outlier-groups-list');
+    if (!appState.outlierGroups.length) {
+        container.innerHTML = '<p class="text-gray-500">該当する外れ値はありません</p>';
+        return;
+    }
+    var html = '<table class="w-full"><tr class="bg-gray-50"><th class="p-1 w-6"></th><th class="p-1 text-left">解答</th><th class="p-1">人数</th><th class="p-1">生徒</th><th class="p-1"></th></tr>';
+    appState.outlierGroups.forEach(function(group, gi) {
+        group.rows.forEach(function(row, ri) {
+            var key = gi + ':' + ri;
+            html += '<tr class="border-t"><td class="p-1 text-center"><input type="checkbox" class="outlier-row-cb" data-key="' + key + '" checked></td>' +
+                '<td class="p-1 font-mono truncate max-w-[200px]" title="' + escapeHtml(group.answer_text) + '">' + escapeHtml(group.answer_text) + '</td>' +
+                '<td class="p-1 text-center">' + group.count + '</td>' +
+                '<td class="p-1 truncate max-w-[120px]" title="' + escapeHtml(row.fileName) + '">' + escapeHtml(row.studentId || '-') + '</td>' +
+                '<td class="p-1"><button type="button" class="text-blue-600 underline outlier-show-one" data-key="' + key + '">1枚</button></td></tr>';
+        });
+    });
+    html += '</table>';
+    container.innerHTML = html;
+}
+
+function getOutlierRowByKey(key) {
+    var parts = String(key).split(':');
+    var gi = parseInt(parts[0], 10);
+    var ri = parseInt(parts[1], 10);
+    var group = appState.outlierGroups[gi];
+    if (!group || !group.rows[ri]) return null;
+    var row = group.rows[ri];
+    return {
+        rowIndex: row.rowIndex,
+        studentId: row.studentId,
+        fileName: row.fileName,
+        fileId: row.fileId,
+        answer_text: group.answer_text
+    };
+}
+
+function getSelectedOutlierRows() {
+    var rows = [];
+    document.querySelectorAll('.outlier-row-cb:checked').forEach(function(cb) {
+        var row = getOutlierRowByKey(cb.dataset.key);
+        if (row) rows.push(row);
+    });
+    return rows;
+}
+
+function selectAllOutlierRows(checked) {
+    document.querySelectorAll('.outlier-row-cb').forEach(function(cb) { cb.checked = checked; });
+}
+
+async function loadAnswerCropsForRows(rows, fieldId) {
+    var field = (appState.fields || []).find(function(f) { return f.id === fieldId; });
+    if (!field) throw new Error('記述欄が見つかりません');
+    var region = { x: field.x, y: field.y, width: field.width, height: field.height };
+    var grid = document.getElementById('outlier-crop-grid');
+    if (!rows.length) {
+        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">表示する回答がありません</p>';
+        return;
+    }
+    grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">画像を読み込み中...（' + rows.length + '枚）</p>';
+    var results = [];
+    var CONCURRENCY = 4;
+    for (var i = 0; i < rows.length; i += CONCURRENCY) {
+        var chunk = rows.slice(i, i + CONCURRENCY);
+        var chunkResults = await Promise.all(chunk.map(async function(row) {
+            try {
+                if (!row.fileId) throw new Error('ファイルIDなし');
+                var warped = await gasRun('getWarpedImageBase64', row.fileId);
+                var b64 = 'data:image/jpeg;base64,' + warped.base64;
+                var crop = await cropRegionFromBase64(b64, region);
+                return { ok: true, row: row, crop: crop };
+            } catch (e) {
+                return { ok: false, row: row, error: String(e.message || e) };
+            }
+        }));
+        results = results.concat(chunkResults);
+        renderCropGrid(results);
+    }
+}
+
+function renderCropGrid(results) {
+    var grid = document.getElementById('outlier-crop-grid');
+    grid.innerHTML = results.map(function(r) {
+        if (!r.ok) {
+            return '<div class="border rounded p-2 bg-red-50 text-xs"><div class="font-bold truncate">' + escapeHtml(r.row.fileName || '—') + '</div>' +
+                '<div>' + escapeHtml(r.row.studentId || '-') + '</div><div class="text-red-700">' + escapeHtml(r.error || '読込失敗') + '</div></div>';
+        }
+        return '<div class="border rounded p-1 bg-white shadow-sm">' +
+            '<img src="' + r.crop + '" class="w-full h-auto border bg-gray-50" alt="回答欄">' +
+            '<div class="text-[10px] p-1"><b>' + escapeHtml(r.row.studentId || '-') + '</b></div>' +
+            '<div class="text-[10px] px-1 truncate text-gray-600" title="' + escapeHtml(r.row.fileName || '') + '">' + escapeHtml(r.row.fileName || '') + '</div>' +
+            '<div class="text-[10px] p-1 font-mono text-purple-800 truncate" title="' + escapeHtml(r.row.answer_text || '') + '">' + escapeHtml(r.row.answer_text || '') + '</div></div>';
+    }).join('');
+}
+
+async function showSelectedOutlierCrops() {
+    var fid = getCriteriaFieldId();
+    var rows = getSelectedOutlierRows();
+    if (!rows.length) { setStatus('表示する回答を選択してください', true); return; }
+    setStatus(rows.length + ' 枚の回答欄画像を読み込み中...');
+    await loadAnswerCropsForRows(rows, fid);
+    setStatus(rows.length + ' 枚を表示しました');
+}
+
+async function showAnswerPatternCrops(answerText) {
+    var fid = getCriteriaFieldId();
+    setStatus('該当解答の画像を取得中...');
+    try {
+        var rows = await gasRun('getAnswerRowsForPattern', fid, answerText);
+        if (!rows.length) { setStatus('該当する回答がありません', true); return; }
+        selectAllOutlierRows(false);
+        await loadAnswerCropsForRows(rows, fid);
+        setStatus(rows.length + ' 枚（解答: ' + answerText + '）');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function fetchOutlierGroups() {
+    var fid = getCriteriaFieldId();
+    var maxCount = getOutlierMaxCountUi();
+    appState.outlierMaxCount = maxCount;
+    try {
+        appState.outlierGroups = await gasRun('getOutlierAnswerGroups', fid, maxCount);
+        renderOutlierGroupsList();
+        setStatus(appState.outlierGroups.length + ' 種類の外れ値解答を検出（人数 ≤ ' + maxCount + '）');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function saveOcrReplacementsOnly() {
+    var fid = getCriteriaFieldId();
+    var rules = collectOcrReplacementRulesFromUi();
+    try {
+        var saved = await gasRun('saveOcrReplacements', fid, rules);
+        appState.ocrReplacementsByField[fid] = saved;
+        renderOcrReplacementTable(fid);
+        setStatus('置換ルールを保存しました（' + saved.length + ' 件）');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function applyReplacementsAndReaggregate() {
+    var fid = getCriteriaFieldId();
+    var rules = collectOcrReplacementRulesFromUi();
+    try {
+        setStatus('置換を適用して再集約中...');
+        appState.criteriaList = await gasRun('applyTextReplacementsToField', fid, rules);
+        appState.ocrReplacementsByField[fid] = rules.map(function(r) {
+            return { fieldId: fid, search: r.search, replace: r.replace, useRegex: r.useRegex };
+        });
+        renderOcrReplacementTable(fid);
+        renderCriteriaTable();
+        await fetchOutlierGroups();
+        setStatus('置換適用後 ' + appState.criteriaList.length + ' 種類の解答に再集約しました');
+    } catch (e) { setStatus(e.message || e, true); }
 }
 
 function renderCriteriaTableFromSaved(rules) {
@@ -890,7 +1131,8 @@ function renderCriteriaTableFromSaved(rules) {
         return '<tr><td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">—</td>' +
             '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (item.judgment==='○'?' selected':'') + '>○</option><option' + (item.judgment==='△'?' selected':'') + '>△</option><option' + (item.judgment==='×'?' selected':'') + '>×</option></select></td>' +
             '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + (item.score != null ? item.score : 0) + '"></td>' +
-            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + escapeHtml(item.reason || '') + '"></td></tr>';
+            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + escapeHtml(item.reason || '') + '"></td>' +
+            '<td class="p-2 border text-center">—</td></tr>';
     }).join('');
     appState.criteriaList = rules.map(function(r) { return { answer_text: r.answer_text, count: '—' }; });
 }
@@ -944,6 +1186,7 @@ async function restoreTestUi(data) {
     appState.points = data.points || {};
     appState.identityFields = data.identityFields || [];
     appState.criteriaByField = data.criteriaByField || {};
+    appState.ocrReplacementsByField = data.ocrReplacementsByField || {};
     appState.domainRows = data.domainSettings || [];
     appState.criteriaList = [];
     appState.warpedBase64 = null;
@@ -1290,26 +1533,35 @@ function populateCriteriaSelect() {
 }
 
 async function fetchUniqueForCriteria() {
-    var fid = document.getElementById('criteria-field-select').value;
+    var fid = getCriteriaFieldId();
     try {
+        setStatus('解答を集約中...');
         appState.criteriaList = await gasRun('getUniqueAnswers', fid);
+        appState.outlierMaxCount = getOutlierMaxCountUi();
         renderCriteriaTable();
-        setStatus(appState.criteriaList.length + ' 種類の解答を検出');
+        setStatus(appState.criteriaList.length + ' 種類の解答を検出（' +
+            appState.criteriaList.reduce(function(s, x) { return s + x.count; }, 0) + ' 件）');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
 function renderCriteriaTable(aiList) {
     var tbody = document.getElementById('criteria-tbody');
+    var maxOutlier = appState.outlierMaxCount || getOutlierMaxCountUi();
     tbody.innerHTML = appState.criteriaList.map(function(item, idx) {
         var score = 0, judgment = '×', reason = item.answer_text === 'なし' ? '未記入' : '';
         if (aiList) {
             var m = aiList.find(function(a) { return a.answer_text === item.answer_text; });
             if (m) { score = m.recommended_score; judgment = m.judgment || '△'; reason = m.reason || ''; }
         }
-        return '<tr><td class="p-2 border font-mono">' + item.answer_text + '</td><td class="p-2 border text-center">' + item.count + '</td>' +
+        var showImg = typeof item.count === 'number' && item.count <= maxOutlier;
+        var confirmCell = showImg
+            ? '<button type="button" class="text-blue-600 underline crit-show-img" data-idx="' + idx + '">画像</button>'
+            : '—';
+        return '<tr><td class="p-2 border font-mono">' + escapeHtml(item.answer_text) + '</td><td class="p-2 border text-center">' + item.count + '</td>' +
             '<td class="p-2 border"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (judgment==='○'?' selected':'') + '>○</option><option' + (judgment==='△'?' selected':'') + '>△</option><option' + (judgment==='×'?' selected':'') + '>×</option></select></td>' +
             '<td class="p-2 border"><input type="number" class="crit-score w-16 border rounded" data-idx="' + idx + '" value="' + score + '"></td>' +
-            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + (reason||'').replace(/"/g,'&quot;') + '"></td></tr>';
+            '<td class="p-2 border"><input class="crit-reason w-full border rounded" data-idx="' + idx + '" value="' + escapeHtml(reason || '') + '"></td>' +
+            '<td class="p-2 border text-center">' + confirmCell + '</td></tr>';
     }).join('');
 }
 
@@ -1476,6 +1728,24 @@ document.addEventListener('DOMContentLoaded', function() {
     initStepNav();
     var critSel = document.getElementById('criteria-field-select');
     if (critSel) critSel.addEventListener('change', function() { loadCriteriaUiForField(this.value); });
+    document.getElementById('step-4').addEventListener('click', function(ev) {
+        var t = ev.target;
+        if (t.classList.contains('ocr-rep-del')) {
+            var idx = parseInt(t.dataset.idx, 10);
+            var fid = getCriteriaFieldId();
+            var list = (appState.ocrReplacementsByField[fid] || []).slice();
+            list.splice(idx, 1);
+            appState.ocrReplacementsByField[fid] = list;
+            renderOcrReplacementTable(fid);
+        } else if (t.classList.contains('crit-show-img')) {
+            var cidx = parseInt(t.dataset.idx, 10);
+            var item = appState.criteriaList[cidx];
+            if (item) withBusyButton(t, function() { return showAnswerPatternCrops(item.answer_text); });
+        } else if (t.classList.contains('outlier-show-one')) {
+            var row = getOutlierRowByKey(t.dataset.key);
+            if (row) withBusyButton(t, function() { return loadAnswerCropsForRows([row], getCriteriaFieldId()); });
+        }
+    });
     loadAppBootstrap();
     refreshVisionKeyStatus();
 });
