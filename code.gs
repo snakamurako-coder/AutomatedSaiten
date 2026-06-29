@@ -30,6 +30,7 @@ function onOpen() {
   SpreadsheetApp.getUi()
     .createMenu('自動採点')
     .addItem('ハブを登録', 'registerHubSpreadsheet')
+    .addItem('古いWARP設定を削除', 'cleanupWarpScriptProperties')
     .addToUi();
 }
 
@@ -87,8 +88,10 @@ function initializeHub() {
 function setupHubSheets(ss) {
   if (!ss.getSheetByName(SHEET_HUB_TEST_LIST)) {
     var sheet = ss.insertSheet(SHEET_HUB_TEST_LIST);
-    sheet.appendRow(['テスト名', 'スプレッドシートID', 'URL', '作成日', 'ステータス']);
+    sheet.appendRow(['テスト名', 'スプレッドシートID', 'URL', '作成日', 'ステータス', '現在ステップ', '最終保存日時']);
     sheet.setFrozenRows(1);
+  } else {
+    ensureHubSheetColumns(ss.getSheetByName(SHEET_HUB_TEST_LIST));
   }
   var sheet1 = ss.getSheetByName('シート1');
   if (sheet1 && ss.getSheets().length > 1 && sheet1.getLastRow() === 0) {
@@ -154,8 +157,35 @@ var SHEET_EXTERNAL_SCORES = '外部連携得点';
 var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
   '模範解答画像FileID', '生徒解答フォルダID',
-  '基準画像幅', '基準画像高さ', 'ステータス'
+  '基準画像幅', '基準画像高さ', 'ステータス',
+  '現在ステップ', '最終保存日時'
 ];
+
+var HUB_TEST_LIST_HEADERS = ['テスト名', 'スプレッドシートID', 'URL', '作成日', 'ステータス', '現在ステップ', '最終保存日時'];
+
+function ensureHubSheetColumns(sheet) {
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  HUB_TEST_LIST_HEADERS.forEach(function(h) {
+    if (headers.indexOf(h) < 0) {
+      sheet.getRange(1, headers.length + 1).setValue(h);
+      headers.push(h);
+    }
+  });
+}
+
+function ensureTestInfoKeys(ss) {
+  TEST_INFO_KEYS.forEach(function(key) {
+    if (getTestInfoValue(ss, key) === '' && key !== 'テスト名') {
+      var sheet = ss.getSheetByName(SHEET_TEST_INFO);
+      var found = false;
+      var data = sheet.getDataRange().getValues();
+      for (var i = 0; i < data.length; i++) {
+        if (data[i][0] === key) { found = true; break; }
+      }
+      if (!found) sheet.appendRow([key, '']);
+    }
+  });
+}
 
 function buildTestSheets(ss) {
   Object.values(getAllTestSheetNames()).forEach(function(name) {
@@ -245,7 +275,7 @@ function initExternalScoresSheet(sheet) {
 }
 
 function buildResultHeaders(fields, extraColumns) {
-  var headers = ['生徒ID', 'ファイル名', 'ファイルID', '氏名'];
+  var headers = ['生徒ID', 'ファイル名', 'ファイルID', '補正画像FileID', '氏名'];
   fields.forEach(function(f) {
     var label = f.displayName || f.id;
     headers.push(label + '_テキスト');
@@ -317,6 +347,7 @@ function getResultColumnMap(headers) {
     studentId: headers.indexOf('生徒ID'),
     fileName: headers.indexOf('ファイル名'),
     fileId: headers.indexOf('ファイルID'),
+    warpedFileId: headers.indexOf('補正画像FileID'),
     name: headers.indexOf('氏名'),
     fields: {},
     extras: {}
@@ -428,11 +459,13 @@ function createTest(testName, subject, dateTime) {
     DriveApp.getFileById(ss.getId()).moveTo(parents.next());
   }
 
+  ensureHubSheetColumns(hubSs.getSheetByName(SHEET_HUB_TEST_LIST));
   hubSs.getSheetByName(SHEET_HUB_TEST_LIST).appendRow([
     testName, ss.getId(), ss.getUrl(),
     Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss'),
-    '作成中'
+    '作成中', '0', ''
   ]);
+  setTestInfoValue(ss, '現在ステップ', '0');
 
   PropertiesService.getScriptProperties().setProperty('ACTIVE_TEST_SS_ID', ss.getId());
 
@@ -444,7 +477,7 @@ function createTest(testName, subject, dateTime) {
   };
 }
 
-function listTests() {
+function listTests(limit) {
   initializeHub();
   var hubSs = getHubSs();
   setupHubSheets(hubSs);
@@ -452,6 +485,9 @@ function listTests() {
   var data = sheet.getDataRange().getValues();
   if (data.length <= 1) return [];
 
+  var headers = data[0];
+  var colStep = headers.indexOf('現在ステップ');
+  var colSaved = headers.indexOf('最終保存日時');
   var activeId = getActiveTestSsId();
   var list = [];
   for (var i = 1; i < data.length; i++) {
@@ -461,10 +497,22 @@ function listTests() {
       url: data[i][2],
       createdAt: data[i][3],
       status: data[i][4],
+      currentStep: colStep >= 0 ? data[i][colStep] : '',
+      lastSavedAt: colSaved >= 0 ? data[i][colSaved] : '',
       isActive: data[i][1] === activeId
     });
   }
+  list.sort(function(a, b) {
+    var da = a.lastSavedAt || a.createdAt || '';
+    var db = b.lastSavedAt || b.createdAt || '';
+    return db.localeCompare(da);
+  });
+  if (limit && limit > 0) list = list.slice(0, limit);
   return list;
+}
+
+function getRecentTests(limit) {
+  return listTests(limit || 20);
 }
 
 function setActiveTest(testSsId) {
@@ -476,14 +524,65 @@ function setActiveTest(testSsId) {
 
 function getTestInfo(testSsId) {
   var ss = testSsId ? SpreadsheetApp.openById(testSsId) : getActiveTestSs();
+  ensureTestInfoKeys(ss);
   return {
     testSsId: ss.getId(),
     url: ss.getUrl(),
     info: getTestInfoObject(ss),
     fields: getAnswerFields(ss),
     points: getPointsMap(ss),
-    activeTestSsId: ss.getId()
+    activeTestSsId: ss.getId(),
+    currentStep: parseInt(getTestInfoValue(ss, '現在ステップ'), 10) || 0
   };
+}
+
+function updateHubTestProgress(testSsId, stepNum, savedAt) {
+  var hubSs = getHubSs();
+  var sheet = hubSs.getSheetByName(SHEET_HUB_TEST_LIST);
+  ensureHubSheetColumns(sheet);
+  var data = sheet.getDataRange().getValues();
+  var headers = data[0];
+  var colStep = headers.indexOf('現在ステップ');
+  var colSaved = headers.indexOf('最終保存日時');
+  for (var i = 1; i < data.length; i++) {
+    if (data[i][1] === testSsId) {
+      if (colStep >= 0) sheet.getRange(i + 1, colStep + 1).setValue(String(stepNum));
+      if (colSaved >= 0) sheet.getRange(i + 1, colSaved + 1).setValue(savedAt);
+      if (headers.indexOf('ステータス') >= 0) sheet.getRange(i + 1, headers.indexOf('ステータス') + 1).setValue('作業中');
+      return;
+    }
+  }
+}
+
+function saveStepProgress(stepNum, clientPayload) {
+  var ss = getActiveTestSs();
+  ensureTestInfoKeys(ss);
+  var now = Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss');
+  setTestInfoValue(ss, '現在ステップ', String(stepNum));
+  setTestInfoValue(ss, '最終保存日時', now);
+  updateHubTestProgress(ss.getId(), stepNum, now);
+
+  if (stepNum === 1 && clientPayload && clientPayload.fields) {
+    saveAnswerFields(clientPayload.fields);
+    if (clientPayload.modelBase64) {
+      saveModelAnswerImage(clientPayload.modelBase64, clientPayload.width, clientPayload.height);
+    }
+  } else if (stepNum === 2 && clientPayload && clientPayload.points) {
+    savePoints(clientPayload.points);
+  } else if (stepNum === 3 && clientPayload && clientPayload.folderId) {
+    setTestInfoValue(ss, '生徒解答フォルダID', clientPayload.folderId);
+  } else if (stepNum === 8 && clientPayload && clientPayload.identityFields) {
+    saveIdentityFields(clientPayload.identityFields);
+  }
+  return { step: stepNum, savedAt: now };
+}
+
+function checkVisionApiKey() {
+  var key = PropertiesService.getScriptProperties().getProperty('VISION_API_KEY');
+  if (!key || !String(key).trim()) {
+    return { configured: false, message: 'VISION_API_KEY がスクリプトプロパティに未設定です。Apps Script のプロジェクト設定から追加してください。' };
+  }
+  return { configured: true, message: 'Vision API キーが設定されています。' };
 }
 
 function updateTestStatus(status) {
@@ -860,9 +959,6 @@ function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists) {
 
     var imageBytes = warpedBase64.split(',')[1];
     var saved = saveWarpedImage(warpedBase64, sourceFileName, studentId);
-    if (sourceFileId && saved.fileId) {
-      registerWarpedMapping(sourceFileId, saved.fileId);
-    }
 
     var boxes = fieldsToBoxes(fields);
     var visionResult = callVisionAPI(imageBytes);
@@ -894,6 +990,20 @@ function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists) {
   }
 }
 
+function ensureWarpedFileIdColumn(sheet) {
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  if (headers.indexOf('補正画像FileID') >= 0) return headers;
+  var fileIdIdx = headers.indexOf('ファイルID');
+  if (fileIdIdx >= 0) {
+    sheet.insertColumnAfter(fileIdIdx + 1);
+    sheet.getRange(1, fileIdIdx + 2).setValue('補正画像FileID');
+  } else {
+    sheet.insertColumnAfter(3);
+    sheet.getRange(1, 4).setValue('補正画像FileID');
+  }
+  return sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+}
+
 function appendResultRow(ss, fileMeta, studentId, textMapping) {
   var sheet = ss.getSheetByName(SHEET_RESULTS);
   var fields = getAnswerFields(ss);
@@ -901,6 +1011,7 @@ function appendResultRow(ss, fileMeta, studentId, textMapping) {
     initResultsSheet(sheet, fields, getDynamicResultExtraColumns(ss));
   }
 
+  ensureWarpedFileIdColumn(sheet);
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var row = new Array(headers.length).fill('');
 
@@ -908,6 +1019,7 @@ function appendResultRow(ss, fileMeta, studentId, textMapping) {
   if (map.studentId >= 0) row[map.studentId] = studentId;
   if (map.fileName >= 0) row[map.fileName] = fileMeta.fileName || '';
   if (map.fileId >= 0) row[map.fileId] = fileMeta.fileId || '';
+  if (map.warpedFileId >= 0) row[map.warpedFileId] = fileMeta.warpedFileId || '';
 
   fields.forEach(function(f) {
     var label = f.displayName || f.id;
@@ -1530,33 +1642,50 @@ function parseRosterCsv(csvText) {
   return rows;
 }
 
-function saveWarpedFileMapping(sourceFileId, warpedFileId) {
-  PropertiesService.getScriptProperties().setProperty('WARP_' + sourceFileId, warpedFileId);
-  return true;
-}
-
-function getWarpedFileIdForSource(sourceFileId) {
-  return PropertiesService.getScriptProperties().getProperty('WARP_' + sourceFileId) || '';
-}
-
-function registerWarpedMapping(sourceFileId, warpedFileId) {
-  if (sourceFileId && warpedFileId) {
-    PropertiesService.getScriptProperties().setProperty('WARP_' + sourceFileId, warpedFileId);
+function getWarpedFileIdFromResults(ss, sourceFileId) {
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  if (sheet.getLastRow() <= 1) return '';
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colMap = getResultColumnMap(headers);
+  if (colMap.fileId < 0 || colMap.warpedFileId < 0) return '';
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  for (var i = 0; i < data.length; i++) {
+    if (String(data[i][colMap.fileId]) === String(sourceFileId)) {
+      return String(data[i][colMap.warpedFileId] || '');
+    }
   }
-  return true;
+  return '';
+}
+
+function cleanupWarpScriptProperties() {
+  var props = PropertiesService.getScriptProperties();
+  var all = props.getProperties();
+  var removed = 0;
+  Object.keys(all).forEach(function(key) {
+    if (key.indexOf('WARP_') === 0) {
+      props.deleteProperty(key);
+      removed++;
+    }
+  });
+  SpreadsheetApp.getUi().alert('WARP_* プロパティを ' + removed + ' 件削除しました。');
+  return removed;
 }
 
 function getWarpedImageBase64(sourceFileId) {
-  var warpedId = getWarpedFileIdForSource(sourceFileId);
+  var ss = getActiveTestSs();
+  var warpedId = getWarpedFileIdFromResults(ss, sourceFileId);
   if (warpedId) {
     try {
       return getDriveFileBase64(warpedId);
     } catch (e) { /* fallback */ }
   }
-  var ss = getActiveTestSs();
   var folder = getOrCreateTestImageFolder(ss);
-  var files = folder.getFilesByName('補正_' + sourceFileId);
-  if (files.hasNext()) return getDriveFileBase64(files.next().getId());
-
+  var files = folder.getFiles();
+  while (files.hasNext()) {
+    var f = files.next();
+    if (f.getName().indexOf(String(sourceFileId)) >= 0 && f.getName().indexOf('補正_') === 0) {
+      return getDriveFileBase64(f.getId());
+    }
+  }
   return getDriveFileBase64(sourceFileId);
 }
