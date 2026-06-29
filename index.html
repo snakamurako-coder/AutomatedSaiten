@@ -288,6 +288,7 @@
                 <div class="flex-1 min-w-[200px]"><label class="font-semibold">DriveフォルダID</label><input id="drive-folder-id" class="w-full border rounded p-2 text-sm" placeholder="フォルダURLの id= 以降"></div>
                 <button type="button" id="drive-list-btn" data-busy-label="取得中..." onclick="withBusyButton(event.currentTarget, listDriveFiles)" class="bg-gray-200 px-3 py-2 rounded">ファイル一覧</button>
                 <label class="flex items-center gap-1">並列 <input type="number" id="batch-ocr-concurrency" value="4" min="1" max="5" class="w-12 border rounded p-1 text-center" title="同時処理枚数（3〜5推奨）"></label>
+                <label class="flex items-center gap-1" title="1枚の処理がこの秒数を超えたら打ち切って次へ">上限(秒) <input type="number" id="batch-file-timeout-sec" value="120" min="30" max="600" class="w-14 border rounded p-1 text-center"></label>
                 <button type="button" onclick="withBusyButton(event.currentTarget, function(){ return startBatchOcr('unprocessed'); })" id="batch-start-btn" data-busy-label="OCR実行中..." data-keep-busy="0" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">未処理のみOCR</button>
                 <button type="button" id="batch-retry-failed-btn" data-busy-label="再実行中..." onclick="withBusyButton(event.currentTarget, function(){ return startBatchOcr('retry'); })" class="bg-red-600 text-white px-3 py-2 rounded" title="前回失敗したファイルのみ再処理">失敗分のみ再実行</button>
                 <button type="button" onclick="BatchProcessor.pause()" class="bg-orange-200 px-3 py-2 rounded">一時停止</button>
@@ -836,18 +837,56 @@ var RegionEditor = (function() {
 var BatchProcessor = (function() {
   var FLUSH_CHUNK = 15;
   var DEFAULT_CONCURRENCY = 4;
+  var DEFAULT_FILE_TIMEOUT_SEC = 120;
+  var FAIL_STEP_LABELS = {
+    load_src: '原画像取得',
+    load_warped: '補正画像読込',
+    detect_warp: '枠検出・補正',
+    save_warp: '補正画像保存',
+    crop: '記述欄切り出し',
+    ocr: 'OCRテキスト化',
+    flush: 'シート反映',
+    timeout: '処理時間上限',
+    unknown: '不明'
+  };
   var queue = [], running = false, paused = false, activeCount = 0;
-  var stats = { total: 0, done: 0, skipped: 0, failed: 0, flushed: 0, warpFailed: 0, ocrFailed: 0 };
+  var stats = { total: 0, done: 0, skipped: 0, failed: 0, flushed: 0, warpFailed: 0, ocrFailed: 0, timedOut: 0 };
   var pendingRows = [], processedIds = {}, processedFileNames = {}, failedFileMeta = {}, startTime = 0;
   var onProgress, onComplete, onError, onItemUpdate, onFlush;
   var orientation = 'landscape', threshVal = 128, fillThreshold = 0.35;
   var concurrency = DEFAULT_CONCURRENCY;
+  var fileTimeoutSec = DEFAULT_FILE_TIMEOUT_SEC;
+
+  function failStageFromStep(stepKey) {
+    if (['load_src', 'detect_warp', 'save_warp'].indexOf(stepKey) >= 0) return 'warp';
+    return 'ocr';
+  }
+
+  function getFailStepLabel(stepKey) {
+    return FAIL_STEP_LABELS[stepKey] || stepKey || FAIL_STEP_LABELS.unknown;
+  }
+
+  function withFileTimeout(promise, ms, fileName) {
+    return new Promise(function(resolve, reject) {
+      var timer = setTimeout(function() {
+        var err = new Error('1枚あたりの処理上限（' + Math.round(ms / 1000) + '秒）を超えました: ' + (fileName || ''));
+        err.code = 'FILE_TIMEOUT';
+        reject(err);
+      }, ms);
+      promise.then(function(v) { clearTimeout(timer); resolve(v); })
+        .catch(function(e) { clearTimeout(timer); reject(e); });
+    });
+  }
 
   function configure(opts) {
     orientation = opts.orientation || orientation;
     threshVal = opts.threshVal != null ? opts.threshVal : threshVal;
     fillThreshold = opts.fillThreshold != null ? opts.fillThreshold : fillThreshold;
     concurrency = opts.concurrency != null ? opts.concurrency : concurrency;
+    if (opts.fileTimeoutSec != null) {
+      var t = parseInt(opts.fileTimeoutSec, 10);
+      fileTimeoutSec = (isNaN(t) || t < 30) ? DEFAULT_FILE_TIMEOUT_SEC : Math.min(600, t);
+    }
     onProgress = opts.onProgress;
     onComplete = opts.onComplete;
     onError = opts.onError;
@@ -904,13 +943,38 @@ var BatchProcessor = (function() {
     if (key) localStorage.removeItem(key);
   }
 
-  function recordFailed(file, stage, error) {
+  function recordFailed(file, failStep, error, failStage) {
     var fileId = file && file.id ? String(file.id) : '';
     var fileName = file && file.name ? normalizeFileName(file.name) : '';
     var key = fileId || ('name:' + fileName);
     if (!key || key === 'name:') return;
-    failedFileMeta[key] = { stage: stage || 'unknown', fileName: fileName, error: error || '' };
+    failedFileMeta[key] = {
+      stage: failStage || failStageFromStep(failStep),
+      failStep: failStep || 'unknown',
+      fileName: fileName,
+      error: error || ''
+    };
     saveFailedToStorage();
+  }
+
+  function reportFileFailure(file, failStep, error, failStage) {
+    var stage = failStage || failStageFromStep(failStep);
+    stats.failed++;
+    if (stage === 'warp') stats.warpFailed++;
+    else stats.ocrFailed++;
+    recordFailed(file, failStep, error, stage);
+    var msg = getFailStepLabel(failStep) + ': ' + (error || '');
+    if (onError) onError(file, msg);
+    if (onItemUpdate) {
+      onItemUpdate({
+        file: file,
+        status: 'failed',
+        failStep: failStep,
+        failStage: stage,
+        error: error || ''
+      });
+    }
+    if (onProgress) onProgress({ file: file, stats: stats, status: 'failed' });
   }
 
   function clearFailedFile(file) {
@@ -979,7 +1043,7 @@ var BatchProcessor = (function() {
 
   function setQueue(files) {
     queue = files.slice();
-    stats = { total: queue.length, done: 0, skipped: 0, failed: 0, flushed: 0 };
+    stats = { total: queue.length, done: 0, skipped: 0, failed: 0, flushed: 0, warpFailed: 0, ocrFailed: 0, timedOut: 0 };
   }
 
   function pause() { paused = true; }
@@ -1043,9 +1107,10 @@ var BatchProcessor = (function() {
     if (onComplete) onComplete(stats);
   }
 
-  async function processOneFile(file) {
+  async function processOneFileInner(file, tracker) {
+    tracker.stepKey = 'prepare';
     if (onProgress) onProgress({ file: file, stats: stats, status: 'processing' });
-    if (onItemUpdate) onItemUpdate({ file: file, status: 'processing' });
+    if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: tracker.stepKey });
 
     if (isProcessedFile(file)) {
       stats.skipped++;
@@ -1059,6 +1124,7 @@ var BatchProcessor = (function() {
     var ocrOnly = file.stage === 'ocr_only' || !!warpedFileId;
 
     if (!ocrOnly) {
+      tracker.stepKey = 'load_warped';
       var existingWarp = await gasRun('getExistingWarpedForFile', file.id || '', file.name);
       if (existingWarp && existingWarp.warpedFileId) {
         ocrOnly = true;
@@ -1067,12 +1133,14 @@ var BatchProcessor = (function() {
     }
 
     if (ocrOnly) {
+      tracker.stepKey = 'load_warped';
       if (!warpedFileId) {
         var ew = await gasRun('getExistingWarpedForFile', file.id || '', file.name);
         warpedFileId = ew && ew.warpedFileId ? ew.warpedFileId : '';
       }
       if (!warpedFileId) {
-        throw new Error('補正画像が見つかりません（OCRのみ再実行）');
+        reportFileFailure(file, 'load_warped', '補正画像が見つかりません（OCRのみ再実行）');
+        return;
       }
       var wdata = await gasRun('getDriveFileBase64', warpedFileId);
       base64 = 'data:image/jpeg;base64,' + wdata.base64;
@@ -1085,33 +1153,29 @@ var BatchProcessor = (function() {
         studentId = detectOmrId(wmat, getPaperConfig(orientation), fillThreshold);
         wmat.delete();
       }
-      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', subStatus: 'ocr_only' });
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'load_warped' });
     } else {
+      tracker.stepKey = 'load_src';
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'load_src' });
       try {
         if (!file.id) throw new Error('元画像のファイルIDが不明です。ファイル一覧を再取得してください。');
         var fileData = await gasRun('getDriveFileBase64', file.id);
+        tracker.stepKey = 'detect_warp';
+        if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'detect_warp' });
         var img = await driveFileToImageElement(fileData);
         var result = warpImageFromElement(img, orientation, threshVal);
         base64 = matToBase64Jpeg(result.warpedMat);
         studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold);
         result.warpedMat.delete();
       } catch (warpErr) {
-        stats.failed++;
-        stats.warpFailed++;
-        recordFailed(file, 'warp', warpErr.message || String(warpErr));
-        if (onError) onError(file, '補正失敗: ' + (warpErr.message || warpErr));
-        if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', failStage: 'warp', error: warpErr.message || String(warpErr) });
-        if (onProgress) onProgress({ file: file, stats: stats, status: 'failed' });
+        reportFileFailure(file, tracker.stepKey, warpErr.message || String(warpErr));
         return;
       }
+      tracker.stepKey = 'save_warp';
+      if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'save_warp' });
       var saveWarp = await gasRun('saveWarpedOnly', file, studentId, base64);
       if (!saveWarp.success) {
-        stats.failed++;
-        stats.warpFailed++;
-        recordFailed(file, 'warp', saveWarp.error);
-        if (onError) onError(file, saveWarp.error);
-        if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', failStage: 'warp', error: saveWarp.error });
-        if (onProgress) onProgress({ file: file, stats: stats, status: 'failed' });
+        reportFileFailure(file, 'save_warp', saveWarp.error || '補正画像の保存に失敗しました');
         return;
       }
       warpedFileId = saveWarp.warpedFileId;
@@ -1120,20 +1184,19 @@ var BatchProcessor = (function() {
 
     var fields = (typeof appState !== 'undefined' && appState.fields) ? appState.fields : [];
     var fieldCrops = null;
+    tracker.stepKey = 'crop';
+    if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'crop' });
     try {
       if (fieldsNeedPerCropOcr(fields)) {
         fieldCrops = await buildFieldCropsFromWarped(base64, fields);
       }
     } catch (cropErr) {
-      stats.failed++;
-      stats.ocrFailed++;
-      recordFailed(file, 'ocr', cropErr.message || String(cropErr));
-      if (onError) onError(file, '欄切り出し失敗: ' + (cropErr.message || cropErr));
-      if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', failStage: 'ocr', error: cropErr.message || String(cropErr) });
-      if (onProgress) onProgress({ file: file, stats: stats, status: 'failed' });
+      reportFileFailure(file, 'crop', cropErr.message || String(cropErr));
       return;
     }
 
+    tracker.stepKey = 'ocr';
+    if (onItemUpdate) onItemUpdate({ file: file, status: 'processing', processStep: 'ocr' });
     var ocrMeta = Object.assign({}, file, { warpedFileId: warpedFileId });
     var res = await gasRun('ocrStudentPaper', ocrMeta, studentId, base64, fieldCrops, { skipSaveWarped: skipSaveWarped, warpedFileId: warpedFileId });
     if (res.success) {
@@ -1149,36 +1212,51 @@ var BatchProcessor = (function() {
       });
       savePendingToStorage();
       if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false });
+      tracker.stepKey = 'flush';
       try {
         await flushPending(false);
       } catch (flushErr) {
-        if (onError) onError(file, 'チャンク書き込み失敗: ' + (flushErr.message || flushErr));
-        if (onItemUpdate) onItemUpdate({ file: file, status: 'done', result: res, sheetSaved: false, flushError: true });
+        var flushMsg = flushErr.message || String(flushErr);
+        if (onError) onError(file, getFailStepLabel('flush') + ': ' + flushMsg);
+        if (onItemUpdate) {
+          onItemUpdate({
+            file: file, status: 'done', result: res, sheetSaved: false, flushError: true,
+            failStep: 'flush', error: flushMsg
+          });
+        }
       }
     } else {
-      stats.failed++;
-      stats.ocrFailed++;
-      recordFailed(file, 'ocr', res.error);
-      if (onError) onError(file, res.error);
-      if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', failStage: 'ocr', error: res.error });
+      reportFileFailure(file, 'ocr', res.error || 'OCRに失敗しました');
     }
     if (onProgress) onProgress({ file: file, stats: stats, status: 'done', result: res });
+  }
+
+  async function processOneFile(file) {
+    var tracker = { stepKey: 'prepare' };
+    var timeoutMs = fileTimeoutSec * 1000;
+    try {
+      await withFileTimeout(processOneFileInner(file, tracker), timeoutMs, file.name);
+    } catch (err) {
+      if (err && err.code === 'FILE_TIMEOUT') {
+        stats.timedOut++;
+        var stepAtTimeout = tracker.stepKey || 'unknown';
+        reportFileFailure(
+          file,
+          stepAtTimeout,
+          '処理上限（' + fileTimeoutSec + '秒）を超過 — ' + getFailStepLabel(stepAtTimeout) + 'の段階で打ち切り',
+          failStageFromStep(stepAtTimeout)
+        );
+        return;
+      }
+      reportFileFailure(file, tracker.stepKey || 'unknown', err.message || String(err));
+    }
   }
 
   async function workerLoop() {
     while (running && !paused) {
       if (queue.length === 0) break;
       var file = queue.shift();
-      try {
-        await processOneFile(file);
-      } catch (err) {
-        stats.failed++;
-        var stage = (file.stage === 'ocr_only' || file.warpedFileId) ? 'ocr' : 'warp';
-        if (stage === 'ocr') stats.ocrFailed++; else stats.warpFailed++;
-        recordFailed(file, stage, err.message || String(err));
-        if (onError) onError(file, err.message || String(err));
-        if (onItemUpdate) onItemUpdate({ file: file, status: 'failed', failStage: stage, error: err.message || String(err) });
-      }
+      await processOneFile(file);
     }
     activeCount--;
     maybeFinishOrSpawn();
@@ -1230,6 +1308,7 @@ var BatchProcessor = (function() {
     getFailedFileMeta: getFailedFileMeta,
     isFileInFailedSet: isFileInFailedSet,
     getFailedCount: getFailedCount,
+    getFailStepLabel: getFailStepLabel,
     clearFailedFileIds: clearFailedFileIds,
     reloadFailedFromStorage: loadFailedFromStorage
   };
@@ -1453,7 +1532,7 @@ function updateBatchWorkQueueHint(stats) {
 
 function initBatchResultsTable(files) {
     var fields = appState.fields || [];
-    var head = '<tr><th class="p-1 border">状態</th><th class="p-1 border">ファイル名</th><th class="p-1 border">生徒ID</th>';
+    var head = '<tr><th class="p-1 border">状態</th><th class="p-1 border min-w-[120px]">失敗理由</th><th class="p-1 border">ファイル名</th><th class="p-1 border">生徒ID</th>';
     fields.forEach(function(f) {
         head += '<th class="p-1 border">' + escapeHtml(f.displayName || f.id) + '</th>';
     });
@@ -1465,6 +1544,7 @@ function initBatchResultsTable(files) {
         var cells = fields.map(function() { return '<td class="p-1 border text-gray-400">—</td>'; }).join('');
         var stageHint = f.stage === 'ocr_only' ? ' <span class="text-indigo-600">(補正済)</span>' : (f.inArchive ? ' <span class="text-gray-500">(元画像)</span>' : '');
         return '<tr id="' + batchRowDomId(f) + '" class="bg-gray-50"><td class="p-1 border batch-status">待機</td>' +
+            '<td class="p-1 border batch-fail-detail text-gray-400">—</td>' +
             '<td class="p-1 border truncate max-w-[140px]" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + stageHint + '</td>' +
             '<td class="p-1 border batch-student-id">—</td>' + cells +
             '<td class="p-1 border batch-sheet-status text-gray-400">—</td></tr>';
@@ -1477,31 +1557,55 @@ function updateBatchResultRow(ev) {
     if (!row) return;
     var fields = appState.fields || [];
     var statusCell = row.querySelector('.batch-status');
+    var failCell = row.querySelector('.batch-fail-detail');
     var idCell = row.querySelector('.batch-student-id');
     var sheetCell = row.querySelector('.batch-sheet-status');
 
+    function setFailDetail(stepKey, errorMsg) {
+        if (!failCell) return;
+        if (!stepKey && !errorMsg) {
+            failCell.textContent = '—';
+            failCell.className = 'p-1 border batch-fail-detail text-gray-400';
+            failCell.title = '';
+            return;
+        }
+        var stepLabel = BatchProcessor.getFailStepLabel(stepKey);
+        var detail = stepLabel + (errorMsg ? ' — ' + errorMsg : '');
+        failCell.textContent = truncateText(detail, 48);
+        failCell.title = detail;
+        failCell.className = 'p-1 border batch-fail-detail text-red-700 text-xs';
+    }
+
     if (ev.status === 'processing') {
         row.className = 'bg-blue-50';
-        if (statusCell) statusCell.innerHTML = '<span class="text-blue-600"><i class="fa-solid fa-spinner fa-spin"></i> 処理中</span>';
+        var procLabel = ev.processStep ? BatchProcessor.getFailStepLabel(ev.processStep) : '処理中';
+        if (statusCell) statusCell.innerHTML = '<span class="text-blue-600"><i class="fa-solid fa-spinner fa-spin"></i> ' + escapeHtml(procLabel) + '</span>';
+        setFailDetail(null, null);
     } else if (ev.status === 'skipped') {
         row.className = 'bg-gray-100';
         if (statusCell) statusCell.textContent = 'スキップ';
+        setFailDetail(null, null);
         if (sheetCell) sheetCell.textContent = '済';
     } else if (ev.status === 'failed') {
         row.className = 'bg-red-50';
-        var failLabel = ev.failStage === 'warp' ? '失敗(補正)' : (ev.failStage === 'ocr' ? '失敗(OCR)' : '失敗');
-        if (statusCell) statusCell.innerHTML = '<span class="text-red-600" title="' + escapeHtml(ev.error || '') + '">' + failLabel + '</span>';
+        if (statusCell) statusCell.innerHTML = '<span class="text-red-600 font-semibold">失敗</span>';
+        setFailDetail(ev.failStep || ev.failStage, ev.error || '');
         if (sheetCell) sheetCell.textContent = '—';
     } else if (ev.status === 'done' && ev.result) {
         row.className = 'bg-green-50';
         if (statusCell) statusCell.textContent = '完了';
+        if (ev.flushError) {
+            setFailDetail(ev.failStep || 'flush', ev.error || 'シートへの反映に失敗');
+        } else {
+            setFailDetail(null, null);
+        }
         if (idCell) idCell.textContent = ev.result.studentId || '—';
         var tds = row.querySelectorAll('td');
         fields.forEach(function(f, i) {
             var txt = (ev.result.textMapping && ev.result.textMapping[f.id]) || 'なし';
-            if (tds[3 + i]) {
-                tds[3 + i].textContent = truncateText(txt, 24);
-                tds[3 + i].title = txt;
+            if (tds[4 + i]) {
+                tds[4 + i].textContent = truncateText(txt, 24);
+                tds[4 + i].title = txt;
             }
         });
         if (sheetCell) {
@@ -2136,7 +2240,7 @@ async function syncBatchTableFromSheet() {
             var tds = row.querySelectorAll('td');
             fields.forEach(function(field, fi) {
                 var txt = (data.textMapping && data.textMapping[field.id]) || 'なし';
-                var cellIdx = 3 + fi;
+                var cellIdx = 4 + fi;
                 if (tds[cellIdx]) {
                     tds[cellIdx].textContent = txt;
                     tds[cellIdx].className = 'p-1 border font-mono text-xs';
@@ -2966,7 +3070,15 @@ async function startBatchOcr(mode) {
             var meta = failedMeta[f.id] || Object.keys(failedMeta).map(function(k) { return failedMeta[k]; }).find(function(m) {
                 return m && m.fileName === String(f.name).trim();
             });
-            if (meta && meta.stage === 'ocr') {
+            var ocrOnlySteps = ['ocr', 'crop', 'load_warped', 'flush'];
+            var warpSteps = ['load_src', 'detect_warp', 'save_warp'];
+            if (meta && meta.failStep && warpSteps.indexOf(meta.failStep) >= 0) {
+                return f;
+            }
+            if (meta && (meta.stage === 'ocr' || (meta.failStep && ocrOnlySteps.indexOf(meta.failStep) >= 0))) {
+                return Object.assign({}, f, { stage: 'ocr_only' });
+            }
+            if (meta && meta.error && meta.error.indexOf('処理上限') >= 0 && meta.failStep && warpSteps.indexOf(meta.failStep) < 0) {
                 return Object.assign({}, f, { stage: 'ocr_only' });
             }
             return f;
@@ -3020,6 +3132,7 @@ async function startBatchOcr(mode) {
         orientation: document.getElementById('orientation-1') ? document.getElementById('orientation-1').value : 'landscape',
         threshVal: parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10),
         concurrency: parseInt(document.getElementById('batch-ocr-concurrency') ? document.getElementById('batch-ocr-concurrency').value : 4, 10),
+        fileTimeoutSec: parseInt(document.getElementById('batch-file-timeout-sec') ? document.getElementById('batch-file-timeout-sec').value : 120, 10),
         onProgress: function(ev) {
             var s = ev.stats;
             var pct = s.total ? Math.round((s.done + s.skipped + s.failed) / s.total * 100) : 0;
@@ -3045,7 +3158,8 @@ async function startBatchOcr(mode) {
             updateBatchFlushStatus();
             updateBatchRetryFailedButton();
             setStatus('OCR完了: 成功' + s.done + ' スキップ' + s.skipped + ' 失敗' + s.failed +
-                '（補正' + (s.warpFailed || 0) + ' / OCR' + (s.ocrFailed || 0) + '）シート反映' + s.flushed + '件');
+                '（補正' + (s.warpFailed || 0) + ' / OCR' + (s.ocrFailed || 0) +
+                ((s.timedOut || 0) ? ' / 時間切れ' + s.timedOut : '') + '）シート反映' + s.flushed + '件');
             if (mode !== 'retry') {
                 gasRun('getOcrWorkQueue').then(function(wq) {
                     appState.ocrWorkStats = wq.stats;
@@ -3066,12 +3180,14 @@ function updateBatchRetryFailedButton() {
     var n = BatchProcessor.getFailedCount();
     btn.disabled = n === 0;
     var meta = BatchProcessor.getFailedFileMeta();
-    var warpN = 0, ocrN = 0;
+    var parts = {};
     Object.keys(meta).forEach(function(k) {
-        if (meta[k].stage === 'warp') warpN++;
-        else if (meta[k].stage === 'ocr') ocrN++;
+        var m = meta[k];
+        var label = BatchProcessor.getFailStepLabel(m.failStep || m.stage || 'unknown');
+        parts[label] = (parts[label] || 0) + 1;
     });
-    btn.title = n > 0 ? ('失敗 ' + n + ' 件（補正' + warpN + ' / OCR' + ocrN + '）を再実行') : '失敗したファイルがありません';
+    var breakdown = Object.keys(parts).map(function(l) { return l + parts[l]; }).join(' / ');
+    btn.title = n > 0 ? ('失敗 ' + n + ' 件: ' + breakdown) : '失敗したファイルがありません';
 }
 
 function populateCriteriaSelect() {
