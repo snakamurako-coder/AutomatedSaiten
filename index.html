@@ -150,11 +150,202 @@
 </div>
 
 <img id="hidden-source-img" style="display:none">
-<script><?!= include('ImageWarp'); ?></script>
-<script><?!= include('PdfLoader'); ?></script>
-<script><?!= include('RegionEditor'); ?></script>
-<script><?!= include('BatchProcessor'); ?></script>
 <script>
+/** --- ImageWarp / PdfLoader / RegionEditor / BatchProcessor --- */
+var CELL_PX = 20, OFFSET_COL = 2, OFFSET_ROW = 2;
+function getPaperConfig(orientation) {
+  var isPortrait = orientation === 'portrait';
+  return { isPortrait: isPortrait, borderCols: isPortrait ? 51 : 73, borderRows: isPortrait ? 73 : 51,
+    warpW: (isPortrait ? 51 : 73) * CELL_PX, warpH: (isPortrait ? 73 : 51) * CELL_PX,
+    idStartCol: isPortrait ? 42 : 64, idStartRow: 3 };
+}
+function warpImageFromElement(imgElement, orientation, threshVal) {
+  var cfg = getPaperConfig(orientation); threshVal = threshVal != null ? threshVal : 128;
+  var src = cv.imread(imgElement), gray = new cv.Mat(), thresh = new cv.Mat();
+  var contours = new cv.MatVector(), hierarchy = new cv.Mat();
+  cv.cvtColor(src, gray, cv.COLOR_RGBA2GRAY, 0);
+  cv.threshold(gray, thresh, threshVal, 255, cv.THRESH_BINARY_INV);
+  cv.findContours(thresh, contours, hierarchy, cv.RETR_EXTERNAL, cv.CHAIN_APPROX_SIMPLE);
+  var maxArea = 0, maxContour = null;
+  for (var i = 0; i < contours.size(); ++i) { var cnt = contours.get(i), area = cv.contourArea(cnt);
+    if (area > maxArea) { maxArea = area; maxContour = cnt; } }
+  if (!maxContour) { src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+    throw new Error('用紙外周の黒い太枠線を検知できません。'); }
+  var approx = new cv.Mat();
+  cv.approxPolyDP(maxContour, approx, 0.02 * cv.arcLength(maxContour, true), true);
+  if (approx.rows !== 4) { src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete(); approx.delete();
+    throw new Error('四角形外枠の検出に失敗しました。'); }
+  var pts = []; for (var j = 0; j < 4; j++) pts.push({ x: approx.data32S[j * 2], y: approx.data32S[j * 2 + 1] });
+  pts.sort(function(a, b) { return a.y - b.y; });
+  var topPts = pts.slice(0, 2).sort(function(a, b) { return a.x - b.x; });
+  var botPts = pts.slice(2, 4).sort(function(a, b) { return b.x - a.x; });
+  var srcTri = cv.matFromArray(4, 1, cv.CV_32FC2, [topPts[0].x, topPts[0].y, topPts[1].x, topPts[1].y, botPts[0].x, botPts[0].y, botPts[1].x, botPts[1].y]);
+  var dstTri = cv.matFromArray(4, 1, cv.CV_32FC2, [0, 0, cfg.warpW, 0, cfg.warpW, cfg.warpH, 0, cfg.warpH]);
+  var M = cv.getPerspectiveTransform(srcTri, dstTri), warpedColor = new cv.Mat();
+  cv.warpPerspective(src, warpedColor, M, new cv.Size(cfg.warpW, cfg.warpH));
+  src.delete(); gray.delete(); thresh.delete(); contours.delete(); hierarchy.delete();
+  approx.delete(); srcTri.delete(); dstTri.delete(); M.delete();
+  return { warpedMat: warpedColor, cfg: cfg };
+}
+function matToBase64Jpeg(warpedMat, quality) {
+  quality = quality || 0.85; var canvas = document.createElement('canvas');
+  canvas.width = warpedMat.cols; canvas.height = warpedMat.rows;
+  cv.imshow(canvas, warpedMat); return canvas.toDataURL('image/jpeg', quality);
+}
+function detectOmrId(warpedMat, cfg, fillThreshold) {
+  var gray = new cv.Mat(); cv.cvtColor(warpedMat, gray, cv.COLOR_RGBA2GRAY, 0);
+  var thresh = new cv.Mat(); cv.threshold(gray, thresh, 128, 255, cv.THRESH_BINARY_INV);
+  var detectedId = '';
+  for (var r = 0; r < 4; r++) {
+    var rowIndex = cfg.idStartRow, markedDigit = '?', maxFill = 0;
+    rowIndex = cfg.idStartRow + r;
+    for (var c = 0; c < 10; c++) {
+      var x = (cfg.idStartCol + c - OFFSET_COL) * CELL_PX, y = (rowIndex - OFFSET_ROW) * CELL_PX, margin = 4;
+      var roi = thresh.roi(new cv.Rect(x + margin, y + margin, CELL_PX - margin * 2, CELL_PX - margin * 2));
+      var fillRatio = cv.countNonZero(roi) / (roi.cols * roi.rows); roi.delete();
+      if (fillRatio > fillThreshold && fillRatio > maxFill) { maxFill = fillRatio; markedDigit = String(c); }
+    }
+    detectedId += markedDigit;
+  }
+  gray.delete(); thresh.delete(); return detectedId;
+}
+function cropRegionFromBase64(base64, region) {
+  return new Promise(function(resolve) {
+    var img = new Image();
+    img.onload = function() {
+      var canvas = document.createElement('canvas'); canvas.width = region.width; canvas.height = region.height;
+      canvas.getContext('2d').drawImage(img, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
+      resolve(canvas.toDataURL('image/jpeg', 0.9));
+    };
+    img.src = base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64;
+  });
+}
+async function loadPdfFirstPageAsImage(base64OrBytes) {
+  if (typeof pdfjsLib === 'undefined') throw new Error('PDF.js が読み込まれていません。');
+  pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+  var raw = base64OrBytes; if (typeof raw === 'string' && raw.indexOf(',') >= 0) raw = raw.split(',')[1];
+  var binary = atob(raw), bytes = new Uint8Array(binary.length);
+  for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+  var pdf = await pdfjsLib.getDocument({ data: bytes }).promise, page = await pdf.getPage(1);
+  var viewport = page.getViewport({ scale: 2.0 }), canvas = document.createElement('canvas');
+  canvas.width = viewport.width; canvas.height = viewport.height;
+  await page.render({ canvasContext: canvas.getContext('2d'), viewport: viewport }).promise;
+  return canvas.toDataURL('image/jpeg', 0.92);
+}
+async function driveFileToImageElement(fileData) {
+  var dataUrl = fileData.isPdf ? await loadPdfFirstPageAsImage(fileData.base64)
+    : 'data:' + (fileData.mimeType || 'image/jpeg') + ';base64,' + fileData.base64;
+  return new Promise(function(resolve, reject) {
+    var img = new Image(); img.onload = function() { resolve(img); }; img.onerror = reject; img.src = dataUrl;
+  });
+}
+var RegionEditor = (function() {
+  var canvas, ctx, image, regions, selectedIdx, mode, dragState, onChange, HANDLE = 8;
+  var IDENTITY_TYPES = ['学年', '組', '番号', '氏名'];
+  function init(canvasId, options) {
+    canvas = document.getElementById(canvasId); if (!canvas) return;
+    ctx = canvas.getContext('2d');
+    regions = (options && options.initialRegions) ? JSON.parse(JSON.stringify(options.initialRegions)) : [];
+    mode = (options && options.mode) || 'answer'; selectedIdx = -1; onChange = options && options.onChange;
+    canvas.onmousedown = onMouseDown; canvas.onmousemove = onMouseMove; canvas.onmouseup = onMouseUp; canvas.onmouseleave = onMouseUp;
+    redraw();
+  }
+  function setImage(img) { image = img; canvas.width = img.width || img.naturalWidth; canvas.height = img.height || img.naturalHeight; redraw(); }
+  function getRegions() {
+    return regions.map(function(r, i) {
+      if (mode === 'identity') return { type: r.type || r.id, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height) };
+      return { id: r.id || ('記述欄' + (i + 1)), displayName: r.displayName || r.id || ('記述欄' + (i + 1)),
+        x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height), order: r.order != null ? r.order : i + 1 };
+    });
+  }
+  function addRegion(x, y, w, h) {
+    if (mode === 'identity') {
+      var used = regions.map(function(r) { return r.type; });
+      var nextType = IDENTITY_TYPES.find(function(t) { return used.indexOf(t) < 0; }); if (!nextType) return;
+      regions.push({ type: nextType, x: x, y: y, w: w, h: h });
+    } else { var num = regions.length + 1, id = '記述欄' + num; regions.push({ id: id, displayName: id, x: x, y: y, w: w, h: h, order: num }); }
+    selectedIdx = regions.length - 1; redraw(); if (onChange) onChange(getRegions());
+  }
+  function redraw() {
+    if (!ctx || !canvas) return; ctx.clearRect(0, 0, canvas.width, canvas.height);
+    if (image) ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    regions.forEach(function(r, idx) {
+      var x = r.x, y = r.y, w = r.w || r.width, h = r.h || r.height;
+      ctx.strokeStyle = idx === selectedIdx ? '#2563eb' : '#16a34a'; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = idx === selectedIdx ? 'rgba(37,99,235,0.15)' : 'rgba(22,163,74,0.12)'; ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = '#1e40af'; ctx.font = 'bold 12px sans-serif';
+      ctx.fillText(mode === 'identity' ? (r.type || r.id) : (r.displayName || r.id), x + 4, y + 14);
+    });
+  }
+  function getCanvasCoords(e) {
+    var rect = canvas.getBoundingClientRect();
+    return { x: (e.clientX - rect.left) * (canvas.width / rect.width), y: (e.clientY - rect.top) * (canvas.height / rect.height) };
+  }
+  function onMouseDown(e) {
+    var p = getCanvasCoords(e), idx = -1, i;
+    for (i = regions.length - 1; i >= 0; i--) {
+      var rw = regions[i].w || regions[i].width, rh = regions[i].h || regions[i].height;
+      if (p.x >= regions[i].x && p.x <= regions[i].x + rw && p.y >= regions[i].y && p.y <= regions[i].y + rh) { idx = i; break; }
+    }
+    if (idx >= 0) { selectedIdx = idx; dragState = { type: 'move', startX: p.x, startY: p.y, orig: JSON.parse(JSON.stringify(regions[idx])) }; redraw(); return; }
+    selectedIdx = -1; dragState = { type: 'create', startX: p.x, startY: p.y }; redraw();
+  }
+  function onMouseMove(e) {
+    if (!dragState) return; var p = getCanvasCoords(e);
+    if (dragState.type === 'create') { redraw(); ctx.strokeStyle = '#9333ea'; ctx.strokeRect(
+      Math.min(dragState.startX, p.x), Math.min(dragState.startY, p.y), Math.abs(p.x - dragState.startX), Math.abs(p.y - dragState.startY)); return; }
+    var r = regions[selectedIdx];
+    r.x = dragState.orig.x + (p.x - dragState.startX); r.y = dragState.orig.y + (p.y - dragState.startY);
+    redraw();
+  }
+  function onMouseUp(e) {
+    if (!dragState) return;
+    if (dragState.type === 'create') {
+      var p = getCanvasCoords(e), w = Math.abs(p.x - dragState.startX), h = Math.abs(p.y - dragState.startY);
+      if (w > 15 && h > 15) addRegion(Math.min(dragState.startX, p.x), Math.min(dragState.startY, p.y), w, h); else redraw();
+    } else if (onChange) onChange(getRegions());
+    dragState = null;
+  }
+  return { init: init, setImage: setImage, getRegions: getRegions,
+    deleteSelected: function() { if (selectedIdx >= 0) { regions.splice(selectedIdx, 1); selectedIdx = -1; redraw(); if (onChange) onChange(getRegions()); } } };
+})();
+var BatchProcessor = (function() {
+  var queue = [], running = false, paused = false, stats = { total: 0, done: 0, skipped: 0, failed: 0 };
+  var onProgress, onComplete, onError, orientation = 'landscape', threshVal = 128, fillThreshold = 0.35;
+  function configure(opts) {
+    orientation = opts.orientation || orientation; threshVal = opts.threshVal != null ? opts.threshVal : threshVal;
+    fillThreshold = opts.fillThreshold != null ? opts.fillThreshold : fillThreshold;
+    onProgress = opts.onProgress; onComplete = opts.onComplete; onError = opts.onError;
+  }
+  function setQueue(files) { queue = files.slice(); stats = { total: queue.length, done: 0, skipped: 0, failed: 0 }; }
+  function pause() { paused = true; }
+  async function processNext() {
+    if (paused || queue.length === 0) { running = false; if (onComplete) onComplete(stats); return; }
+    running = true; var file = queue.shift();
+    try {
+      if (onProgress) onProgress({ file: file, stats: stats, status: 'processing' });
+      var fileData = await gasRun('getDriveFileBase64', file.id), img = await driveFileToImageElement(fileData);
+      var result = warpImageFromElement(img, orientation, threshVal), base64 = matToBase64Jpeg(result.warpedMat);
+      var studentId = detectOmrId(result.warpedMat, result.cfg, fillThreshold); result.warpedMat.delete();
+      var res = await gasRun('processStudentPaper', file, studentId, base64, true);
+      if (res.skipped) stats.skipped++; else if (res.success) stats.done++; else { stats.failed++; if (onError) onError(file, res.error); }
+      if (onProgress) onProgress({ file: file, stats: stats, status: 'done', result: res });
+    } catch (err) { stats.failed++; if (onError) onError(file, err.message || String(err)); }
+    await new Promise(function(r) { setTimeout(r, 300); }); processNext();
+  }
+  return { configure: configure, setQueue: setQueue, start: function() { if (!running) processNext(); }, pause: pause,
+    getStats: function() { return stats; } };
+})();
+function gasRun(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function(resolve, reject) {
+    if (typeof google === 'undefined' || !google.script || !google.script.run) { reject(new Error('GAS 環境ではありません')); return; }
+    var runner = google.script.run.withSuccessHandler(resolve).withFailureHandler(reject);
+    runner[fn].apply(runner, args);
+  });
+}
+
+/** --- アプリ UI --- */
 var STEPS = [
     { id: 0, label: '⓪ テスト作成' }, { id: 1, label: '① 回答欄設定' }, { id: 2, label: '② 配点決定' },
     { id: 3, label: '③ テキスト化' }, { id: 4, label: '④ 採点基準' }, { id: 5, label: '⑤ 採点実行' },
