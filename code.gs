@@ -1220,6 +1220,9 @@ function getIdentityFields(ss) {
 }
 
 function saveIdentityFields(fields) {
+  if (!fields || !fields.length) {
+    throw new Error('本人確認欄を1つ以上設定してください。');
+  }
   var ss = getActiveTestSs();
   var sheet = ss.getSheetByName(SHEET_IDENTITY_FIELDS);
   sheet.clear();
@@ -2582,17 +2585,76 @@ function importExternalScoresFromCsv(csvText) {
 // ========== RosterService.gs ==========
 
 function initHubRosterSheet_(ss) {
-  if (!ss.getSheetByName(SHEET_ROSTER)) {
-    var sheet = ss.insertSheet(SHEET_ROSTER);
-    sheet.appendRow(ROSTER_HEADERS);
-    sheet.setFrozenRows(1);
+  ensureHubRosterSheet_(ss);
+}
+
+function ensureHubRosterSheet_(ss) {
+  var sheet = ss.getSheetByName(SHEET_ROSTER);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_ROSTER);
+    writeHubRosterTemplate_(sheet);
+    return sheet;
   }
+  if (sheet.getLastRow() === 0) {
+    writeHubRosterTemplate_(sheet);
+    return sheet;
+  }
+  ensureRosterHeaders_(sheet);
+  return sheet;
+}
+
+function ensureRosterHeaders_(sheet) {
+  var headers = sheet.getRange(1, 1, 1, Math.max(sheet.getLastColumn(), ROSTER_HEADERS.length)).getValues()[0];
+  var needsHeader = false;
+  if (!headers || !headers[0] || String(headers[0]).trim() === '') {
+    needsHeader = true;
+  } else {
+    for (var i = 0; i < ROSTER_HEADERS.length; i++) {
+      if (String(headers[i] || '').trim() !== ROSTER_HEADERS[i]) {
+        needsHeader = true;
+        break;
+      }
+    }
+  }
+  if (needsHeader) {
+    sheet.getRange(1, 1, 1, ROSTER_HEADERS.length).setValues([ROSTER_HEADERS]);
+    sheet.setFrozenRows(1);
+    formatHubRosterSheet_(sheet);
+  }
+}
+
+function writeHubRosterTemplate_(sheet) {
+  sheet.clear();
+  sheet.getRange(1, 1, 1, ROSTER_HEADERS.length).setValues([ROSTER_HEADERS]);
+  sheet.getRange(2, 1, 2, ROSTER_HEADERS.length).setValues([[
+    '（記入例・削除可）', '1001', '2', '1', '15', '山田太郎', '', '', ''
+  ]]);
+  sheet.setFrozenRows(1);
+  formatHubRosterSheet_(sheet);
+}
+
+function formatHubRosterSheet_(sheet) {
+  sheet.getRange(1, 1, 1, ROSTER_HEADERS.length).setFontWeight('bold').setBackground('#f3f4f6');
+  for (var c = 1; c <= ROSTER_HEADERS.length; c++) {
+    sheet.setColumnWidth(c, c === 1 ? 120 : (c === 6 ? 140 : 100));
+  }
+}
+
+/** Web UI から Hub 名簿シートの存在を保証（ひな形自動作成） */
+function ensureHubRosterSheet() {
+  var ss = getHubSs();
+  ensureHubRosterSheet_(ss);
+  return { ok: true, sheetName: SHEET_ROSTER };
+}
+
+function isRosterTemplateRow_(rosterName) {
+  var n = String(rosterName || '').trim();
+  return !n || n.indexOf('（記入例') === 0 || n.indexOf('(記入例') === 0;
 }
 
 function getRosterSheet_() {
   var ss = getHubSs();
-  initHubRosterSheet_(ss);
-  return ss.getSheetByName(SHEET_ROSTER);
+  return ensureHubRosterSheet_(ss);
 }
 
 function rosterRowFromSheet_(row) {
@@ -2612,11 +2674,11 @@ function rosterRowFromSheet_(row) {
 function listRosterNames() {
   var sheet = getRosterSheet_();
   if (sheet.getLastRow() <= 1) return [];
-  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues();
+  var data = sheet.getRange(2, 1, sheet.getLastRow(), 1).getValues();
   var names = {};
   data.forEach(function(r) {
     var n = String(r[0] || '').trim();
-    if (n) names[n] = true;
+    if (n && !isRosterTemplateRow_(n)) names[n] = true;
   });
   return Object.keys(names).sort(function(a, b) { return a.localeCompare(b, 'ja'); });
 }
@@ -2625,7 +2687,7 @@ function getRosterRows(rosterName) {
   if (!rosterName) return [];
   var sheet = getRosterSheet_();
   if (sheet.getLastRow() <= 1) return [];
-  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, ROSTER_HEADERS.length).getValues();
+  var data = sheet.getRange(2, 1, sheet.getLastRow(), ROSTER_HEADERS.length).getValues();
   var rows = [];
   data.forEach(function(r) {
     if (String(r[0] || '').trim() !== String(rosterName).trim()) return;

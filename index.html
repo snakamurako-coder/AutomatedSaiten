@@ -101,6 +101,26 @@
             transition: transform 0.2s ease;
         }
         .ocr-lang-switch-track.en .ocr-lang-switch-thumb { transform: translateX(1.25rem); }
+        .identity-type-btn { padding: 0.35rem 0.65rem; border-radius: 0.375rem; border: 1px solid #cbd5e1; background: #fff; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .identity-type-btn:hover { background: #f1f5f9; }
+        .identity-type-btn.active { background: #2563eb; color: #fff; border-color: #1d4ed8; }
+        .identity-type-btn.done { border-color: #16a34a; background: #dcfce7; color: #166534; }
+        .identity-type-btn.active.done { background: #2563eb; color: #fff; }
+        .verify-card { border: 1px solid #e5e7eb; border-radius: 8px; background: #fff; margin-bottom: 0.75rem; overflow: hidden; }
+        .verify-card.verify-ok { border-left: 4px solid #16a34a; }
+        .verify-card.verify-warn { border-left: 4px solid #dc2626; background: #fef2f2; }
+        .verify-card-head { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; padding: 0.5rem 0.75rem; background: #f9fafb; border-bottom: 1px solid #e5e7eb; font-size: 11px; }
+        .verify-card-body { display: grid; grid-template-columns: 1fr 1fr; gap: 0.75rem; padding: 0.75rem; }
+        @media (max-width: 640px) { .verify-card-body { grid-template-columns: 1fr; } }
+        .verify-crop-grid { display: flex; flex-wrap: wrap; gap: 0.5rem; }
+        .verify-crop-item { text-align: center; }
+        .verify-crop-item img { max-height: 72px; max-width: 120px; border: 1px solid #d1d5db; border-radius: 4px; background: #fff; object-fit: contain; }
+        .verify-crop-label { font-size: 10px; font-weight: 700; color: #475569; margin-bottom: 2px; }
+        .verify-sheet-block { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 0.65rem; }
+        .verify-sheet-row { display: flex; align-items: baseline; gap: 0.5rem; margin-bottom: 0.35rem; font-size: 12px; }
+        .verify-sheet-label { min-width: 4.5rem; font-weight: 700; color: #1e40af; flex-shrink: 0; }
+        .verify-sheet-value { font-size: 15px; font-weight: 600; color: #0f172a; }
+        .verify-sheet-value input { font-size: 14px; font-weight: 600; width: 100%; max-width: 12rem; border: 1px solid #93c5fd; border-radius: 4px; padding: 2px 6px; }
         #outlier-crop-panel {
             min-height: 32rem;
             height: clamp(32rem, calc(100vh - 10rem), 85vh);
@@ -435,10 +455,22 @@
 
         <!-- ⑧ 本人欄 -->
         <div id="step-8" class="step-panel hidden space-y-3">
-            <h2 class="font-bold">⑧ 学年・組・番号・氏名欄の設定</h2>
-            <p class="text-xs text-gray-500">OCRは使わず、照合用に画像領域のみ指定します。</p>
-            <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, loadModelForIdentity)" class="bg-blue-600 text-white px-3 py-1 rounded text-xs">模範解答を再表示</button>
-            <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveIdentityToServer)" class="bg-green-600 text-white px-3 py-1 rounded text-xs">本人欄を保存</button>
+            <h2 class="font-bold">⑧ 本人欄設定</h2>
+            <p class="text-xs text-gray-500">学年・組・番号・ID・氏名のうち<strong>1つ以上</strong>を選び、ボタンで欄種別を指定してから Canvas 上をドラッグして枠を設定します（OCRは使いません）。</p>
+            <div class="flex flex-wrap gap-2 items-center text-xs">
+                <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, loadModelForIdentity)" class="bg-blue-600 text-white px-3 py-1 rounded">模範解答を再表示</button>
+                <span class="text-gray-400">|</span>
+                <span class="font-semibold text-gray-600">設定する欄:</span>
+                <button type="button" class="identity-type-btn" data-type="学年" onclick="selectIdentityFieldType('学年')">学年</button>
+                <button type="button" class="identity-type-btn" data-type="組" onclick="selectIdentityFieldType('組')">組</button>
+                <button type="button" class="identity-type-btn" data-type="番号" onclick="selectIdentityFieldType('番号')">番号</button>
+                <button type="button" class="identity-type-btn" data-type="ID" onclick="selectIdentityFieldType('ID')">ID</button>
+                <button type="button" class="identity-type-btn" data-type="氏名" onclick="selectIdentityFieldType('氏名')">氏名</button>
+                <button type="button" onclick="resetIdentityRegions()" class="bg-red-100 text-red-800 px-3 py-1 rounded border border-red-200">やり直し</button>
+                <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveIdentityToServer)" class="bg-green-600 text-white px-3 py-1 rounded font-bold">本人欄を保存</button>
+            </div>
+            <p id="identity-type-hint" class="text-xs text-blue-700">欄種別ボタンを押してから、Canvas上をドラッグしてください。</p>
+            <ul id="identity-type-status" class="text-xs flex flex-wrap gap-2"></ul>
             <canvas id="identity-canvas" class="bg-white max-w-full"></canvas>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(8); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
@@ -446,9 +478,14 @@
         <!-- ⑨ 照合 -->
         <div id="step-9" class="step-panel hidden space-y-3">
             <h2 class="font-bold">⑨ ID・氏名の照合</h2>
+            <p class="text-xs text-gray-500">⑧で設定した本人欄の切り出し画像と、スプレッドシート上のID・氏名を並べて視認確認します。</p>
             <div class="text-xs"><label>名簿CSV（生徒ID,氏名）</label><textarea id="roster-csv" class="w-full border rounded p-2 h-20 font-mono"></textarea></div>
-            <button type="button" data-busy-label="照合中..." onclick="withBusyButton(event.currentTarget, runVerification)" class="bg-blue-600 text-white px-4 py-2 rounded text-sm">照合実行</button>
-            <div id="verify-results" class="overflow-auto max-h-96 text-xs"></div>
+            <div class="flex flex-wrap gap-2 items-center text-xs">
+                <button type="button" data-busy-label="照合中..." onclick="withBusyButton(event.currentTarget, runVerification)" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">照合実行</button>
+                <label class="flex items-center gap-1"><input type="checkbox" id="verify-only-issues" checked onchange="filterVerifyResults()"> 要確認のみ表示</label>
+            </div>
+            <div id="verify-results" class="overflow-auto max-h-[calc(100vh-14rem)] text-xs"></div>
+            <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveVerificationEdits)" class="bg-green-600 text-white px-4 py-2 rounded text-sm">修正を保存</button>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(9); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
 
@@ -634,8 +671,30 @@ async function driveFileToImageElement(fileData) {
 }
 var RegionEditor = (function() {
   var canvas, ctx, image, regions, selectedIdx, mode, dragState, onChange, HANDLE = 8;
-  var IDENTITY_TYPES = ['学年', '組', '番号', '氏名'];
+  var IDENTITY_TYPES = ['学年', '組', '番号', 'ID', '氏名'];
+  var pendingIdentityType = '学年';
   var CURSOR_MAP = { nw: 'nwse-resize', n: 'ns-resize', ne: 'nesw-resize', e: 'ew-resize', se: 'nwse-resize', s: 'ns-resize', sw: 'nesw-resize', w: 'ew-resize' };
+
+  function setPendingIdentityType(type) {
+    if (IDENTITY_TYPES.indexOf(type) < 0) return;
+    pendingIdentityType = type;
+    var idx = regions.findIndex(function(r) { return r.type === type; });
+    if (idx >= 0) selectedIdx = idx;
+    redraw();
+  }
+  function getPendingIdentityType() { return pendingIdentityType; }
+  function clearAllRegions() {
+    regions = [];
+    selectedIdx = -1;
+    pendingIdentityType = '学年';
+    redraw();
+    notifyChange();
+  }
+  function getIdentityTypeStatus() {
+    return IDENTITY_TYPES.map(function(t) {
+      return { type: t, set: regions.some(function(r) { return r.type === t; }) };
+    });
+  }
 
   function init(canvasId, options) {
     canvas = document.getElementById(canvasId); if (!canvas) return;
@@ -657,9 +716,10 @@ var RegionEditor = (function() {
   }
   function addRegion(x, y, w, h) {
     if (mode === 'identity') {
-      var used = regions.map(function(r) { return r.type; });
-      var nextType = IDENTITY_TYPES.find(function(t) { return used.indexOf(t) < 0; }); if (!nextType) return;
-      regions.push({ type: nextType, x: x, y: y, w: w, h: h, id: nextType });
+      if (!pendingIdentityType) return;
+      var existIdx = regions.findIndex(function(r) { return r.type === pendingIdentityType; });
+      if (existIdx >= 0) regions.splice(existIdx, 1);
+      regions.push({ type: pendingIdentityType, x: x, y: y, w: w, h: h, id: pendingIdentityType });
     } else { var num = regions.length + 1, id = '記述欄' + num; regions.push({ id: id, displayName: id, x: x, y: y, w: w, h: h, order: num, ocrLang: 'en' }); }
     selectedIdx = regions.length - 1; redraw(); notifyChange();
   }
@@ -767,7 +827,9 @@ var RegionEditor = (function() {
     } else notifyChange();
     dragState = null;
   }
-  return { init: init, setImage: setImage, setRegions: setRegions, getRegions: getRegions, deleteSelected: deleteSelected, redraw: redraw, IDENTITY_TYPES: IDENTITY_TYPES };
+  return { init: init, setImage: setImage, setRegions: setRegions, getRegions: getRegions, deleteSelected: deleteSelected, redraw: redraw,
+    IDENTITY_TYPES: IDENTITY_TYPES, setPendingIdentityType: setPendingIdentityType, getPendingIdentityType: getPendingIdentityType,
+    clearAllRegions: clearAllRegions, getIdentityTypeStatus: getIdentityTypeStatus };
 })();
 var BatchProcessor = (function() {
   var FLUSH_CHUNK = 15;
@@ -2183,14 +2245,82 @@ function renderDomainTableFromCache() {
 }
 
 async function loadIdentityEditorFromState() {
-    if (!appState.identityFields || !appState.identityFields.length) return;
     try {
         await loadModelFromServerIfNeeded();
-        RegionEditor.init('identity-canvas', { mode: 'identity', initialRegions: appState.identityFields.map(function(f) {
-            return { type: f.type, x: f.x, y: f.y, w: f.width, h: f.height };
-        })});
-        RegionEditor.setImage(appState.warpedImageEl);
+        initIdentityEditor(appState.identityFields || []);
     } catch (e) { /* model not available */ }
+}
+
+function initIdentityEditor(regions) {
+    RegionEditor.init('identity-canvas', {
+        mode: 'identity',
+        initialRegions: (regions || []).map(function(f) {
+            return { type: f.type, x: f.x, y: f.y, w: f.width, h: f.height };
+        }),
+        onChange: updateIdentityTypeUi
+    });
+    if (appState.warpedImageEl) RegionEditor.setImage(appState.warpedImageEl);
+    updateIdentityTypeUi();
+}
+
+function selectIdentityFieldType(type) {
+    RegionEditor.setPendingIdentityType(type);
+    updateIdentityTypeUi();
+    var hint = document.getElementById('identity-type-hint');
+    if (hint) hint.textContent = '「' + type + '」を設定中 — Canvas上をドラッグして枠を指定してください。';
+}
+
+function resetIdentityRegions() {
+    if (!confirm('設定した本人欄をすべて消去します。よろしいですか？')) return;
+    RegionEditor.clearAllRegions();
+    var hint = document.getElementById('identity-type-hint');
+    if (hint) hint.textContent = '欄種別ボタンを押してから、Canvas上をドラッグしてください。';
+    updateIdentityTypeUi();
+}
+
+function updateIdentityTypeUi() {
+    if (typeof RegionEditor.getIdentityTypeStatus !== 'function') return;
+    var status = RegionEditor.getIdentityTypeStatus();
+    var pending = RegionEditor.getPendingIdentityType();
+    document.querySelectorAll('.identity-type-btn').forEach(function(btn) {
+        var t = btn.dataset.type;
+        var st = status.find(function(s) { return s.type === t; });
+        btn.classList.toggle('active', t === pending);
+        btn.classList.toggle('done', !!(st && st.set));
+    });
+    var listEl = document.getElementById('identity-type-status');
+    if (listEl) {
+        var setCount = status.filter(function(s) { return s.set; }).length;
+        listEl.innerHTML = status.filter(function(s) { return s.set; }).map(function(s) {
+            return '<li class="bg-green-50 text-green-800 px-2 py-0.5 rounded border border-green-200">' + escapeHtml(s.type) + ' ✓</li>';
+        }).join('') + (setCount ? '' : '<li class="text-orange-600">未設定 — 1つ以上必要</li>');
+    }
+}
+
+function sortIdentityFieldsByOrder(fields) {
+    var order = RegionEditor.IDENTITY_TYPES || ['学年', '組', '番号', 'ID', '氏名'];
+    return (fields || []).slice().sort(function(a, b) {
+        var ia = order.indexOf(a.type), ib = order.indexOf(b.type);
+        if (ia < 0) ia = 99;
+        if (ib < 0) ib = 99;
+        return ia - ib;
+    });
+}
+
+function verifyStatusLabel(status) {
+    if (status === 'ok') return { text: '一致', cls: 'verify-ok' };
+    if (status === 'no_id') return { text: 'ID未入力', cls: 'verify-warn' };
+    if (status === 'name_mismatch') return { text: '氏名不一致', cls: 'verify-warn' };
+    if (status === 'name_empty') return { text: '氏名未入力', cls: 'verify-warn' };
+    return { text: status, cls: 'verify-warn' };
+}
+
+function filterVerifyResults() {
+    var onlyIssues = document.getElementById('verify-only-issues') && document.getElementById('verify-only-issues').checked;
+    document.querySelectorAll('.verify-card').forEach(function(card) {
+        var ok = card.dataset.status === 'ok';
+        card.style.display = (onlyIssues && ok) ? 'none' : '';
+    });
 }
 
 function restoreBatchResultsFromPreview(preview, processedIds) {
@@ -2360,6 +2490,10 @@ async function saveCurrentStepProgress(stepNum) {
         if (payload.rosterName) await gasRun('saveSelectedRosterName', payload.rosterName);
     } else if (stepNum === 8) {
         payload.identityFields = RegionEditor.getRegions();
+        if (!payload.identityFields.length) {
+            setStatus('学年・組・番号・ID・氏名のうち1つ以上を設定してください', true);
+            return;
+        }
     }
     try {
         var res = await gasRun('saveStepProgress', stepNum, payload);
@@ -2828,6 +2962,7 @@ async function refreshRosterSelect(selectedName) {
 
 async function initRosterStepUi() {
     if (!appState.test) return;
+    try { await gasRun('ensureHubRosterSheet'); } catch (e) { /* hub 未登録等 */ }
     var selected = (appState.test.info && appState.test.info['選択名簿名']) || '';
     await refreshRosterSelect(selected);
     await updateIdAssignStatusUi();
@@ -3010,18 +3145,21 @@ async function loadModelForIdentity() {
     try {
         await loadModelFromServerIfNeeded();
         var identityFields = await gasRun('getIdentityFields');
-        RegionEditor.init('identity-canvas', { mode: 'identity', initialRegions: identityFields.map(function(f) {
-            return { type: f.type, x: f.x, y: f.y, w: f.width, h: f.height };
-        })});
-        RegionEditor.setImage(appState.warpedImageEl);
+        initIdentityEditor(identityFields);
+        appState.identityFields = identityFields;
     } catch (e) { setStatus(e.message || e, true); }
 }
 
 async function saveIdentityToServer() {
     var fields = RegionEditor.getRegions();
+    if (!fields.length) {
+        setStatus('学年・組・番号・ID・氏名のうち1つ以上を設定してください', true);
+        return;
+    }
     try {
-        await gasRun('saveIdentityFields', fields);
-        setStatus('本人確認欄を保存しました');
+        appState.identityFields = await gasRun('saveIdentityFields', fields);
+        updateIdentityTypeUi();
+        setStatus('本人確認欄を保存しました（' + fields.length + ' 欄）');
         markStepDone(8);
     } catch (e) { setStatus(e.message || e, true); }
 }
@@ -3031,29 +3169,52 @@ async function runVerification() {
     var roster = rosterCsv.trim() ? await gasRun('parseRosterCsv', rosterCsv) : [];
     try {
         var results = await gasRun('verifyIdentityWithRoster', roster);
-        var identityFields = (await gasRun('getIdentityFields'));
-        var html = '<table class="w-full border text-xs"><tr class="bg-gray-100"><th>状態</th><th>生徒ID</th><th>氏名</th><th>名簿氏名</th><th>ファイル</th><th>本人欄</th></tr>';
+        var identityFields = sortIdentityFieldsByOrder(await gasRun('getIdentityFields'));
+        if (!identityFields.length) {
+            setStatus('⑧で本人欄が未設定です。先に本人欄を設定してください。', true);
+            return;
+        }
+        var html = '';
+        var issueCount = 0;
         for (var i = 0; i < results.length; i++) {
             var r = results[i];
-            var cls = r.status === 'ok' ? 'bg-green-50' : 'bg-red-50';
-            var crops = '';
-            if (identityFields.length && r.fileId) {
+            var st = verifyStatusLabel(r.status);
+            if (r.status !== 'ok') issueCount++;
+            var cropsHtml = '<p class="text-gray-400 text-xs">画像なし</p>';
+            if (r.fileId) {
                 try {
                     var warped = await gasRun('getWarpedImageBase64', r.fileId);
                     var b64 = 'data:image/jpeg;base64,' + warped.base64;
+                    cropsHtml = '<div class="verify-crop-grid">';
                     for (var j = 0; j < identityFields.length; j++) {
                         var f = identityFields[j];
                         var crop = await cropRegionFromBase64(b64, { x: f.x, y: f.y, width: f.width, height: f.height });
-                        crops += '<img src="' + crop + '" class="h-8 inline mr-1" title="' + f.type + '">';
+                        cropsHtml += '<div class="verify-crop-item"><div class="verify-crop-label">' + escapeHtml(f.type) + '</div>' +
+                            '<img src="' + crop + '" alt="' + escapeHtml(f.type) + '"></div>';
                     }
-                } catch (e) { crops = '-'; }
+                    cropsHtml += '</div>';
+                } catch (e) { cropsHtml = '<p class="text-red-500 text-xs">画像読込失敗</p>'; }
             }
-            html += '<tr class="' + cls + '"><td class="p-1 border">' + r.status + '</td><td class="p-1 border"><input class="verify-id w-20 border text-xs" data-row="' + r.rowIndex + '" value="' + r.studentId + '"></td>' +
-                '<td class="p-1 border"><input class="verify-name w-24 border text-xs" data-row="' + r.rowIndex + '" value="' + r.name + '"></td><td class="p-1 border">' + (r.rosterName||'-') + '</td><td class="p-1 border truncate max-w-[120px]">' + r.fileName + '</td><td class="p-1 border">' + crops + '</td></tr>';
+            html += '<div class="verify-card ' + st.cls + '" data-status="' + escapeHtml(r.status) + '" data-row="' + r.rowIndex + '">' +
+                '<div class="verify-card-head">' +
+                '<span class="font-bold ' + (r.status === 'ok' ? 'text-green-700' : 'text-red-700') + '">' + st.text + '</span>' +
+                '<span class="text-gray-500 truncate" title="' + escapeHtml(r.fileName) + '">' + escapeHtml(r.fileName) + '</span>' +
+                '</div>' +
+                '<div class="verify-card-body">' +
+                '<div><div class="text-xs font-bold text-gray-600 mb-1">⑧ 本人欄（画像）</div>' + cropsHtml + '</div>' +
+                '<div><div class="text-xs font-bold text-gray-600 mb-1">スプレッドシート / 名簿</div>' +
+                '<div class="verify-sheet-block">' +
+                '<div class="verify-sheet-row"><span class="verify-sheet-label">生徒ID</span><span class="verify-sheet-value">' +
+                '<input class="verify-id" data-row="' + r.rowIndex + '" value="' + escapeHtml(r.studentId) + '"></span></div>' +
+                '<div class="verify-sheet-row"><span class="verify-sheet-label">氏名</span><span class="verify-sheet-value">' +
+                '<input class="verify-name" data-row="' + r.rowIndex + '" value="' + escapeHtml(r.name) + '"></span></div>' +
+                '<div class="verify-sheet-row"><span class="verify-sheet-label">名簿氏名</span><span class="verify-sheet-value">' + escapeHtml(r.rosterName || '—') + '</span></div>' +
+                '</div></div></div></div>';
         }
-        html += '</table><button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveVerificationEdits)" class="mt-2 bg-green-600 text-white px-3 py-1 rounded text-xs">修正を保存</button>';
+        if (!html) html = '<p class="text-gray-500 p-4">採点結果がありません。Step③でOCRを実行してください。</p>';
         document.getElementById('verify-results').innerHTML = html;
-        setStatus('照合完了: ' + results.filter(function(x){return x.status!=='ok';}).length + ' 件要確認');
+        filterVerifyResults();
+        setStatus('照合完了: 全' + results.length + ' 件 / 要確認 ' + issueCount + ' 件');
         markStepDone(9);
     } catch (e) { setStatus(e.message || e, true); }
 }
