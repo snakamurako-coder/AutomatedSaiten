@@ -3592,13 +3592,14 @@ async function applyDeemedScoringAndReaggregate() {
     var appliedSources = sources.slice();
     try {
         setStatus('みなし採点を適用して再集約中...');
+        var rulesMap = getCriteriaRulesMapForField(fid);
         var res = await gasRun('applyDeemedScoringToField', fid, canonical, sources);
         appState.criteriaList = res.answers || [];
         appState.deemedCheckedByField[fid] = {};
         appState.deemedDraftByField[fid] = { canonical: canonical, sources: [] };
         var deemedInput = document.getElementById('deemed-canonical-input');
         if (deemedInput) deemedInput.value = canonical;
-        renderCriteriaTable();
+        renderCriteriaTable(null, rulesMap);
         syncDeemedUiFromState();
         purgeDeemedTargetsFromOutlierUi(appliedSources);
         await syncBatchTableFromSheet();
@@ -3929,6 +3930,7 @@ async function applyReplacementsAndReaggregate() {
     var rules = collectOcrReplacementRulesFromUi();
     try {
         setStatus('置換を適用して再集約中...');
+        var rulesMap = getCriteriaRulesMapForField(fid);
         var res = await gasRun('applyTextReplacementsToField', fid, rules);
         appState.criteriaList = res.answers || res || [];
         if (res.answers) {
@@ -3937,7 +3939,7 @@ async function applyReplacementsAndReaggregate() {
             });
         }
         renderOcrReplacementTable(fid);
-        renderCriteriaTable();
+        renderCriteriaTable(null, rulesMap);
         syncDeemedUiFromState();
         await syncBatchTableFromSheet();
         await fetchOutlierGroups();
@@ -4776,20 +4778,61 @@ function populateCriteriaSelect() {
     populateCriteriaSelectFromCache();
 }
 
+function getSavedCriteriaForField(fieldId) {
+    var byField = appState.criteriaByField || {};
+    var saved = byField[fieldId];
+    if (!saved || !saved.length) {
+        var keys = Object.keys(byField);
+        for (var i = 0; i < keys.length; i++) {
+            if (String(keys[i]) === String(fieldId)) {
+                saved = byField[keys[i]];
+                break;
+            }
+        }
+    }
+    return saved || [];
+}
+
+/** 保存済み基準＋現在の表入力を answer_text キーでマージ（表入力が優先） */
+function getCriteriaRulesMapForField(fieldId) {
+    var map = {};
+    getSavedCriteriaForField(fieldId).forEach(function(r) {
+        map[r.answer_text] = {
+            judgment: r.judgment || '×',
+            score: r.score != null ? r.score : 0,
+            reason: r.reason || ''
+        };
+    });
+    (appState.criteriaList || []).forEach(function(item, idx) {
+        var jEl = document.querySelector('.crit-judgment[data-idx="' + idx + '"]');
+        if (!jEl || !item) return;
+        var sEl = document.querySelector('.crit-score[data-idx="' + idx + '"]');
+        var rEl = document.querySelector('.crit-reason[data-idx="' + idx + '"]');
+        map[item.answer_text] = {
+            judgment: jEl.value || '×',
+            score: sEl ? sEl.value : 0,
+            reason: rEl ? rEl.value : ''
+        };
+    });
+    return map;
+}
+
 async function fetchUniqueForCriteria() {
     var fid = getCriteriaFieldId();
     try {
         setStatus('解答を集約中...');
+        var rulesMap = getCriteriaRulesMapForField(fid);
         appState.criteriaList = await gasRun('getUniqueAnswers', fid);
         appState.outlierMaxCount = getOutlierMaxCountUi();
-        renderCriteriaTable();
+        renderCriteriaTable(null, rulesMap);
         syncDeemedUiFromState();
         setStatus(appState.criteriaList.length + ' 種類の解答を検出（' +
             appState.criteriaList.reduce(function(s, x) { return s + x.count; }, 0) + ' 件）');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
-function renderCriteriaTable(aiList) {
+function renderCriteriaTable(aiList, rulesMap) {
+    rulesMap = rulesMap || {};
     var tbody = document.getElementById('criteria-tbody');
     var maxOutlier = appState.outlierMaxCount || getOutlierMaxCountUi();
     var fid = getCriteriaFieldId();
@@ -4799,6 +4842,11 @@ function renderCriteriaTable(aiList) {
         if (aiList) {
             var m = aiList.find(function(a) { return a.answer_text === item.answer_text; });
             if (m) { score = m.recommended_score; judgment = m.judgment || '△'; reason = m.reason || ''; }
+        } else if (rulesMap[item.answer_text]) {
+            var rule = rulesMap[item.answer_text];
+            judgment = rule.judgment || '×';
+            score = rule.score != null ? rule.score : 0;
+            reason = rule.reason != null ? rule.reason : reason;
         }
         var showImg = typeof item.count === 'number' && item.count <= maxOutlier;
         var enc = encodeAnswerAttr(item.answer_text);
