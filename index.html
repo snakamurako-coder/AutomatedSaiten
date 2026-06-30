@@ -730,7 +730,7 @@ function getPaperConfig(orientation) {
   var isPortrait = orientation === 'portrait';
   return { isPortrait: isPortrait, borderCols: isPortrait ? 51 : 73, borderRows: isPortrait ? 73 : 51,
     warpW: (isPortrait ? 51 : 73) * CELL_PX, warpH: (isPortrait ? 73 : 51) * CELL_PX,
-    idStartCol: isPortrait ? 42 : 64, idStartRow: 3 };
+    idStartCol: isPortrait ? 42 : 64, idStartRow: 5 };
 }
 function detectPaperCorners(imgElement, threshVal) {
   threshVal = threshVal != null ? threshVal : 128;

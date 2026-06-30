@@ -3472,7 +3472,7 @@ function getPaperTemplateConfig_(orientation) {
     borderCols: isPortrait ? 51 : 73,
     borderRows: isPortrait ? 73 : 51,
     idStartCol: isPortrait ? 42 : 64,
-    idStartRow: 3
+    idStartRow: 5
   };
 }
 
@@ -3580,7 +3580,7 @@ function buildStudentIdOnlyLandscapeTemplate_(sheet) {
   sheet.getRange(1, 1, 1, Math.min(grid.endCol, 55)).merge();
   sheet.getRange(1, 1).setValue(
     '【生徒ID欄ひな形 A4横】IDマーク欄のみ。' +
-    '独自解答用紙に貼る場合も 64列目・3行目 を基準に配置してください。' +
+    '独自解答用紙に貼る場合も 64列目・5行目 を基準に配置してください。' +
     '印刷→スキャン→ Web アプリ Step③ で読み込みます。' +
     '外枠・マス目は共通A4横ひな形と同じ座標系です。'
   ).setFontSize(9).setWrap(true).setVerticalAlignment('top');
