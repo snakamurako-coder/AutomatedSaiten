@@ -2344,9 +2344,11 @@ function scheduleFitCompactTableScrolls(scope) {
 }
 
 async function fetchRosterAssignmentPreview(rosterName, absentIndices) {
-  if (typeof google !== 'undefined' && google.script && google.script.run &&
-      typeof google.script.run.getRosterAssignmentPreview === 'function') {
-    return gasRun('getRosterAssignmentPreview', rosterName, absentIndices);
+  try {
+    return await gasRun('getRosterAssignmentPreview', rosterName, absentIndices);
+  } catch (e) {
+    var msg = String(e && e.message ? e.message : e);
+    if (msg.indexOf('サーバー関数が見つかりません') < 0) throw e;
   }
   var absentSet = {};
   (absentIndices || []).forEach(function(i) { absentSet[parseInt(i, 10)] = true; });
@@ -2354,21 +2356,24 @@ async function fetchRosterAssignmentPreview(rosterName, absentIndices) {
   var rosterTotal = rows.length;
   var absentCount = rows.filter(function(r) { return absentSet[r.rowIndex]; }).length;
   var rosterActive = rosterTotal - absentCount;
-  var fileCount = (appState.batchFiles && appState.batchFiles.length) ? appState.batchFiles.length : 0;
-  if (!fileCount) {
+  var fileCount = 0;
+  try {
+    var warpedFiles = await gasRun('listWarpedFilesInFolderDirect');
+    fileCount = warpedFiles.length;
+  } catch (e2) {
     var folderEl = document.getElementById('drive-folder-id');
     var folderId = folderEl ? folderEl.value.trim() : '';
     if (folderId) {
-      var files = await gasRun('listFolderFiles', folderId);
+      var files = await gasRun('listWarpedFilesInFolderDirect', folderId);
       fileCount = files.length;
     }
   }
   var canAssign = rosterActive > 0 && fileCount > 0 && fileCount === rosterActive;
   var mismatch = '';
   if (fileCount !== rosterActive) {
-    mismatch = 'スキャン画像 ' + fileCount + ' 件と受験予定 ' + rosterActive +
+    mismatch = '補正済み画像 ' + fileCount + ' 件（フォルダ直下）と受験予定 ' + rosterActive +
       ' 名（名簿' + rosterTotal + '−未受験' + absentCount + '）が一致しません。' +
-      '未受験の☑を確認するか、フォルダ内の画像数を確認してください。';
+      '未受験の☑を確認するか、フォルダ直下の補正済み画像（補正_*）の件数を確認してください。';
   }
   return {
     rosterName: rosterName,
@@ -3344,7 +3349,7 @@ function goToStep(n, options) {
         updateBatchOcrLangHint();
     } else if (n === 4) populateCriteriaSelectFromCache();
     else if (n === 6) renderDomainTableFromCache();
-    else if (n === 7) initRosterStepUi();
+    else if (n === 7) restoreRosterStepUi();
     else if (n === 8) loadIdentityEditorFromState();
     else if (n === 9) loadRosterForVerification();
 }
@@ -4180,6 +4185,64 @@ async function restoreTestUi(data) {
     initRosterStepUi().catch(function() {});
 }
 
+function parseRosterAbsentFromInfo(info) {
+    if (!info || !info['未受験者']) return null;
+    try {
+        var parsed = typeof info['未受験者'] === 'string' ? JSON.parse(info['未受験者']) : info['未受験者'];
+        if (!parsed || typeof parsed !== 'object') return null;
+        parsed.absentIndices = (parsed.absentIndices || []).map(function(i) { return parseInt(i, 10); }).filter(function(i) { return !isNaN(i); });
+        parsed.rosterName = parsed.rosterName != null ? String(parsed.rosterName) : '';
+        return parsed;
+    } catch (e) { return null; }
+}
+
+function applyRosterAbsentToState(saved) {
+    appState.rosterAbsent = {};
+    if (!saved || !saved.absentIndices) return;
+    saved.absentIndices.forEach(function(idx) { appState.rosterAbsent[idx] = true; });
+}
+
+var rosterAbsentSaveTimer = null;
+
+function saveRosterAbsentToServerDebounced() {
+    clearTimeout(rosterAbsentSaveTimer);
+    rosterAbsentSaveTimer = setTimeout(function() {
+        var rosterName = document.getElementById('roster-select').value;
+        if (!rosterName || !appState.rosterPreviewShown) return;
+        gasRun('saveRosterAbsentState', rosterName, getSelectedAbsentIndices()).catch(function() {});
+    }, 400);
+}
+
+async function restoreRosterPreviewFromState(savedRosterName) {
+    var rosterName = savedRosterName || document.getElementById('roster-select').value;
+    if (!rosterName) return;
+    await loadRosterPreview(rosterName);
+    appState.rosterPreviewShown = true;
+    var wrap = document.getElementById('roster-preview-wrap');
+    if (wrap) {
+        wrap.classList.remove('hidden');
+        scheduleFitCompactTableScrolls(wrap);
+    }
+    refreshRosterAssignUi();
+}
+
+async function restoreRosterStepUi() {
+    if (!appState.test) return;
+    var saved = parseRosterAbsentFromInfo(appState.test.info || {});
+    if (!saved) {
+        try { saved = await gasRun('getRosterAbsentState'); } catch (e) { saved = null; }
+    }
+    if (saved && saved.rosterName) {
+        document.getElementById('roster-select').value = saved.rosterName;
+        applyRosterAbsentToState(saved);
+        await restoreRosterPreviewFromState(saved.rosterName);
+    } else if (appState.rosterPreviewShown) {
+        await restoreRosterPreviewFromState(document.getElementById('roster-select').value);
+    }
+    await updateIdAssignStatusUi();
+    refreshRosterAssignUi();
+}
+
 async function autoSaveFieldsForStep2() {
     var fields = (typeof RegionEditor.getRegions === 'function') ? RegionEditor.getRegions() : appState.fields;
     if (!fields || !fields.length) {
@@ -4230,8 +4293,10 @@ async function saveCurrentStepProgress(stepNum) {
     } else if (stepNum === 7) {
         payload.rosterName = document.getElementById('roster-select') ? document.getElementById('roster-select').value : '';
         payload.useIdMark = document.getElementById('use-id-mark-step7') ? document.getElementById('use-id-mark-step7').checked : true;
+        payload.absentIndices = appState.rosterPreviewShown ? getSelectedAbsentIndices() : Object.keys(appState.rosterAbsent || {}).map(function(k) { return parseInt(k, 10); });
         await gasRun('saveIdMarkSetting', payload.useIdMark);
         if (payload.rosterName) await gasRun('saveSelectedRosterName', payload.rosterName);
+        if (payload.rosterName && payload.absentIndices) await gasRun('saveRosterAbsentState', payload.rosterName, payload.absentIndices);
     } else if (stepNum === 8) {
         payload.identityFields = RegionEditor.getRegions();
         if (!payload.identityFields.length) {
@@ -4794,11 +4859,21 @@ async function initRosterStepUi() {
     try { await gasRun('ensureHubRosterSheet'); } catch (e) { /* hub 未登録等 */ }
     var selected = (appState.test.info && appState.test.info['選択名簿名']) || '';
     await refreshRosterSelect(selected);
-    await updateIdAssignStatusUi();
-    appState.rosterPreviewShown = false;
-    appState.rosterAbsent = {};
-    hideRosterPreviewPanel();
+    var saved = parseRosterAbsentFromInfo(appState.test.info || {});
+    if (!saved) {
+        try { saved = await gasRun('getRosterAbsentState'); } catch (e) { saved = null; }
+    }
+    if (saved && saved.rosterName) {
+        document.getElementById('roster-select').value = saved.rosterName;
+        applyRosterAbsentToState(saved);
+        await restoreRosterPreviewFromState(saved.rosterName);
+    } else {
+        appState.rosterPreviewShown = false;
+        appState.rosterAbsent = {};
+        hideRosterPreviewPanel();
+    }
     document.getElementById('assign-result-msg').textContent = '';
+    await updateIdAssignStatusUi();
 }
 
 function hideRosterPreviewPanel() {
@@ -4904,7 +4979,10 @@ async function onRosterSelectChange() {
     hideRosterPreviewPanel();
     setAssignResultMsg('');
     setRosterPreviewInteractive(true);
-    if (name) await gasRun('saveSelectedRosterName', name);
+    if (name) {
+        await gasRun('saveSelectedRosterName', name);
+        await gasRun('saveRosterAbsentState', name, []);
+    }
     await updateIdAssignStatusUi();
 }
 
@@ -4920,6 +4998,7 @@ async function showRosterForAbsentInput() {
         wrap.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
     }
     setAssignResultMsg('未受験者に☑を付けてください。☑の設定が終わったら「ID・氏名を割り当て」を押してください。');
+    await gasRun('saveRosterAbsentState', rosterName, getSelectedAbsentIndices());
     refreshRosterAssignUi();
 }
 
@@ -5027,13 +5106,26 @@ async function assignIdsFromRosterUi() {
             setAssignResultMsg(res.reason || '割当をスキップしました。');
             return;
         }
-        var msg = res.updated + ' 件のID・氏名を更新しました（ファイル' + res.fileCount + ' / 受験者' + res.rosterCount + '）。';
+        var msg = res.updated + ' 件のID・氏名を更新しました（補正済み画像' + res.fileCount + ' / 受験者' + res.rosterCount + '）。';
         if (res.warnings && res.warnings.length) msg += ' 警告: ' + res.warnings.join(' / ');
         setAssignResultMsg(msg, !!(res.warnings && res.warnings.length));
+        await gasRun('saveRosterAbsentState', rosterName, absentIndices);
+        patchCurrentTestSessionCache(function(cur) {
+            if (!cur.info) cur.info = {};
+            cur.info['未受験者'] = JSON.stringify({
+                rosterName: rosterName,
+                absentIndices: absentIndices,
+                savedAt: new Date().toISOString()
+            });
+            cur.info['選択名簿名'] = rosterName;
+            return cur;
+        });
     } catch (e) {
         setAssignResultMsg(e.message || e, true);
     } finally {
         setRosterPreviewInteractive(true);
+        var wrap = document.getElementById('roster-preview-wrap');
+        if (wrap && appState.rosterPreviewShown) wrap.classList.remove('hidden');
         refreshRosterAssignUi();
         await updateIdAssignStatusUi();
     }
@@ -5243,6 +5335,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var idx = parseInt(ev.target.dataset.idx, 10);
             if (ev.target.checked) appState.rosterAbsent[idx] = true;
             else delete appState.rosterAbsent[idx];
+            saveRosterAbsentToServerDebounced();
             refreshRosterAssignUi();
         }
     });

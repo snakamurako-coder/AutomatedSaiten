@@ -210,7 +210,7 @@ var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
   '模範解答画像FileID', '生徒解答フォルダID',
   '基準画像幅', '基準画像高さ', 'ステータス',
-  '現在ステップ', '最終保存日時', '選択名簿名', 'IDマーク欄使用'
+  '現在ステップ', '最終保存日時', '選択名簿名', 'IDマーク欄使用', '未受験者'
 ];
 
 var HUB_TEST_LIST_HEADERS = ['テスト名', 'スプレッドシートID', 'URL', '作成日', 'ステータス', '現在ステップ', '最終保存日時'];
@@ -1040,8 +1040,13 @@ function saveStepProgress(stepNum, clientPayload) {
     savePoints(clientPayload.points);
   } else if (stepNum === 3 && clientPayload && clientPayload.folderId) {
     setTestInfoValue(ss, '生徒解答フォルダID', clientPayload.folderId);
-  } else if (stepNum === 7 && clientPayload && clientPayload.rosterName != null) {
-    setTestInfoValue(ss, '選択名簿名', clientPayload.rosterName || '');
+  } else if (stepNum === 7 && clientPayload) {
+    if (clientPayload.rosterName != null) {
+      setTestInfoValue(ss, '選択名簿名', clientPayload.rosterName || '');
+    }
+    if (clientPayload.absentIndices) {
+      saveRosterAbsentState_(ss, clientPayload.rosterName || getTestInfoValue(ss, '選択名簿名'), clientPayload.absentIndices);
+    }
   } else if (stepNum === 8 && clientPayload && clientPayload.identityFields) {
     saveIdentityFields(clientPayload.identityFields);
   }
@@ -1259,6 +1264,11 @@ var IMAGE_MIME_TYPES = {
   'application/pdf': true
 };
 
+function isWarpedOutputFileName_(name) {
+  return String(name || '').indexOf('補正_') === 0;
+}
+
+/** フォルダ直下の元スキャン（画像/PDF）。補正済み出力（補正_*）とサブフォルダ内は含めない。 */
 function listFolderFiles(folderId) {
   if (!folderId) throw new Error('フォルダIDを指定してください。');
   var folder = DriveApp.getFolderById(folderId);
@@ -1267,6 +1277,7 @@ function listFolderFiles(folderId) {
 
   while (files.hasNext()) {
     var file = files.next();
+    if (isWarpedOutputFileName_(file.getName())) continue;
     var mime = file.getMimeType();
     if (!IMAGE_MIME_TYPES[mime]) continue;
     list.push({
@@ -1278,6 +1289,120 @@ function listFolderFiles(folderId) {
   }
   list.sort(function(a, b) { return naturalCompareFileNames_(a.name, b.name); });
   return list;
+}
+
+/** フォルダ直下の補正済み画像（補正_*）のみ。サブフォルダは含めない。Step③のキューとは無関係。 */
+function listWarpedFilesInFolderDirect_(folderId) {
+  if (!folderId) return [];
+  var folder = DriveApp.getFolderById(folderId);
+  var files = folder.getFiles();
+  var list = [];
+  while (files.hasNext()) {
+    var file = files.next();
+    var name = file.getName();
+    if (name.indexOf('補正_') !== 0) continue;
+    var mime = file.getMimeType();
+    if (mime !== 'image/jpeg' && mime !== 'image/png' && mime !== 'image/jpg') continue;
+    list.push({
+      id: file.getId(),
+      name: name,
+      mimeType: mime,
+      isPdf: false,
+      originalFileName: parseWarpedOriginalFileName_(name)
+    });
+  }
+  list.sort(function(a, b) {
+    var na = a.originalFileName || a.name;
+    var nb = b.originalFileName || b.name;
+    return naturalCompareFileNames_(na, nb);
+  });
+  return list;
+}
+
+function listWarpedFilesInFolderDirect(folderId) {
+  return listWarpedFilesInFolderDirect_(folderId || getTestInfoValue(getActiveTestSs(), '生徒解答フォルダID'));
+}
+
+function getWarpedFileCountForRosterAssign_(ss) {
+  ss = ss || getActiveTestSs();
+  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  if (!folderId) return { count: 0, files: [], folderId: '' };
+  try {
+    var files = listWarpedFilesInFolderDirect_(folderId);
+    return { count: files.length, files: files, folderId: folderId };
+  } catch (e) {
+    return { count: 0, files: [], folderId: folderId, error: e.toString() };
+  }
+}
+
+function parseRosterAbsentStateJson_(raw) {
+  if (!raw) return null;
+  try {
+    var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!parsed || typeof parsed !== 'object') return null;
+    parsed.absentIndices = (parsed.absentIndices || []).map(function(i) {
+      return parseInt(i, 10);
+    }).filter(function(i) { return !isNaN(i); });
+    parsed.rosterName = parsed.rosterName != null ? String(parsed.rosterName) : '';
+    return parsed;
+  } catch (e) {
+    return null;
+  }
+}
+
+function saveRosterAbsentState_(ss, rosterName, absentIndices) {
+  ss = ss || getActiveTestSs();
+  var payload = {
+    rosterName: rosterName || '',
+    absentIndices: (absentIndices || []).map(function(i) { return parseInt(i, 10); }).filter(function(i) { return !isNaN(i); }),
+    savedAt: Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss')
+  };
+  setTestInfoValue(ss, '未受験者', JSON.stringify(payload));
+  if (rosterName) setTestInfoValue(ss, '選択名簿名', rosterName);
+  return payload;
+}
+
+function getRosterAbsentState() {
+  var ss = getActiveTestSs();
+  return parseRosterAbsentStateJson_(getTestInfoValue(ss, '未受験者')) || { rosterName: '', absentIndices: [], savedAt: '' };
+}
+
+function saveRosterAbsentState(rosterName, absentIndices) {
+  return saveRosterAbsentState_(getActiveTestSs(), rosterName, absentIndices);
+}
+
+function buildResultRowLookups_(sheet) {
+  var rowIndexByFileId = {};
+  var rowIndexByFileName = {};
+  var rowIndexByWarpedFileId = {};
+  if (!sheet || sheet.getLastRow() <= 1) {
+    return { rowIndexByFileId: rowIndexByFileId, rowIndexByFileName: rowIndexByFileName, rowIndexByWarpedFileId: rowIndexByWarpedFileId };
+  }
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colMap = getResultColumnMap(headers);
+  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  data.forEach(function(row, i) {
+    var rowIdx = i + 2;
+    var fid = colMap.fileId >= 0 ? String(row[colMap.fileId] || '') : '';
+    var fname = colMap.fileName >= 0 ? normalizeResultFileName_(row[colMap.fileName]) : '';
+    var wid = colMap.warpedFileId >= 0 ? String(row[colMap.warpedFileId] || '') : '';
+    if (fid) rowIndexByFileId[fid] = rowIdx;
+    if (fname) rowIndexByFileName[fname] = rowIdx;
+    if (wid) rowIndexByWarpedFileId[wid] = rowIdx;
+  });
+  return { rowIndexByFileId: rowIndexByFileId, rowIndexByFileName: rowIndexByFileName, rowIndexByWarpedFileId: rowIndexByWarpedFileId };
+}
+
+function findResultRowForWarpedFile_(warpedFile, lookups) {
+  if (!warpedFile) return null;
+  var rowIdx = lookups.rowIndexByWarpedFileId[warpedFile.id];
+  if (rowIdx) return rowIdx;
+  var origName = warpedFile.originalFileName || parseWarpedOriginalFileName_(warpedFile.name);
+  if (origName) {
+    rowIdx = lookups.rowIndexByFileName[normalizeResultFileName_(origName)];
+    if (rowIdx) return rowIdx;
+  }
+  return null;
 }
 
 function naturalCompareFileNames_(nameA, nameB) {
@@ -3285,50 +3410,39 @@ function assignIdsFromRoster(rosterName, absentIndices) {
 
   var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
   if (!folderId) throw new Error('生徒解答フォルダIDが未設定です。Step③でフォルダを指定してください。');
-  var filesSorted = listFolderFiles(folderId);
+  var warpedInfo = getWarpedFileCountForRosterAssign_(ss);
+  var filesSorted = warpedInfo.files || [];
 
   if (filesSorted.length !== rosterSorted.length) {
     throw new Error(
-      'スキャン画像 ' + filesSorted.length + ' 件と受験予定 ' + rosterSorted.length +
+      '補正済み画像 ' + filesSorted.length + ' 件（フォルダ直下）と受験予定 ' + rosterSorted.length +
       ' 名（名簿' + rosterAll.length + '−未受験' + (rosterAll.length - rosterSorted.length) + '）が一致しないため割当を中止しました。' +
-      '未受験の☑を確認するか、フォルダ内の画像数を確認してください。'
+      '未受験の☑を確認するか、フォルダ直下の補正済み画像（補正_*）の件数を確認してください。'
     );
   }
   if (!filesSorted.length) {
-    throw new Error('スキャン画像がありません。Step③でフォルダを確認してください。');
+    throw new Error('フォルダ直下に補正済み画像（補正_*）がありません。Step③で画像補正を確認してください。');
   }
 
   var sheet = ss.getSheetByName(SHEET_RESULTS);
-  var resultByFileId = {};
-  var rowIndexByFileId = {};
-  if (sheet.getLastRow() > 1) {
-    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-    var colMap = getResultColumnMap(headers);
-    var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
-    data.forEach(function(row, i) {
-      var fid = colMap.fileId >= 0 ? String(row[colMap.fileId] || '') : '';
-      if (fid) {
-        resultByFileId[fid] = row;
-        rowIndexByFileId[fid] = i + 2;
-      }
-    });
-  }
-
+  var lookups = buildResultRowLookups_(sheet);
   var updated = 0;
   var warnings = [];
 
   for (var i = 0; i < filesSorted.length; i++) {
     var file = filesSorted[i];
     var student = rosterSorted[i];
-    var rowIdx = rowIndexByFileId[file.id];
+    var rowIdx = findResultRowForWarpedFile_(file, lookups);
     if (rowIdx) {
       updateStudentIdentity(rowIdx, student.studentId, student.name);
       updated++;
     } else {
-      warnings.push('OCR未完了: ' + file.name + ' → ' + student.studentId + ' ' + student.name);
+      var label = file.originalFileName || file.name;
+      warnings.push('OCR未完了: ' + label + ' → ' + student.studentId + ' ' + student.name);
     }
   }
 
+  saveRosterAbsentState_(ss, rosterName, absentIndices);
   setTestInfoValue(ss, '選択名簿名', rosterName);
   return {
     skipped: false,
@@ -3352,18 +3466,15 @@ function getRosterAssignmentPreview(rosterName, absentIndices) {
   var absentCount = rosterAll.filter(function(r) { return absentSet[r.rowIndex]; }).length;
   var rosterActive = rosterTotal - absentCount;
 
-  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
-  var fileCount = 0;
-  if (folderId) {
-    try { fileCount = listFolderFiles(folderId).length; } catch (e) { fileCount = 0; }
-  }
+  var warpedInfo = getWarpedFileCountForRosterAssign_(ss);
+  var fileCount = warpedInfo.count || 0;
 
   var canAssign = rosterActive > 0 && fileCount > 0 && fileCount === rosterActive;
   var mismatch = '';
   if (fileCount !== rosterActive) {
-    mismatch = 'スキャン画像 ' + fileCount + ' 件と受験予定 ' + rosterActive +
+    mismatch = '補正済み画像 ' + fileCount + ' 件（フォルダ直下）と受験予定 ' + rosterActive +
       ' 名（名簿' + rosterTotal + '−未受験' + absentCount + '）が一致しません。' +
-      '未受験の☑を確認するか、フォルダ内の画像数を確認してください。';
+      '未受験の☑を確認するか、フォルダ直下の補正済み画像（補正_*）の件数を確認してください。';
   }
 
   return {
