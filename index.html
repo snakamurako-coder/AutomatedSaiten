@@ -221,7 +221,7 @@
             <h1 class="text-lg font-bold text-gray-800 mb-1 pr-6"><i class="fa-solid fa-graduation-cap text-blue-600 mr-2"></i>自動採点</h1>
             <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2">
                 <p id="opencv-status" class="text-xs text-orange-600 mb-0"><i class="fa-solid fa-spinner fa-spin"></i> OpenCV.js 読込中...</p>
-                <button type="button" id="opencv-reload-btn" onclick="reloadOpenCvJs()" class="text-xs text-blue-700 underline whitespace-nowrap" title="OpenCV.js を再読み込み">再取得</button>
+                <button type="button" id="opencv-reload-btn" onclick="reloadOpenCvJs()" class="hidden text-xs text-blue-700 underline whitespace-nowrap" title="OpenCV.js を再読み込み">再取得</button>
             </div>
             <select id="recent-test-select" class="w-full text-xs border rounded p-1 mb-1" onchange="onRecentTestChange(this.value)">
                 <option value="">-- 作業中のテスト --</option>
@@ -294,6 +294,7 @@
                 <label class="flex items-center gap-1" title="1枚の処理がこの秒数を超えたら打ち切って次へ">上限(秒) <input type="number" id="batch-file-timeout-sec" value="120" min="30" max="600" class="w-14 border rounded p-1 text-center"></label>
                 <button type="button" onclick="withBusyButton(event.currentTarget, function(){ return startBatchOcr('unprocessed'); })" id="batch-start-btn" data-busy-label="OCR実行中..." data-keep-busy="0" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">未処理のみOCR</button>
                 <button type="button" id="batch-retry-failed-btn" data-busy-label="再実行中..." onclick="withBusyButton(event.currentTarget, function(){ return startBatchOcr('retry'); })" class="bg-red-600 text-white px-3 py-2 rounded" title="前回失敗したファイルのみ再処理">失敗分のみ再実行</button>
+                <button type="button" id="batch-continuous-warp-btn" data-busy-label="起動中..." onclick="withBusyButton(event.currentTarget, startContinuousManualWarp)" class="bg-sky-600 text-white px-3 py-2 rounded" title="読込・補正失敗分をファイル名順に連続手動補正→一括OCR">連続手動補正</button>
                 <button type="button" onclick="BatchProcessor.pause()" class="bg-orange-200 px-3 py-2 rounded">一時停止</button>
             </div>
             <p id="batch-ocr-lang-hint" class="text-xs text-gray-500"></p>
@@ -528,7 +529,10 @@
 <div id="manual-warp-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center p-2" style="background:rgba(0,0,0,0.55)" role="dialog" aria-modal="true">
     <div class="bg-white rounded-lg shadow-xl w-full max-w-6xl max-h-[96vh] overflow-auto p-4 space-y-3">
         <div class="flex items-start justify-between gap-2">
-            <h3 id="manual-warp-title" class="font-bold text-sm">手動補正</h3>
+            <div>
+                <h3 id="manual-warp-title" class="font-bold text-sm">手動補正</h3>
+                <p id="manual-warp-progress" class="text-xs text-indigo-700 hidden"></p>
+            </div>
             <button type="button" onclick="ManualWarpEditor.close()" class="text-gray-500 hover:text-gray-800 text-lg leading-none px-2" title="閉じる">×</button>
         </div>
         <p id="manual-warp-status" class="text-xs text-gray-600">—</p>
@@ -552,7 +556,7 @@
             <button type="button" onclick="ManualWarpEditor.autoDetect()" class="bg-gray-200 px-3 py-1 rounded">自動枠検出</button>
             <button type="button" onclick="ManualWarpEditor.resetCorners()" class="bg-gray-200 px-3 py-1 rounded">範囲再指定</button>
             <button type="button" onclick="ManualWarpEditor.updatePreview()" class="bg-gray-200 px-3 py-1 rounded">プレビュー更新</button>
-            <button type="button" id="manual-warp-save-btn" data-busy-label="処理中..." onclick="withBusyButton(event.currentTarget, function(){ return ManualWarpEditor.saveAndOcr(); })" class="bg-blue-600 text-white px-4 py-1 rounded font-bold ml-auto">保存してOCR再実行</button>
+            <button type="button" id="manual-warp-save-btn" data-busy-label="処理中..." onclick="withBusyButton(event.currentTarget, function(){ return ManualWarpEditor.savePrimary(); })" class="bg-blue-600 text-white px-4 py-1 rounded font-bold ml-auto">保存してOCR再実行</button>
         </div>
     </div>
 </div>
@@ -789,6 +793,8 @@ var ManualWarpEditor = (function() {
   var interactionMode = 'rect_select';
   var rectDragStart = null, rectDragCurrent = null, isRectDragging = false;
   var keyboardCorner = null, blinkOn = false, blinkTimer = null;
+  var continuousMode = false, continuousQueue = [], queueIndex = 0;
+  var inheritedCorners = null, backgroundSaves = [], preloaded = null;
   var CORNER_KEYS = ['tl', 'tr', 'br', 'bl'];
   var CORNER_COLORS = { tl: '#ef4444', tr: '#22c55e', br: '#3b82f6', bl: '#eab308' };
 
@@ -1076,18 +1082,231 @@ var ManualWarpEditor = (function() {
     if (statusMsg) document.getElementById('manual-warp-status').textContent = statusMsg;
   }
 
+  function resetContinuousState() {
+    continuousMode = false;
+    continuousQueue = [];
+    queueIndex = 0;
+    inheritedCorners = null;
+    backgroundSaves = [];
+    preloaded = null;
+    var prog = document.getElementById('manual-warp-progress');
+    if (prog) prog.classList.add('hidden');
+    updateSaveButtonUI();
+  }
+
+  function updateProgressUI() {
+    var prog = document.getElementById('manual-warp-progress');
+    if (!prog) return;
+    if (!continuousMode || !continuousQueue.length) {
+      prog.classList.add('hidden');
+      return;
+    }
+    prog.classList.remove('hidden');
+    prog.textContent = '連続手動補正 ' + (queueIndex + 1) + ' / ' + continuousQueue.length +
+      '（保存済 ' + backgroundSaves.length + ' 件・次画像は事前読込）';
+  }
+
+  function updateSaveButtonUI() {
+    var btn = document.getElementById('manual-warp-save-btn');
+    if (!btn) return;
+    if (continuousMode) {
+      var isLast = queueIndex >= continuousQueue.length - 1;
+      btn.textContent = isLast ? '保存して一括OCR開始' : '保存・次の画像に移る';
+      btn.dataset.busyLabel = isLast ? 'OCR準備中...' : '切替中...';
+    } else {
+      btn.textContent = '保存してOCR再実行';
+      btn.dataset.busyLabel = '処理中...';
+    }
+  }
+
+  function applyInheritedCorners(corners) {
+    if (!img) return;
+    if (!corners) {
+      enterRectSelectMode('ドラッグで用紙の範囲を指定（始点=左上・終点=右下の長方形）');
+      return;
+    }
+    baseCorners = cloneCorners(corners);
+    CORNER_KEYS.forEach(function(k) {
+      baseCorners[k].x = Math.max(0, Math.min(img.width, baseCorners[k].x));
+      baseCorners[k].y = Math.max(0, Math.min(img.height, baseCorners[k].y));
+    });
+    interactionMode = 'corner_edit';
+    rotationDeg = 0;
+    clearKeyboardCorner();
+    document.getElementById('manual-warp-rotate').value = '0';
+    document.getElementById('manual-warp-rotate-val').textContent = '0';
+    drawSource();
+    updatePreview();
+    document.getElementById('manual-warp-status').textContent =
+      '前の画像と同じ四隅位置を引き継ぎました。必要ならドラッグまたはダブルクリック→方向キーで微調整';
+  }
+
+  async function loadFileImage(file) {
+    var fileData = await gasRun('getDriveFileBase64', file.id);
+    var imageEl = await driveFileToImageElement(fileData);
+    return { file: file, img: imageEl };
+  }
+
+  function startPreload(index) {
+    if (!continuousMode || index >= continuousQueue.length) {
+      preloaded = null;
+      return;
+    }
+    var file = continuousQueue[index];
+    preloaded = { index: index, file: file, promise: loadFileImage(file) };
+  }
+
+  function releasePreviewMat() {
+    if (previewMat) { previewMat.delete(); previewMat = null; }
+    previewBase64 = null;
+  }
+
+  async function showQueueIndex(index) {
+    if (index < 0 || index >= continuousQueue.length) return;
+    queueIndex = index;
+    fileMeta = continuousQueue[index];
+    updateProgressUI();
+    updateSaveButtonUI();
+    document.getElementById('manual-warp-title').textContent = '手動補正: ' + (fileMeta.name || '');
+    document.getElementById('manual-warp-status').textContent = '画像切替中...';
+    releasePreviewMat();
+    clearKeyboardCorner();
+    isRectDragging = false;
+    rectDragStart = null;
+    rectDragCurrent = null;
+    dragHandle = null;
+    var loaded;
+    try {
+      if (preloaded && preloaded.index === index) {
+        loaded = await preloaded.promise;
+        preloaded = null;
+      } else {
+        loaded = await loadFileImage(fileMeta);
+      }
+      img = loaded.img;
+      setScaleForImage();
+      document.getElementById('manual-warp-thresh').value = String(threshVal);
+      document.getElementById('manual-warp-thresh-val').textContent = String(threshVal);
+      applyInheritedCorners(inheritedCorners);
+      startPreload(index + 1);
+      updateProgressUI();
+    } catch (err) {
+      document.getElementById('manual-warp-status').textContent = '読込失敗: ' + (err.message || err);
+      setStatus(err.message || err, true);
+    }
+  }
+
+  function queueBackgroundSave(file, base64, corners, studentId) {
+    inheritedCorners = cloneCorners(corners);
+    var entry = {
+      file: file,
+      studentId: studentId || '',
+      status: 'pending',
+      warpedFileId: '',
+      error: ''
+    };
+    backgroundSaves.push(entry);
+    updateBatchResultRow({ file: file, status: 'processing', processStep: 'save_warp' });
+    entry.promise = gasRun('saveWarpedOnly', file, entry.studentId, base64).then(function(res) {
+      if (!res.success) throw new Error(res.error || '補正画像の保存に失敗');
+      entry.warpedFileId = res.warpedFileId;
+      entry.status = 'ok';
+      return entry;
+    }).catch(function(e) {
+      entry.status = 'failed';
+      entry.error = e.message || String(e);
+      BatchProcessor.markFileFailed(file, 'save_warp', entry.error, 'warp');
+      updateBatchResultRow({ file: file, status: 'failed', failStep: 'save_warp', failStage: 'warp', error: entry.error });
+      return entry;
+    });
+    return entry;
+  }
+
+  async function finishContinuousSession() {
+    var btn = document.getElementById('manual-warp-save-btn');
+    if (btn) btn.disabled = true;
+    document.getElementById('manual-warp-status').textContent =
+      '補正画像の保存完了を待機中...（' + backgroundSaves.length + '件）';
+    await Promise.all(backgroundSaves.map(function(e) { return e.promise; }));
+    var okEntries = backgroundSaves.filter(function(e) { return e.status === 'ok'; });
+    var failCount = backgroundSaves.length - okEntries.length;
+    if (!okEntries.length) {
+      document.getElementById('manual-warp-status').textContent = '保存に成功した画像がありません';
+      if (btn) btn.disabled = false;
+      return;
+    }
+    document.getElementById('manual-warp-status').textContent = 'OCR一括実行中...（' + okEntries.length + '件）';
+    try {
+      var ocrResult = await runBatchOcrAfterManualWarp(okEntries);
+      close(true);
+      setStatus('連続手動補正完了: 保存' + okEntries.length + '件' +
+        (failCount ? ' / 保存失敗' + failCount + '件' : '') +
+        ' / OCR成功' + ocrResult.done + '件' +
+        (ocrResult.failed ? ' / OCR失敗' + ocrResult.failed + '件' : ''));
+    } catch (e) {
+      document.getElementById('manual-warp-status').textContent = '一括OCR失敗: ' + (e.message || e);
+      setStatus(e.message || e, true);
+      if (btn) btn.disabled = false;
+    }
+  }
+
+  async function saveAndNext() {
+    if (!fileMeta || !previewBase64 || !baseCorners) {
+      setStatus('補正プレビューがありません。範囲を指定して四隅を調整してください。', true);
+      return;
+    }
+    var snapFile = fileMeta;
+    var snapBase64 = previewBase64;
+    var snapCorners = cloneCorners(baseCorners);
+    var cfg = getPaperConfig(getOrientation());
+    var studentId = '';
+    if (previewMat) studentId = detectOmrId(previewMat, cfg, 0.35);
+    queueBackgroundSave(snapFile, snapBase64, snapCorners, studentId);
+    if (queueIndex >= continuousQueue.length - 1) {
+      await finishContinuousSession();
+      return;
+    }
+    await showQueueIndex(queueIndex + 1);
+  }
+
+  async function openContinuous(files) {
+    if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
+    if (!files || !files.length) { setStatus('連続手動補正対象がありません', true); return; }
+    resetContinuousState();
+    continuousMode = true;
+    continuousQueue = files.filter(function(f) { return f && f.id; });
+    if (!continuousQueue.length) { setStatus('ファイルIDのある対象がありません', true); resetContinuousState(); return; }
+    queueIndex = 0;
+    orientation = getOrientation();
+    threshVal = parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10);
+    inheritedCorners = null;
+    backgroundSaves = [];
+    document.getElementById('manual-warp-modal').classList.remove('hidden');
+    updateSaveButtonUI();
+    updateProgressUI();
+    startPreload(1);
+    await showQueueIndex(0);
+  }
+
+  async function savePrimary() {
+    if (continuousMode) return saveAndNext();
+    return saveAndOcr();
+  }
+
   async function open(file) {
     if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
     if (!file || !file.id) { setStatus('ファイルIDがありません', true); return; }
+    resetContinuousState();
     fileMeta = file;
     orientation = getOrientation();
     threshVal = parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10);
     document.getElementById('manual-warp-modal').classList.remove('hidden');
     document.getElementById('manual-warp-title').textContent = '手動補正: ' + (file.name || '');
     document.getElementById('manual-warp-status').textContent = '画像読込中...';
+    updateSaveButtonUI();
     try {
-      var fileData = await gasRun('getDriveFileBase64', file.id);
-      img = await driveFileToImageElement(fileData);
+      var loaded = await loadFileImage(file);
+      img = loaded.img;
       setScaleForImage();
       document.getElementById('manual-warp-thresh').value = String(threshVal);
       document.getElementById('manual-warp-thresh-val').textContent = String(threshVal);
@@ -1098,16 +1317,23 @@ var ManualWarpEditor = (function() {
     }
   }
 
-  function close() {
+  function close(skipConfirm) {
+    var currentSaved = fileMeta && backgroundSaves.some(function(e) {
+      return e.file && e.file.id === fileMeta.id && e.status !== 'failed';
+    });
+    if (!skipConfirm && continuousMode && previewBase64 && baseCorners && !currentSaved) {
+      if (!confirm('未保存の補正があります。閉じますか？（バックグラウンド保存済み分は保持されます）')) return;
+    }
     document.getElementById('manual-warp-modal').classList.add('hidden');
     clearKeyboardCorner();
-    if (previewMat) { previewMat.delete(); previewMat = null; }
-    img = null; fileMeta = null; previewBase64 = null; dragHandle = null;
+    releasePreviewMat();
+    img = null; fileMeta = null; dragHandle = null;
     isRectDragging = false;
     rectDragStart = null;
     rectDragCurrent = null;
     interactionMode = 'rect_select';
     baseCorners = null;
+    resetContinuousState();
   }
 
   function autoDetect() {
@@ -1194,10 +1420,12 @@ var ManualWarpEditor = (function() {
   return {
     init: init,
     open: open,
+    openContinuous: openContinuous,
     close: close,
     autoDetect: autoDetect,
     resetCorners: resetCorners,
     saveAndOcr: saveAndOcr,
+    savePrimary: savePrimary,
     updatePreview: updatePreview
   };
 })();
@@ -1878,6 +2106,9 @@ var BatchProcessor = (function() {
     isFileInFailedSet: isFileInFailedSet,
     getFailedCount: getFailedCount,
     getFailStepLabel: getFailStepLabel,
+    markFileFailed: function(file, failStep, error, failStage) {
+      recordFailed(file, failStep, error, failStage);
+    },
     clearFailedForFile: clearFailedFile,
     clearFailedFileIds: clearFailedFileIds,
     reloadFailedFromStorage: loadFailedFromStorage,
@@ -2305,6 +2536,131 @@ function openManualWarpForFile(fileId) {
     var file = findBatchFileById(fileId);
     if (!file) { setStatus('ファイルが見つかりません。一覧を再取得してください。', true); return; }
     ManualWarpEditor.open(file);
+}
+
+function collectContinuousManualWarpQueue() {
+    BatchProcessor.reloadFailedFromStorage();
+    var meta = BatchProcessor.getFailedFileMeta();
+    var targetSteps = ['load_src', 'load_warped', 'detect_warp', 'save_warp'];
+    var byId = {};
+    (appState.batchFiles || []).forEach(function(f) {
+        if (!f || !f.id) return;
+        var m = meta[f.id];
+        if (!m && f.name) {
+            Object.keys(meta).forEach(function(k) {
+                if (meta[k] && normalizeBatchFileName(meta[k].fileName) === normalizeBatchFileName(f.name)) m = meta[k];
+            });
+        }
+        if (!m) return;
+        if (targetSteps.indexOf(m.failStep) < 0 && m.stage !== 'warp') return;
+        byId[f.id] = f;
+    });
+    Object.keys(meta).forEach(function(k) {
+        if (k.indexOf('name:') === 0) return;
+        var m = meta[k];
+        if (!m || (targetSteps.indexOf(m.failStep) < 0 && m.stage !== 'warp')) return;
+        if (!byId[k]) {
+            byId[k] = { id: k, name: m.fileName || k, mimeType: 'image/jpeg', isPdf: false };
+        }
+    });
+    return Object.keys(byId).map(function(id) { return byId[id]; }).sort(function(a, b) {
+        return String(a.name).localeCompare(String(b.name), 'ja', { numeric: true, sensitivity: 'base' });
+    });
+}
+
+async function startContinuousManualWarp() {
+    if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
+    await ensureBatchFields();
+    if (!appState.batchFiles.length) {
+        setStatus('先にファイル一覧を取得してください', true);
+        return;
+    }
+    var files = collectContinuousManualWarpQueue();
+    if (!files.length) {
+        setStatus('連続手動補正対象（読込・補正失敗）がありません', true);
+        return;
+    }
+    setStatus('連続手動補正: ' + files.length + ' 件（ファイル名順）');
+    await ManualWarpEditor.openContinuous(files);
+}
+
+async function runBatchOcrAfterManualWarp(entries) {
+    await ensureBatchFields();
+    var fields = appState.fields || [];
+    if (!fields.length) throw new Error('記述欄が未設定です');
+    var concurrency = Math.min(5, Math.max(1, parseInt(document.getElementById('batch-ocr-concurrency') ? document.getElementById('batch-ocr-concurrency').value : 4, 10) || 4));
+    var idx = 0;
+    var done = 0, failed = 0;
+
+    async function ocrOne(entry) {
+        var file = entry.file;
+        updateBatchResultRow({ file: file, status: 'processing', processStep: 'ocr' });
+        try {
+            var fieldCrops = null;
+            if (fieldsNeedPerCropOcr(fields)) {
+                updateBatchResultRow({ file: file, status: 'processing', processStep: 'crop' });
+                var warpForCrop = await gasRun('loadWarpedImageForOcr', file.id || '', file.name, entry.warpedFileId || '', true);
+                if (!warpForCrop || !warpForCrop.success || !warpForCrop.base64) {
+                    throw new Error((warpForCrop && warpForCrop.error) || '欄切り出し用の補正画像を取得できません');
+                }
+                fieldCrops = await buildFieldCropsFromWarped('data:image/jpeg;base64,' + warpForCrop.base64, fields);
+            }
+            var ocrMeta = Object.assign({}, file, { warpedFileId: entry.warpedFileId });
+            var res = await gasRun('ocrStudentPaper', ocrMeta, entry.studentId || '', '', fieldCrops, {
+                skipSaveWarped: true,
+                warpedFileId: entry.warpedFileId
+            });
+            if (!res.success) throw new Error(res.error || 'OCR失敗');
+            BatchProcessor.clearFailedForFile(file);
+            BatchProcessor.enqueuePendingRow({
+                fileName: res.fileName || file.name,
+                fileId: res.fileId || file.id,
+                warpedFileId: res.warpedFileId || entry.warpedFileId,
+                studentId: res.studentId,
+                textMapping: res.textMapping
+            });
+            updateBatchResultRow({ file: file, status: 'done', result: res });
+            done++;
+            return { file: file, ok: true };
+        } catch (e) {
+            var msg = e.message || String(e);
+            BatchProcessor.markFileFailed(file, 'ocr', msg, 'ocr');
+            updateBatchResultRow({ file: file, status: 'failed', failStep: 'ocr', failStage: 'ocr', error: msg });
+            failed++;
+            return { file: file, ok: false };
+        }
+    }
+
+    async function worker() {
+        while (idx < entries.length) {
+            var i = idx++;
+            await ocrOne(entries[i]);
+        }
+    }
+
+    var workers = [];
+    for (var w = 0; w < concurrency; w++) workers.push(worker());
+    await Promise.all(workers);
+
+    var flushError = false;
+    var flushedIds = [];
+    entries.forEach(function(entry) {
+        if (entry.status === 'ok' && entry.file && entry.file.id) flushedIds.push(entry.file.id);
+    });
+    try {
+        var flushRes = await BatchProcessor.flushNow();
+        if (!flushRes || !(flushRes.written > 0 || (flushRes.skippedFileNames && flushRes.skippedFileNames.length))) {
+            flushError = true;
+        } else if (flushedIds.length) {
+            markBatchRowsFlushed(flushedIds);
+        }
+    } catch (e) {
+        flushError = true;
+    }
+    updateBatchRetryFailedButton();
+    updateBatchFlushStatus();
+    if (flushError) refreshBatchPendingTsv();
+    return { done: done, failed: failed, flushError: flushError };
 }
 
 async function runOcrAfterManualWarp(file, previewBase64, studentId, warpedFileId) {
@@ -4008,18 +4364,27 @@ async function startBatchOcr(mode) {
 
 function updateBatchRetryFailedButton() {
     var btn = document.getElementById('batch-retry-failed-btn');
-    if (!btn) return;
+    var cwBtn = document.getElementById('batch-continuous-warp-btn');
     var n = BatchProcessor.getFailedCount();
-    btn.disabled = n === 0;
-    var meta = BatchProcessor.getFailedFileMeta();
-    var parts = {};
-    Object.keys(meta).forEach(function(k) {
-        var m = meta[k];
-        var label = BatchProcessor.getFailStepLabel(m.failStep || m.stage || 'unknown');
-        parts[label] = (parts[label] || 0) + 1;
-    });
-    var breakdown = Object.keys(parts).map(function(l) { return l + parts[l]; }).join(' / ');
-    btn.title = n > 0 ? ('失敗 ' + n + ' 件: ' + breakdown) : '失敗したファイルがありません';
+    if (btn) {
+        btn.disabled = n === 0;
+        var meta = BatchProcessor.getFailedFileMeta();
+        var parts = {};
+        Object.keys(meta).forEach(function(k) {
+            var m = meta[k];
+            var label = BatchProcessor.getFailStepLabel(m.failStep || m.stage || 'unknown');
+            parts[label] = (parts[label] || 0) + 1;
+        });
+        var breakdown = Object.keys(parts).map(function(l) { return l + parts[l]; }).join(' / ');
+        btn.title = n > 0 ? ('失敗 ' + n + ' 件: ' + breakdown) : '失敗したファイルがありません';
+    }
+    if (cwBtn) {
+        var warpCount = collectContinuousManualWarpQueue().length;
+        cwBtn.disabled = warpCount === 0;
+        cwBtn.title = warpCount > 0
+            ? ('読込・補正失敗 ' + warpCount + ' 件をファイル名順に連続手動補正')
+            : '連続手動補正対象（読込・補正失敗）がありません';
+    }
 }
 
 function populateCriteriaSelect() {
@@ -4449,6 +4814,7 @@ async function saveVerificationEdits() {
 }
 
 document.addEventListener('DOMContentLoaded', function() {
+    if (!opencvReady) setOpenCvStatusLoading('OpenCV.js 読込中...');
     TestSessionCache.clear();
     ManualWarpEditor.init();
     window.addEventListener('pagehide', clearTestSessionCacheOnExit);
