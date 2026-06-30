@@ -1178,7 +1178,26 @@ function fieldsNeedPerCropOcr_(fields) {
   return false;
 }
 
+function isAnswerFieldShape_(f) {
+  if (!f || typeof f !== 'object') return false;
+  if (f.slotKey || f.type) return false;
+  return !!(f.id || f.displayName);
+}
+
+function validateAnswerFieldsPayload_(fields) {
+  fields = fields || [];
+  if (!fields.length) {
+    throw new Error('記述欄が空のため保存しません（既存データを保護しています）');
+  }
+  for (var i = 0; i < fields.length; i++) {
+    if (!isAnswerFieldShape_(fields[i])) {
+      throw new Error('記述欄データ形式が不正です（本人欄・出力欄のデータが混ざっている可能性があります）。Step①で記述欄を保存し直してください。');
+    }
+  }
+}
+
 function saveAnswerFields(fields) {
+  validateAnswerFieldsPayload_(fields);
   var ss = getActiveTestSs();
   var sheet = ss.getSheetByName(SHEET_ANSWER_FIELDS);
   ensureAnswerFieldsOcrLangColumn_(sheet);

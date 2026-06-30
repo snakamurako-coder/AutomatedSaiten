@@ -1918,6 +1918,8 @@ var RegionEditor = (function() {
     redraw();
   }
 
+  function getMode() { return mode || 'answer'; }
+
   function init(canvasId, options) {
     canvas = document.getElementById(canvasId); if (!canvas) return;
     ctx = canvas.getContext('2d');
@@ -2068,7 +2070,7 @@ var RegionEditor = (function() {
     } else notifyChange();
     dragState = null;
   }
-  return { init: init, setImage: setImage, setRegions: setRegions, getRegions: getRegions, deleteSelected: deleteSelected, redraw: redraw,
+  return { init: init, setImage: setImage, setRegions: setRegions, getRegions: getRegions, getMode: getMode, deleteSelected: deleteSelected, redraw: redraw,
     IDENTITY_TYPES: IDENTITY_TYPES, setPendingIdentityType: setPendingIdentityType, getPendingIdentityType: getPendingIdentityType,
     clearAllRegions: clearAllRegions, getIdentityTypeStatus: getIdentityTypeStatus,
     setPendingOutputSlotKey: setPendingOutputSlotKey, getPendingOutputSlotKey: getPendingOutputSlotKey,
@@ -3764,6 +3766,7 @@ function goToStep(n, options) {
     } else if (n === 4) populateCriteriaSelectFromCache();
     else if (n === 6) renderDomainTableFromCache();
     else if (n === 7) restoreRosterStepUi();
+    else if (n === 1) restoreAnswerFieldEditorIfNeeded();
     else if (n === 8) loadIdentityEditorFromState();
     else if (n === 10) loadFeedbackStepUi();
 }
@@ -4855,9 +4858,34 @@ async function restoreRosterStepUi() {
     refreshRosterAssignUi();
 }
 
+function looksLikeAnswerFields(fields) {
+    if (!fields || !fields.length) return false;
+    return fields.every(function(f) {
+        return f && !f.slotKey && !f.type && !!(f.id || f.displayName);
+    });
+}
+
+function getAnswerFieldsForSave() {
+    if (typeof RegionEditor.getMode === 'function' && RegionEditor.getMode() === 'answer') {
+        return mergeFieldOcrLangFromUi(RegionEditor.getRegions());
+    }
+    return (appState.fields || []).slice();
+}
+
+async function restoreAnswerFieldEditorIfNeeded() {
+    if (!appState.warpedImageEl && appState.test) {
+        try { await loadModelFromServerIfNeeded(); } catch (e) { return; }
+    }
+    if (!appState.warpedImageEl || typeof RegionEditor.getMode !== 'function') return;
+    if (RegionEditor.getMode() === 'answer') return;
+    RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields || [], onChange: renderFieldList });
+    RegionEditor.setImage(appState.warpedImageEl);
+    renderFieldList(appState.fields || []);
+}
+
 async function autoSaveFieldsForStep2() {
-    var fields = (typeof RegionEditor.getRegions === 'function') ? RegionEditor.getRegions() : appState.fields;
-    if (!fields || !fields.length) {
+    var fields = getAnswerFieldsForSave();
+    if (!looksLikeAnswerFields(fields)) {
         try {
             var info = await gasRun('getTestInfo');
             if (!info.fields || !info.fields.length) {
@@ -4880,8 +4908,11 @@ async function saveCurrentStepProgress(stepNum) {
     if (stepNum > 0) await ensureServerActiveTest();
     var payload = {};
     if (stepNum === 1) {
-        var fields = RegionEditor.getRegions();
-        if (!fields.length) { setStatus('記述欄がありません', true); return; }
+        var fields = getAnswerFieldsForSave();
+        if (!looksLikeAnswerFields(fields)) {
+            setStatus('記述欄の保存は Step① の編集画面で行ってください', true);
+            return;
+        }
         payload.fields = fields;
         if (appState.warpedBase64 && appState.warpedImageEl) {
             payload.modelBase64 = appState.warpedBase64;
@@ -5066,8 +5097,12 @@ function renderFieldList(fields) {
 }
 
 async function saveAnswerFieldsToServer() {
-    var fields = mergeFieldOcrLangFromUi(RegionEditor.getRegions());
-    if (!fields.length) { setStatus('記述欄がありません', true); return; }
+    if (typeof RegionEditor.getMode === 'function' && RegionEditor.getMode() !== 'answer') {
+        setStatus('記述欄編集画面（Step①）で保存してください', true);
+        return;
+    }
+    var fields = getAnswerFieldsForSave();
+    if (!looksLikeAnswerFields(fields)) { setStatus('記述欄がありません', true); return; }
     try {
         await ensureServerActiveTest();
         appState.fields = await gasRun('saveAnswerFields', fields);
