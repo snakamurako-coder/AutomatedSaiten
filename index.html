@@ -104,6 +104,8 @@
             transition: transform 0.2s ease;
         }
         .ocr-lang-switch-track.en .ocr-lang-switch-thumb { transform: translateX(1.25rem); }
+        .verify-compare-switch-track.id-mode { background: #93c5fd; }
+        .verify-compare-switch-track.id-mode .ocr-lang-switch-thumb { transform: translateX(1.25rem); }
         .identity-type-btn { padding: 0.35rem 0.65rem; border-radius: 0.375rem; border: 1px solid #cbd5e1; background: #fff; font-size: 11px; font-weight: 600; cursor: pointer; }
         .identity-type-btn:hover { background: #f1f5f9; }
         .identity-type-btn.active { background: #2563eb; color: #fff; border-color: #1d4ed8; }
@@ -520,10 +522,18 @@
         <!-- ⑨ 照合 -->
         <div id="step-9" class="step-panel hidden space-y-3">
             <h2 class="font-bold">⑨ ID・氏名の照合</h2>
-            <p class="text-xs text-gray-500">⑧で設定した本人欄の切り出し画像と、採点結果シートの<strong>ファイル名・ID・氏名</strong>を並べて視認確認します（④の回答欄画像表示と同様に、読み込み順に1枚ずつ追加されます）。</p>
+            <p class="text-xs text-gray-500">⑧で設定した<strong>氏名欄</strong>または<strong>ID欄</strong>の切り出し画像と、採点結果シートの値を並べて視認確認します（スイッチで照合対象を切り替え、読み込み順に1枚ずつ追加されます）。</p>
             <div class="flex flex-wrap gap-2 items-center text-xs">
                 <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, runVerification)" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">本人欄画像を表示</button>
-                <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveVerificationEdits)" class="bg-green-600 text-white px-4 py-2 rounded text-sm">ID・氏名の修正を保存</button>
+                <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveVerificationEdits)" class="bg-green-600 text-white px-4 py-2 rounded text-sm">修正を保存</button>
+                <div class="verify-compare-switch ocr-lang-switch border rounded bg-white px-2 py-1">
+                    <span class="ocr-lang-switch-label verify-mode-name active">氏名照合</span>
+                    <label class="ocr-lang-switch-track verify-compare-switch-track" title="氏名照合 ⇔ ID照合">
+                        <input type="checkbox" id="verify-compare-mode-cb">
+                        <span class="ocr-lang-switch-thumb"></span>
+                    </label>
+                    <span class="ocr-lang-switch-label verify-mode-id">ID照合</span>
+                </div>
             </div>
             <div class="flex flex-wrap gap-3 items-center text-xs border rounded bg-white px-2 py-1.5">
                 <span class="font-semibold text-slate-700">表示倍率</span>
@@ -2577,7 +2587,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -3888,51 +3898,75 @@ function selectAllOutlierRows(checked) {
     document.querySelectorAll('.outlier-row-cb').forEach(function(cb) { cb.checked = checked; });
 }
 
-function getIdentityFieldsCropRegion(fields) {
-    if (!fields || !fields.length) return null;
-    var minX = Infinity, minY = Infinity, maxX = 0, maxY = 0;
-    fields.forEach(function(f) {
-        minX = Math.min(minX, f.x);
-        minY = Math.min(minY, f.y);
-        maxX = Math.max(maxX, f.x + f.width);
-        maxY = Math.max(maxY, f.y + f.height);
-    });
-    if (!isFinite(minX)) return null;
-    return { x: minX, y: minY, width: maxX - minX, height: maxY - minY };
+function getIdentityFieldByType(fields, type) {
+    return (fields || []).find(function(f) { return String(f.type) === String(type); }) || null;
 }
 
-function renderVerifyCropGrid(results) {
+function getVerifyCompareModeUi() {
+    var cb = document.getElementById('verify-compare-mode-cb');
+    return cb && cb.checked ? 'id' : 'name';
+}
+
+function syncVerifyCompareSwitchVisual() {
+    var cb = document.getElementById('verify-compare-mode-cb');
+    if (!cb) return;
+    var isId = cb.checked;
+    appState.verifyCompareMode = isId ? 'id' : 'name';
+    var track = cb.closest('.verify-compare-switch-track');
+    var wrap = cb.closest('.verify-compare-switch');
+    if (track) track.classList.toggle('id-mode', isId);
+    if (wrap) {
+        var nameLabel = wrap.querySelector('.verify-mode-name');
+        var idLabel = wrap.querySelector('.verify-mode-id');
+        if (nameLabel) nameLabel.classList.toggle('active', !isId);
+        if (idLabel) idLabel.classList.toggle('active', isId);
+    }
+}
+
+function getVerifyCompareTypeLabel(mode) {
+    return mode === 'id' ? 'ID' : '氏名';
+}
+
+function renderVerifyCropGrid(results, mode) {
+    mode = mode || getVerifyCompareModeUi();
     var grid = document.getElementById('verify-crop-grid');
     if (!grid) return;
+    var isId = mode === 'id';
     grid.innerHTML = results.map(function(r) {
         if (!r.ok) {
+            var val = isId ? (r.row.studentId || '-') : (r.row.name || '-');
             return '<div class="crop-tile verify-tile border rounded p-2 bg-red-50 text-xs">' +
                 '<div class="font-bold truncate" title="' + escapeHtml(r.row.fileName || '') + '">' + escapeHtml(r.row.fileName || '—') + '</div>' +
-                '<div class="text-gray-700">' + escapeHtml(r.row.studentId || '-') + ' / ' + escapeHtml(r.row.name || '-') + '</div>' +
+                '<div class="text-gray-700">' + escapeHtml(getVerifyCompareTypeLabel(mode)) + ': ' + escapeHtml(val) + '</div>' +
                 '<div class="text-red-700 mt-1">' + escapeHtml(r.error || '読込失敗') + '</div></div>';
         }
         var row = r.row;
+        var valueCell = isId
+            ? '<div><span class="text-gray-500">ID</span> <input class="verify-id" data-row="' + row.rowIndex + '" value="' + escapeHtml(row.studentId || '') + '"></div>'
+            : '<div><span class="text-gray-500">氏名</span> <input class="verify-name" data-row="' + row.rowIndex + '" value="' + escapeHtml(row.name || '') + '"></div>';
         return '<div class="crop-tile verify-tile border rounded p-1 bg-white shadow-sm" data-row="' + row.rowIndex + '">' +
-            '<img src="' + r.crop + '" class="crop-tile-img w-full h-auto border bg-gray-50" alt="本人欄" draggable="false">' +
+            '<img src="' + r.crop + '" class="crop-tile-img w-full h-auto border bg-gray-50" alt="' + escapeHtml(getVerifyCompareTypeLabel(mode)) + '欄" draggable="false">' +
             '<div class="verify-tile-meta p-1 space-y-0.5">' +
             '<div class="truncate text-gray-600" title="' + escapeHtml(row.fileName || '') + '">' + escapeHtml(row.fileName || '—') + '</div>' +
-            '<div><span class="text-gray-500">ID</span> <input class="verify-id" data-row="' + row.rowIndex + '" value="' + escapeHtml(row.studentId || '') + '"></div>' +
-            '<div><span class="text-gray-500">氏名</span> <input class="verify-name" data-row="' + row.rowIndex + '" value="' + escapeHtml(row.name || '') + '"></div>' +
+            valueCell +
             '</div></div>';
     }).join('');
     applyVerifyCropZoom(appState.verifyCropZoom || 100);
 }
 
-async function loadVerificationCrops(rows, identityFields) {
-    var region = getIdentityFieldsCropRegion(identityFields);
-    if (!region) throw new Error('本人欄の切り出し範囲を計算できません');
+async function loadVerificationCrops(rows, identityFields, mode) {
+    mode = mode || getVerifyCompareModeUi();
+    var fieldType = mode === 'id' ? 'ID' : '氏名';
+    var field = getIdentityFieldByType(identityFields, fieldType);
+    if (!field) throw new Error('⑧で「' + fieldType + '」欄が未設定です');
+    var region = { x: field.x, y: field.y, width: field.width, height: field.height };
     var grid = document.getElementById('verify-crop-grid');
     if (!rows.length) {
         grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">採点結果がありません。Step③でOCRを実行してください。</p>';
         appState.verifyCropResults = [];
         return;
     }
-    grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">画像を読み込み中...（' + rows.length + '枚）</p>';
+    grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">' + fieldType + '欄画像を読み込み中...（' + rows.length + '枚）</p>';
     var results = [];
     var CONCURRENCY = 4;
     for (var i = 0; i < rows.length; i += CONCURRENCY) {
@@ -3949,10 +3983,24 @@ async function loadVerificationCrops(rows, identityFields) {
             }
         }));
         results = results.concat(chunkResults);
-        renderVerifyCropGrid(results);
-        setStatus('本人欄画像を読み込み中... ' + results.length + ' / ' + rows.length);
+        renderVerifyCropGrid(results, mode);
+        setStatus(fieldType + '欄画像を読み込み中... ' + results.length + ' / ' + rows.length);
     }
     appState.verifyCropResults = results;
+}
+
+async function onVerifyCompareModeChange() {
+    syncVerifyCompareSwitchVisual();
+    var ctx = appState.verifyLoadContext;
+    if (!ctx || !ctx.rows || !ctx.rows.length) return;
+    var mode = getVerifyCompareModeUi();
+    var fieldType = getVerifyCompareTypeLabel(mode);
+    try {
+        setStatus(fieldType + '照合モードに切り替え、画像を再読込中...');
+        await loadVerificationCrops(ctx.rows, ctx.identityFields, mode);
+        var failCount = (appState.verifyCropResults || []).filter(function(r) { return !r.ok; }).length;
+        setStatus(fieldType + '照合: ' + ctx.rows.length + ' 枚' + (failCount ? '（読込失敗 ' + failCount + ' 件）' : ''));
+    } catch (e) { setStatus(e.message || e, true); }
 }
 
 async function loadAnswerCropsForRows(rows, fieldId, opts) {
@@ -5422,6 +5470,8 @@ async function assignIdsFromRosterUi() {
 
 async function runVerification() {
     try {
+        var mode = getVerifyCompareModeUi();
+        var fieldType = getVerifyCompareTypeLabel(mode);
         setStatus('採点結果を取得中...');
         var data = await gasRun('getVerificationData');
         var identityFields = sortIdentityFieldsByOrder(data.identityFields || []);
@@ -5429,22 +5479,45 @@ async function runVerification() {
             setStatus('⑧で本人欄が未設定です。先に本人欄を設定してください。', true);
             return;
         }
+        if (!getIdentityFieldByType(identityFields, fieldType)) {
+            setStatus('⑧で「' + fieldType + '」欄が未設定です。先に本人欄を設定してください。', true);
+            return;
+        }
         var rows = data.rows || [];
-        await loadVerificationCrops(rows, identityFields);
+        appState.verifyLoadContext = { rows: rows, identityFields: identityFields };
+        await loadVerificationCrops(rows, identityFields, mode);
         var failCount = (appState.verifyCropResults || []).filter(function(r) { return !r.ok; }).length;
-        setStatus(rows.length + ' 枚を表示しました' + (failCount ? '（読込失敗 ' + failCount + ' 件）' : '') + '。倍率スライダーでサイズを調整できます');
+        setStatus(fieldType + '照合: ' + rows.length + ' 枚を表示' + (failCount ? '（読込失敗 ' + failCount + ' 件）' : '') + '。倍率スライダーでサイズを調整できます');
         markStepDone(9);
     } catch (e) { setStatus(e.message || e, true); }
 }
 
 async function saveVerificationEdits() {
-    var ids = document.querySelectorAll('#verify-crop-grid .verify-id');
-    for (var i = 0; i < ids.length; i++) {
-        var row = ids[i].dataset.row;
-        var nameEl = document.querySelector('#verify-crop-grid .verify-name[data-row="' + row + '"]');
-        await gasRun('updateStudentIdentity', parseInt(row, 10), ids[i].value, nameEl ? nameEl.value : '');
+    var mode = getVerifyCompareModeUi();
+    var byRow = {};
+    (appState.verifyCropResults || []).forEach(function(r) {
+        if (!r.row) return;
+        byRow[r.row.rowIndex] = { studentId: r.row.studentId || '', name: r.row.name || '' };
+    });
+    if (mode === 'id') {
+        document.querySelectorAll('#verify-crop-grid .verify-id').forEach(function(el) {
+            var row = el.dataset.row;
+            if (!byRow[row]) byRow[row] = { studentId: '', name: '' };
+            byRow[row].studentId = el.value;
+        });
+    } else {
+        document.querySelectorAll('#verify-crop-grid .verify-name').forEach(function(el) {
+            var row = el.dataset.row;
+            if (!byRow[row]) byRow[row] = { studentId: '', name: '' };
+            byRow[row].name = el.value;
+        });
     }
-    setStatus('ID・氏名の修正を保存しました');
+    var keys = Object.keys(byRow);
+    for (var i = 0; i < keys.length; i++) {
+        var rowIdx = parseInt(keys[i], 10);
+        await gasRun('updateStudentIdentity', rowIdx, byRow[keys[i]].studentId, byRow[keys[i]].name);
+    }
+    setStatus((mode === 'id' ? 'ID' : '氏名') + 'の修正を保存しました（' + keys.length + ' 件）');
 }
 
 async function recalcDomains() {
@@ -5510,6 +5583,9 @@ document.addEventListener('DOMContentLoaded', function() {
     initCollapsibleSideNav();
     window.addEventListener('resize', function() { scheduleFitCompactTableScrolls(); });
     initCropInlineZoomControls();
+    syncVerifyCompareSwitchVisual();
+    var verifyModeCb = document.getElementById('verify-compare-mode-cb');
+    if (verifyModeCb) verifyModeCb.addEventListener('change', function() { onVerifyCompareModeChange(); });
     setOcrReplaceExpanded(false);
     var critSel = document.getElementById('criteria-field-select');
     if (critSel) critSel.addEventListener('change', function() { loadCriteriaUiForField(this.value); });
