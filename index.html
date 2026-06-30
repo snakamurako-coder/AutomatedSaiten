@@ -617,7 +617,11 @@
                     </div>
                     <button type="button" data-busy-label="描画中..." onclick="withBusyButton(event.currentTarget, previewFeedbackSheet)" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">1件プレビュー</button>
                 </div>
-                <canvas id="feedback-preview-canvas" class="bg-gray-100 max-w-full border rounded"></canvas>
+                <div id="feedback-preview-wrap" class="overflow-auto max-h-[70vh] border rounded bg-gray-100 min-h-[120px]">
+                    <p id="feedback-preview-placeholder" class="text-xs text-gray-400 p-4">「1件プレビュー」実行後にここへ表示されます</p>
+                    <img id="feedback-preview-img" class="max-w-full h-auto hidden" alt="個票プレビュー">
+                    <canvas id="feedback-preview-canvas" class="max-w-full h-auto hidden"></canvas>
+                </div>
             </div>
 
             <div class="border rounded p-3 space-y-2">
@@ -1829,7 +1833,13 @@ var FeedbackRenderer = (function() {
   }
 
   async function renderToDataUrl(base64, fields, outputSlots, payload, style) {
-    var img = await loadImageElementFromBase64(base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64);
+    var src = base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64;
+    var img = await new Promise(function(resolve, reject) {
+      var im = new Image();
+      im.onload = function() { resolve(im); };
+      im.onerror = function() { reject(new Error('補正画像の読込に失敗しました')); };
+      im.src = src;
+    });
     var canvas = document.createElement('canvas');
     canvas.width = img.width || img.naturalWidth;
     canvas.height = img.height || img.naturalHeight;
@@ -5991,6 +6001,10 @@ function populateFeedbackPreviewSelect(rows) {
     var sel = document.getElementById('feedback-preview-row');
     if (!sel) return;
     rows = rows || [];
+    if (!rows.length) {
+        sel.innerHTML = '<option value="">-- 採点結果がありません --</option>';
+        return;
+    }
     sel.innerHTML = rows.map(function(r) {
         var label = (r.studentId || '—') + ' / ' + (r.name || '—') + ' / ' + (r.fileName || '—');
         return '<option value="' + r.rowIndex + '">' + escapeHtml(label) + '</option>';
@@ -6252,36 +6266,63 @@ function getActiveOutputSlots() {
     return [];
 }
 
-async function renderFeedbackSheetForRow(rowIndex, config) {
+async function loadWarpedBase64ForFeedback(payload) {
+    if (payload.fileId) {
+        try {
+            var w = await gasRun('getWarpedImageBase64', payload.fileId);
+            return w.base64 || w;
+        } catch (e) { /* fallback to warpedFileId */ }
+    }
+    if (payload.warpedFileId) {
+        var d = await gasRun('getDriveFileBase64', payload.warpedFileId);
+        return d.base64 || d;
+    }
+    throw new Error('補正画像がありません');
+}
+
+async function renderFeedbackSheetForRow(rowIndex, config, options) {
+    options = options || {};
     config = config || appState.feedbackExportConfig || {};
     var payload = await gasRun('getFeedbackRowPayload', rowIndex);
-    var fileId = payload.fileId || payload.warpedFileId;
-    if (!fileId) throw new Error('補正画像がありません');
+    if (!payload.fileId && !payload.warpedFileId) {
+        throw new Error('補正画像がありません');
+    }
     var outputSlots = getActiveOutputSlots();
-    if (!outputSlots.length) {
+    if (!outputSlots.length && options.requireOutputSlots !== false) {
         throw new Error('合計欄が未配置です。項目ボタンを選び Canvas 上で矩形を指定して「合計欄を保存」してください。');
     }
     var fields = resolveFieldsForFeedbackRender(config.fields || appState.fields);
-    if (!fields.length) {
+    if (!fields.length && options.requireFields !== false) {
         throw new Error('記述欄の座標がありません。①で記述欄を設定・保存してください。');
     }
-    var warped = await gasRun('getWarpedImageBase64', fileId);
-    var b64 = warped.base64 || warped;
+    var b64 = await loadWarpedBase64ForFeedback(payload);
     var style = getActiveFeedbackStyle();
-    payload._renderFields = fields;
     return FeedbackRenderer.renderToDataUrl(b64, fields, outputSlots, payload, style);
 }
 
 function showFeedbackPreviewOnCanvas(dataUrl) {
+    var imgEl = document.getElementById('feedback-preview-img');
     var canvas = document.getElementById('feedback-preview-canvas');
-    if (!canvas) return;
-    var img = new Image();
-    img.onload = function() {
-        canvas.width = img.width;
-        canvas.height = img.height;
-        canvas.getContext('2d').drawImage(img, 0, 0);
+    var ph = document.getElementById('feedback-preview-placeholder');
+    var wrap = document.getElementById('feedback-preview-wrap');
+    if (!imgEl || !dataUrl) {
+        setStatus('プレビュー画像データが空です', true);
+        return;
+    }
+    if (canvas) canvas.classList.add('hidden');
+    imgEl.onload = function() {
+        imgEl.classList.remove('hidden');
+        if (ph) ph.classList.add('hidden');
+        if (wrap) wrap.scrollTop = 0;
     };
-    img.src = dataUrl;
+    imgEl.onerror = function() {
+        setStatus('プレビュー画像の読込に失敗しました', true);
+        if (ph) {
+            ph.classList.remove('hidden');
+            ph.textContent = 'プレビュー画像の表示に失敗しました';
+        }
+    };
+    imgEl.src = dataUrl;
 }
 
 async function previewFeedbackSheet() {
@@ -6300,12 +6341,19 @@ async function previewFeedbackSheet() {
         var payload = await gasRun('getFeedbackRowPayload', rowIndex);
         var validation = validateFeedbackTotalsForPreview(config.outputSlots, payload);
         var markSummary = buildFeedbackMarkSummary(config.fields || appState.fields, payload);
-        var dataUrl = await renderFeedbackSheetForRow(rowIndex, config);
+        var dataUrl = await renderFeedbackSheetForRow(rowIndex, config, {
+            requireOutputSlots: false,
+            requireFields: false
+        });
         showFeedbackPreviewOnCanvas(dataUrl);
         var msg = 'プレビューを表示しました（小問マーク ' + markSummary.drawn + ' 件';
         if (markSummary.lines.length) msg += ' / ' + markSummary.lines.slice(0, 6).join(' ');
-        msg += ' / 合計欄 ' + config.outputSlots.length + ' 件';
-        if (validation.printLine) msg += ' / 印字: ' + validation.printLine;
+        if (config.outputSlots.length) {
+            msg += ' / 合計欄 ' + config.outputSlots.length + ' 件';
+            if (validation.printLine) msg += ' / 印字: ' + validation.printLine;
+        } else {
+            msg += ' / 合計欄未配置（小問マークのみ表示）';
+        }
         msg += '）';
         if (markSummary.missingCoord) msg += ' 【警告】座標未設定の記述欄 ' + markSummary.missingCoord + ' 件 → ①で保存';
         if (markSummary.missingJudgment) msg += ' 【警告】判定なし ' + markSummary.missingJudgment + ' 件 → ⑤採点を確認';
@@ -6345,7 +6393,7 @@ async function batchGenerateFeedbackSheets() {
                     return { status: 'skip', row: row };
                 }
                 try {
-                    var dataUrl = await renderFeedbackSheetForRow(row.rowIndex, config);
+                    var dataUrl = await renderFeedbackSheetForRow(row.rowIndex, config, { requireOutputSlots: true, requireFields: false });
                     await gasRun('saveFeedbackImage', row.rowIndex, dataUrl);
                     return { status: 'ok', row: row };
                 } catch (e) {

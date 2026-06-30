@@ -1005,7 +1005,7 @@ function getTestRestoreData(testSsId) {
     deemedDraftByField: getDeemedDraftGrouped_(ss),
     outputSlots: getOutputSlots(ss),
     availableOutputSlotKeys: getAvailableOutputSlotKeys_(ss),
-    feedbackStyle: getFeedbackStyleConfig(),
+    feedbackStyle: getFeedbackStyleConfigSafe_(),
     activeTestSsId: ss.getId()
   };
 }
@@ -4037,7 +4037,7 @@ function getFeedbackExportConfig() {
     availableSlotKeys: getAvailableOutputSlotKeys_(ss),
     rows: rows,
     sampleTotals: sampleTotals,
-    feedbackStyle: getFeedbackStyleConfig(),
+    feedbackStyle: getFeedbackStyleConfigSafe_(),
     feedbackFolderUrl: feedbackFolder.getUrl()
   };
 }
@@ -4147,6 +4147,14 @@ function readFeedbackStyleFlatFromSheet_(sheet) {
     flat[String(data[i][0])] = String(data[i][1]);
   }
   return flat;
+}
+
+function getFeedbackStyleConfigSafe_() {
+  try {
+    return getFeedbackStyleConfig();
+  } catch (e) {
+    return getDefaultFeedbackStyleConfig_();
+  }
 }
 
 function getFeedbackStyleConfig() {
