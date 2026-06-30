@@ -1294,6 +1294,47 @@ function listFolderFiles(folderId) {
   return list;
 }
 
+function getAssignSortFileName_(fileMeta) {
+  if (!fileMeta) return '';
+  if (fileMeta.sortFileName) return normalizeResultFileName_(fileMeta.sortFileName);
+  if (fileMeta.fileName) return normalizeResultFileName_(fileMeta.fileName);
+  if (fileMeta.originalFileName) return normalizeResultFileName_(fileMeta.originalFileName);
+  if (fileMeta.name) {
+    return normalizeResultFileName_(parseWarpedOriginalFileName_(fileMeta.name) || fileMeta.name);
+  }
+  return '';
+}
+
+function sortByAssignFileNameAsc_(items) {
+  var list = (items || []).slice();
+  list.sort(function(a, b) {
+    return naturalCompareFileNames_(getAssignSortFileName_(a), getAssignSortFileName_(b));
+  });
+  return list;
+}
+
+/** 採点結果シートのデータ行をファイル名列の昇順（自然順）で並べ替え */
+function sortResultsSheetByFileNameAsc_(ss) {
+  ss = ss || getActiveTestSs();
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  if (!sheet || sheet.getLastRow() <= 1) return 0;
+  var lastRow = sheet.getLastRow();
+  var numCols = sheet.getLastColumn();
+  var headers = sheet.getRange(1, 1, 1, numCols).getValues()[0];
+  var colMap = getResultColumnMap(headers);
+  if (colMap.fileName < 0) return 0;
+  var numRows = lastRow - 1;
+  if (numRows <= 0) return 0;
+  var data = sheet.getRange(2, 1, numRows, numCols).getValues();
+  data.sort(function(a, b) {
+    var na = normalizeResultFileName_(a[colMap.fileName]);
+    var nb = normalizeResultFileName_(b[colMap.fileName]);
+    return naturalCompareFileNames_(na, nb);
+  });
+  sheet.getRange(2, 1, numRows, numCols).setValues(data);
+  return data.length;
+}
+
 /** フォルダ直下の補正済み画像（補正_*）のみ。サブフォルダは含めない。Step③のキューとは無関係。 */
 function listWarpedFilesInFolderDirect_(folderId) {
   if (!folderId) return [];
@@ -1314,12 +1355,7 @@ function listWarpedFilesInFolderDirect_(folderId) {
       originalFileName: parseWarpedOriginalFileName_(name)
     });
   }
-  list.sort(function(a, b) {
-    var na = a.originalFileName || a.name;
-    var nb = b.originalFileName || b.name;
-    return naturalCompareFileNames_(na, nb);
-  });
-  return list;
+  return sortByAssignFileNameAsc_(list);
 }
 
 function listWarpedFilesInFolderDirect(folderId) {
@@ -3477,8 +3513,10 @@ function assignIdsFromRoster(rosterName, absentStudents) {
 
   var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
   if (!folderId) throw new Error('生徒解答フォルダIDが未設定です。Step③でフォルダを指定してください。');
+
+  sortResultsSheetByFileNameAsc_(ss);
   var warpedInfo = getWarpedFileCountForRosterAssign_(ss);
-  var filesSorted = warpedInfo.files || [];
+  var filesSorted = sortByAssignFileNameAsc_(warpedInfo.files || []);
 
   if (filesSorted.length !== rosterSorted.length) {
     throw new Error(
