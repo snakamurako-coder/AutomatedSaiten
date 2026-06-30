@@ -117,6 +117,13 @@
         .output-slot-btn.done { border-color: #16a34a; background: #dcfce7; color: #166534; }
         .output-slot-btn.active.done { background: #7c3aed; color: #fff; }
         #feedback-preview-canvas, #output-canvas { max-width: 100%; }
+        .collapsible-toggle-btn { padding: 0.35rem 0.75rem; border-radius: 0.375rem; border: 1px solid #cbd5e1; background: #f8fafc; font-size: 12px; font-weight: 600; cursor: pointer; text-align: left; width: 100%; }
+        .collapsible-toggle-btn:hover { background: #f1f5f9; }
+        .collapsible-toggle-btn[aria-expanded="true"] { background: #e2e8f0; border-color: #94a3b8; }
+        .feedback-style-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.5rem; }
+        .feedback-style-field label { display: block; font-size: 11px; font-weight: 600; color: #475569; margin-bottom: 2px; }
+        .feedback-style-field input[type="range"] { width: 100%; }
+        .feedback-style-field .style-val { font-size: 10px; color: #64748b; font-family: monospace; }
         #outlier-crop-panel, #verify-crop-panel {
             min-height: 32rem;
             height: clamp(32rem, calc(100vh - 10rem), 85vh);
@@ -486,19 +493,27 @@
                         </tr></thead><tbody id="roster-preview-tbody"></tbody></table>
                     </div>
                 </div>
-                <div class="text-xs space-y-1">
-                    <label class="font-semibold">名簿TSV（タブ区切り）を貼り付け</label>
-                    <textarea id="roster-tsv-paste" class="w-full border rounded p-2 h-16 font-mono text-xs" placeholder="ID	年	組	番号	氏名	..."></textarea>
-                    <button type="button" onclick="openRosterMapModal()" class="bg-green-600 text-white px-3 py-1 rounded">登録</button>
+                <div class="text-xs space-y-1 collapsible-section">
+                    <button type="button" id="roster-tsv-toggle" class="collapsible-toggle-btn" aria-expanded="false" onclick="toggleCollapsiblePanel('roster-tsv-body', 'roster-tsv-toggle')">名簿TSV貼り付け（展開）</button>
+                    <div id="roster-tsv-body" class="hidden space-y-1 pt-1">
+                        <label class="font-semibold">名簿TSV（タブ区切り）を貼り付け</label>
+                        <textarea id="roster-tsv-paste" class="w-full border rounded p-2 h-16 font-mono text-xs" placeholder="ID	年	組	番号	氏名	..."></textarea>
+                        <button type="button" onclick="openRosterMapModal()" class="bg-green-600 text-white px-3 py-1 rounded">登録</button>
+                    </div>
                 </div>
                 <p id="assign-result-msg" class="text-xs text-gray-600"></p>
             </div>
 
             <hr class="border-gray-200">
             <button type="button" data-busy-label="計算中..." onclick="withBusyButton(event.currentTarget, recalcDomains)" class="bg-blue-600 text-white px-4 py-2 rounded text-sm mb-2">領域合計・総計点を再計算</button>
-            <div><label class="text-xs font-semibold">外部得点CSV（生徒ID,得点[,ソース]）</label>
-            <textarea id="external-csv" class="w-full border rounded p-2 text-xs h-24 font-mono" placeholder="1001,15&#10;1002,12"></textarea></div>
-            <button type="button" data-busy-label="取込中..." onclick="withBusyButton(event.currentTarget, importExternalCsv)" class="bg-green-600 text-white px-4 py-2 rounded text-sm">外部得点を取込</button>
+            <div class="collapsible-section space-y-1">
+                <button type="button" id="external-csv-toggle" class="collapsible-toggle-btn" aria-expanded="false" onclick="toggleCollapsiblePanel('external-csv-body', 'external-csv-toggle')">外部得点CSV取込（展開）</button>
+                <div id="external-csv-body" class="hidden space-y-1 pt-1">
+                    <label class="text-xs font-semibold">外部得点CSV（生徒ID,得点[,ソース]）</label>
+                    <textarea id="external-csv" class="w-full border rounded p-2 text-xs h-24 font-mono" placeholder="1001,15&#10;1002,12"></textarea>
+                    <button type="button" data-busy-label="取込中..." onclick="withBusyButton(event.currentTarget, importExternalCsv)" class="bg-green-600 text-white px-4 py-2 rounded text-sm">外部得点を取込</button>
+                </div>
+            </div>
             <p class="text-xs text-gray-500">解答用紙への判定・得点描画は <strong>⑩ 個票出力</strong> で行います。</p>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(7); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
@@ -579,6 +594,18 @@
                 <p id="output-slot-hint" class="text-xs text-violet-700">項目ボタンを押してから、Canvas 上をドラッグしてください。</p>
                 <ul id="output-slot-status" class="text-xs flex flex-wrap gap-2"></ul>
                 <canvas id="output-canvas" class="bg-white max-w-full border rounded"></canvas>
+            </div>
+
+            <div class="border rounded bg-slate-50 collapsible-section">
+                <button type="button" id="feedback-style-toggle" class="collapsible-toggle-btn rounded-t" aria-expanded="false" onclick="toggleCollapsiblePanel('feedback-style-body', 'feedback-style-toggle', '出力書式設定')">出力書式設定</button>
+                <div id="feedback-style-body" class="hidden border-t border-slate-200 p-3 space-y-3 text-xs">
+                    <p class="text-gray-600">判定マーク（○△×）・小問得点・合計点文字の色・太さ・サイズ・透明度を設定します（全テスト共通・ハブSSに保存）。</p>
+                    <div id="feedback-style-form" class="space-y-3"></div>
+                    <div class="flex flex-wrap gap-2 pt-1 border-t border-slate-200">
+                        <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveFeedbackStyleToServer)" class="bg-green-600 text-white px-4 py-2 rounded font-bold">書式を保存</button>
+                        <button type="button" data-busy-label="処理中..." onclick="withBusyButton(event.currentTarget, resetFeedbackStyleToDefault)" class="bg-gray-200 text-gray-800 px-4 py-2 rounded">デフォルト設定に戻す</button>
+                    </div>
+                </div>
             </div>
 
             <div class="border rounded p-3 bg-white space-y-2">
@@ -1635,9 +1662,49 @@ var ManualWarpEditor = (function() {
 })();
 
 var FeedbackRenderer = (function() {
-  var COLOR_MARU = '#dc2626';
-  var COLOR_SANKAKU = '#ea580c';
-  var COLOR_BATSU = '#2563eb';
+  function getDefaultStyle() {
+    return {
+      mark: {
+        insetRatio: 0.05,
+        maru: { strokeColor: '#dc2626', fillOpacity: 0.12, strokeOpacity: 1, lineWidthRatio: 0.06 },
+        sankaku: { strokeColor: '#ea580c', strokeOpacity: 1, lineWidthRatio: 0.06 },
+        batsu: { strokeColor: '#2563eb', strokeOpacity: 1, lineWidthRatio: 0.08 },
+        score: { color: '#111827', sizeRatio: 0.35, opacity: 1, fontWeight: 'bold' }
+      },
+      total: { color: '#111827', sizeRatio: 0.5, opacity: 1, fontWeight: 'bold', minFontSize: 10 }
+    };
+  }
+
+  function deepMergeStyle(base, override) {
+    var out = JSON.parse(JSON.stringify(base || getDefaultStyle()));
+    if (!override) return out;
+    function merge(into, src) {
+      Object.keys(src || {}).forEach(function(k) {
+        if (src[k] !== null && typeof src[k] === 'object' && !Array.isArray(src[k])) {
+          if (!into[k] || typeof into[k] !== 'object') into[k] = {};
+          merge(into[k], src[k]);
+        } else if (src[k] !== undefined) {
+          into[k] = src[k];
+        }
+      });
+    }
+    merge(out, override);
+    return out;
+  }
+
+  function resolveStyle(style) {
+    return deepMergeStyle(getDefaultStyle(), style);
+  }
+
+  function hexToRgba(hex, opacity) {
+    var h = String(hex || '#000000').replace('#', '');
+    if (h.length === 3) h = h[0] + h[0] + h[1] + h[1] + h[2] + h[2];
+    var r = parseInt(h.substring(0, 2), 16) || 0;
+    var g = parseInt(h.substring(2, 4), 16) || 0;
+    var b = parseInt(h.substring(4, 6), 16) || 0;
+    var a = opacity != null ? opacity : 1;
+    return 'rgba(' + r + ',' + g + ',' + b + ',' + a + ')';
+  }
 
   function normalizeJudgment(j) {
     var s = String(j || '').trim();
@@ -1652,52 +1719,56 @@ var FeedbackRenderer = (function() {
     return { x: x + w * p, y: y + h * p, w: w * (1 - 2 * p), h: h * (1 - 2 * p) };
   }
 
-  function drawScoreText(ctx, text, cx, cy, maxW, minDim) {
+  function drawScoreText(ctx, text, cx, cy, maxW, minDim, scoreStyle) {
     if (text === '' || text == null) return;
-    var fontSize = Math.max(8, minDim * 0.35);
-    ctx.font = 'bold ' + fontSize + 'px sans-serif';
-    ctx.fillStyle = '#111827';
+    var fontSize = Math.max(8, minDim * (scoreStyle.sizeRatio || 0.35));
+    var weight = scoreStyle.fontWeight || 'bold';
+    ctx.font = weight + ' ' + fontSize + 'px sans-serif';
+    ctx.fillStyle = hexToRgba(scoreStyle.color || '#111827', scoreStyle.opacity != null ? scoreStyle.opacity : 1);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     var s = String(text);
     while (ctx.measureText(s).width > maxW * 0.85 && fontSize > 8) {
       fontSize *= 0.9;
-      ctx.font = 'bold ' + fontSize + 'px sans-serif';
+      ctx.font = weight + ' ' + fontSize + 'px sans-serif';
     }
     ctx.fillText(s, cx, cy);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
   }
 
-  function drawMark(ctx, x, y, w, h, judgment, score) {
+  function drawMark(ctx, x, y, w, h, judgment, score, style) {
+    var st = resolveStyle(style);
     var kind = normalizeJudgment(judgment);
     if (!kind) return;
-    var r = insetRect(x, y, w, h, 0.05);
+    var r = insetRect(x, y, w, h, st.mark.insetRatio);
     var cx = r.x + r.w / 2;
     var cy = r.y + r.h / 2;
     var minDim = Math.min(r.w, r.h);
-    var lw = Math.max(2, minDim * 0.06);
 
     if (kind === 'maru') {
+      var maru = st.mark.maru;
       ctx.beginPath();
       ctx.ellipse(cx, cy, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
-      ctx.fillStyle = 'rgba(220, 38, 38, 0.12)';
+      ctx.fillStyle = hexToRgba(maru.strokeColor, maru.fillOpacity != null ? maru.fillOpacity : 0.12);
       ctx.fill();
-      ctx.strokeStyle = COLOR_MARU;
-      ctx.lineWidth = lw;
+      ctx.strokeStyle = hexToRgba(maru.strokeColor, maru.strokeOpacity != null ? maru.strokeOpacity : 1);
+      ctx.lineWidth = Math.max(2, minDim * (maru.lineWidthRatio || 0.06));
       ctx.stroke();
     } else if (kind === 'sankaku') {
+      var san = st.mark.sankaku;
       ctx.beginPath();
       ctx.moveTo(cx, r.y);
       ctx.lineTo(r.x + r.w, r.y + r.h);
       ctx.lineTo(r.x, r.y + r.h);
       ctx.closePath();
-      ctx.strokeStyle = COLOR_SANKAKU;
-      ctx.lineWidth = lw;
+      ctx.strokeStyle = hexToRgba(san.strokeColor, san.strokeOpacity != null ? san.strokeOpacity : 1);
+      ctx.lineWidth = Math.max(2, minDim * (san.lineWidthRatio || 0.06));
       ctx.stroke();
     } else {
-      ctx.strokeStyle = COLOR_BATSU;
-      ctx.lineWidth = Math.max(2, minDim * 0.08);
+      var bat = st.mark.batsu;
+      ctx.strokeStyle = hexToRgba(bat.strokeColor, bat.strokeOpacity != null ? bat.strokeOpacity : 1);
+      ctx.lineWidth = Math.max(2, minDim * (bat.lineWidthRatio || 0.08));
       ctx.beginPath();
       ctx.moveTo(r.x, r.y);
       ctx.lineTo(r.x + r.w, r.y + r.h);
@@ -1708,39 +1779,41 @@ var FeedbackRenderer = (function() {
 
     var num = parseInt(score, 10);
     var hideScore = kind === 'batsu' && (score === 0 || score === '0' || num === 0);
-    if (!hideScore) drawScoreText(ctx, score, cx, cy, r.w, minDim);
+    if (!hideScore) drawScoreText(ctx, score, cx, cy, r.w, minDim, st.mark.score);
   }
 
   function formatTotalText(slot, value) {
     if (value === '' || value == null) return '';
     var v = String(value);
-    if (slot.printMode === 'label') return String(slot.slotKey || '') + ' ' + v;
+    if (slot.printMode === 'label') return String(slot.slotKey || '').trim() + ' ' + v;
     return v;
   }
 
-  function drawTotal(ctx, slot, value) {
+  function drawTotal(ctx, slot, value, style) {
     if (!slot || !(slot.width > 0) || !(slot.height > 0)) return;
     var text = formatTotalText(slot, value);
     if (!text) return;
+    var st = resolveStyle(style).total;
     var x = slot.x;
     var y = slot.y;
     var w = slot.width;
     var h = slot.height;
-    var fontSize = Math.max(10, Math.min(w, h) * 0.5);
-    ctx.font = 'bold ' + fontSize + 'px sans-serif';
-    ctx.fillStyle = '#111827';
+    var fontSize = Math.max(st.minFontSize || 10, Math.min(w, h) * (st.sizeRatio || 0.5));
+    var weight = st.fontWeight || 'bold';
+    ctx.font = weight + ' ' + fontSize + 'px sans-serif';
+    ctx.fillStyle = hexToRgba(st.color || '#111827', st.opacity != null ? st.opacity : 1);
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     while (ctx.measureText(text).width > w * 0.92 && fontSize > 8) {
       fontSize *= 0.9;
-      ctx.font = 'bold ' + fontSize + 'px sans-serif';
+      ctx.font = weight + ' ' + fontSize + 'px sans-serif';
     }
     ctx.fillText(text, x + w / 2, y + h / 2);
     ctx.textAlign = 'left';
     ctx.textBaseline = 'alphabetic';
   }
 
-  async function renderToDataUrl(base64, fields, outputSlots, payload) {
+  async function renderToDataUrl(base64, fields, outputSlots, payload, style) {
     var img = await loadImageElementFromBase64(base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64);
     var canvas = document.createElement('canvas');
     canvas.width = img.width || img.naturalWidth;
@@ -1749,16 +1822,22 @@ var FeedbackRenderer = (function() {
     ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
     (fields || []).forEach(function(f) {
       var marks = (payload.fieldMarks || {})[f.id] || {};
-      drawMark(ctx, f.x, f.y, f.width, f.height, marks.judgment, marks.score);
+      drawMark(ctx, f.x, f.y, f.width, f.height, marks.judgment, marks.score, style);
     });
+    var totals = payload.totals || {};
     (outputSlots || []).forEach(function(slot) {
-      if (!slot.width || !slot.height) return;
-      drawTotal(ctx, slot, (payload.totals || {})[slot.slotKey]);
+      if (!(slot.width > 0) || !(slot.height > 0)) return;
+      var key = String(slot.slotKey || '').trim();
+      drawTotal(ctx, slot, totals[key], style);
     });
     return canvas.toDataURL('image/jpeg', 0.92);
   }
 
-  return { drawMark: drawMark, drawTotal: drawTotal, renderToDataUrl: renderToDataUrl, normalizeJudgment: normalizeJudgment };
+  return {
+    drawMark: drawMark, drawTotal: drawTotal, renderToDataUrl: renderToDataUrl,
+    normalizeJudgment: normalizeJudgment, formatTotalText: formatTotalText,
+    getDefaultStyle: getDefaultStyle, resolveStyle: resolveStyle, hexToRgba: hexToRgba
+  };
 })();
 
 var RegionEditor = (function() {
@@ -1825,7 +1904,7 @@ var RegionEditor = (function() {
     return regions.map(function(r, i) {
       if (mode === 'identity') return { type: r.type || r.id, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height) };
       if (mode === 'output') return {
-        slotKey: r.slotKey || r.id,
+        slotKey: String(r.slotKey || r.id || '').trim(),
         x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height),
         printMode: r.printMode === 'label' ? 'label' : 'number'
       };
@@ -2803,7 +2882,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 個票出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false, outputSlots: [], availableOutputSlotKeys: [], feedbackExportConfig: null };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false, outputSlots: [], availableOutputSlotKeys: [], feedbackExportConfig: null, feedbackStyle: null };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -3591,20 +3670,48 @@ function initCollapsibleSideNav() {
     });
 }
 
-function setOcrReplaceExpanded(expanded) {
-    var body = document.getElementById('ocr-replace-body');
-    var collapseBtn = document.getElementById('ocr-collapse-btn');
-    var expandBtn = document.getElementById('ocr-expand-btn');
+function setCollapsibleExpanded(bodyId, expanded, opts) {
+    opts = opts || {};
+    var body = document.getElementById(bodyId);
     if (!body) return;
+    var toggleBtn = opts.toggleBtnId ? document.getElementById(opts.toggleBtnId) : null;
+    var collapseBtn = opts.collapseBtnId ? document.getElementById(opts.collapseBtnId) : null;
+    var expandBtn = opts.expandBtnId ? document.getElementById(opts.expandBtnId) : null;
     if (expanded) {
         body.classList.remove('hidden');
+        if (toggleBtn) {
+            toggleBtn.setAttribute('aria-expanded', 'true');
+            if (opts.expandedLabel) toggleBtn.textContent = opts.expandedLabel;
+        }
         if (collapseBtn) collapseBtn.classList.remove('hidden');
         if (expandBtn) expandBtn.classList.add('hidden');
     } else {
         body.classList.add('hidden');
+        if (toggleBtn) {
+            toggleBtn.setAttribute('aria-expanded', 'false');
+            if (opts.collapsedLabel) toggleBtn.textContent = opts.collapsedLabel;
+        }
         if (collapseBtn) collapseBtn.classList.add('hidden');
         if (expandBtn) expandBtn.classList.remove('hidden');
     }
+}
+
+function toggleCollapsiblePanel(bodyId, toggleBtnId, collapsedLabel) {
+    var body = document.getElementById(bodyId);
+    if (!body) return;
+    var expanded = body.classList.contains('hidden');
+    setCollapsibleExpanded(bodyId, expanded, {
+        toggleBtnId: toggleBtnId,
+        collapsedLabel: collapsedLabel,
+        expandedLabel: collapsedLabel ? collapsedLabel + '（閉じる）' : undefined
+    });
+}
+
+function setOcrReplaceExpanded(expanded) {
+    setCollapsibleExpanded('ocr-replace-body', expanded, {
+        collapseBtnId: 'ocr-collapse-btn',
+        expandBtnId: 'ocr-expand-btn'
+    });
 }
 
 function resetStepNavDone() {
@@ -4489,6 +4596,7 @@ async function restoreTestUi(data) {
     appState.domainRows = data.domainSettings || [];
     appState.outputSlots = data.outputSlots || [];
     appState.availableOutputSlotKeys = data.availableOutputSlotKeys || [];
+    appState.feedbackStyle = data.feedbackStyle || FeedbackRenderer.getDefaultStyle();
     appState.criteriaList = [];
     appState.warpedBase64 = null;
     appState.warpedImageEl = null;
@@ -5877,7 +5985,10 @@ async function loadFeedbackStepUi() {
         appState.feedbackExportConfig = config;
         appState.outputSlots = config.outputSlots || appState.outputSlots || [];
         appState.availableOutputSlotKeys = config.availableSlotKeys || appState.availableOutputSlotKeys || [];
+        if (config.feedbackStyle) appState.feedbackStyle = config.feedbackStyle;
+        else await loadFeedbackStyleFromServer();
         populateFeedbackPreviewSelect(config.rows || []);
+        renderFeedbackStyleForm();
         var statusEl = document.getElementById('feedback-export-status');
         if (statusEl && config.feedbackFolderUrl) {
             statusEl.innerHTML = '保存先: <a class="text-blue-700 underline" href="' + escapeHtml(config.feedbackFolderUrl) + '" target="_blank" rel="noopener">個票フォルダ</a>';
@@ -5908,15 +6019,173 @@ async function saveOutputSlotsToServer() {
     } catch (e) { setStatus(e.message || e, true); }
 }
 
+function normalizeOutputSlots(slots) {
+    return (slots || []).filter(function(s) {
+        return s && String(s.slotKey || '').trim() && (parseInt(s.width, 10) || 0) > 0 && (parseInt(s.height, 10) || 0) > 0;
+    }).map(function(s) {
+        return Object.assign({}, s, { slotKey: String(s.slotKey).trim() });
+    });
+}
+
+function getTotalValueForSlot(totals, slotKey) {
+    var k = String(slotKey || '').trim();
+    if (!totals || !k) return undefined;
+    if (totals[k] !== undefined && totals[k] !== null && totals[k] !== '') return totals[k];
+    return undefined;
+}
+
+function buildFeedbackPrintSummary(outputSlots, payload) {
+    return normalizeOutputSlots(outputSlots).map(function(slot) {
+        var val = getTotalValueForSlot(payload.totals, slot.slotKey);
+        var text = FeedbackRenderer.formatTotalText(slot, val != null ? val : '');
+        var empty = (val === '' || val == null) && val !== 0 && val !== '0';
+        return { slotKey: slot.slotKey, value: val, text: text, empty: empty };
+    });
+}
+
+function validateFeedbackTotalsForPreview(outputSlots, payload) {
+    var summary = buildFeedbackPrintSummary(outputSlots, payload);
+    var emptyKeys = summary.filter(function(s) { return s.empty; }).map(function(s) { return s.slotKey; });
+    var printLine = summary.filter(function(s) { return s.text; }).map(function(s) { return s.slotKey + '→' + s.text; }).join(' / ');
+    return { summary: summary, emptyKeys: emptyKeys, printLine: printLine };
+}
+
+function getActiveFeedbackStyle() {
+    return FeedbackRenderer.resolveStyle(appState.feedbackStyle || FeedbackRenderer.getDefaultStyle());
+}
+
+var FEEDBACK_STYLE_FIELDS = [
+    { section: '判定マーク共通', fields: [
+        { key: 'mark.insetRatio', label: '内接余白（図形サイズ）', type: 'range', min: 0, max: 0.3, step: 0.01 }
+    ]},
+    { section: '○ 楕円', fields: [
+        { key: 'mark.maru.strokeColor', label: '枠線色', type: 'color' },
+        { key: 'mark.maru.fillOpacity', label: '塗り透明度', type: 'range', min: 0, max: 1, step: 0.01 },
+        { key: 'mark.maru.strokeOpacity', label: '枠線透明度', type: 'range', min: 0, max: 1, step: 0.01 },
+        { key: 'mark.maru.lineWidthRatio', label: '線太さ倍率', type: 'range', min: 0.02, max: 0.2, step: 0.01 }
+    ]},
+    { section: '△ 三角', fields: [
+        { key: 'mark.sankaku.strokeColor', label: '枠線色', type: 'color' },
+        { key: 'mark.sankaku.strokeOpacity', label: '枠線透明度', type: 'range', min: 0, max: 1, step: 0.01 },
+        { key: 'mark.sankaku.lineWidthRatio', label: '線太さ倍率', type: 'range', min: 0.02, max: 0.2, step: 0.01 }
+    ]},
+    { section: '× バツ', fields: [
+        { key: 'mark.batsu.strokeColor', label: '線色', type: 'color' },
+        { key: 'mark.batsu.strokeOpacity', label: '線透明度', type: 'range', min: 0, max: 1, step: 0.01 },
+        { key: 'mark.batsu.lineWidthRatio', label: '線太さ倍率', type: 'range', min: 0.02, max: 0.2, step: 0.01 }
+    ]},
+    { section: '小問得点数字', fields: [
+        { key: 'mark.score.color', label: '文字色', type: 'color' },
+        { key: 'mark.score.sizeRatio', label: 'サイズ倍率', type: 'range', min: 0.15, max: 0.6, step: 0.01 },
+        { key: 'mark.score.opacity', label: '透明度', type: 'range', min: 0, max: 1, step: 0.01 }
+    ]},
+    { section: '合計点文字', fields: [
+        { key: 'total.color', label: '文字色', type: 'color' },
+        { key: 'total.sizeRatio', label: 'サイズ倍率', type: 'range', min: 0.2, max: 0.8, step: 0.01 },
+        { key: 'total.opacity', label: '透明度', type: 'range', min: 0, max: 1, step: 0.01 },
+        { key: 'total.minFontSize', label: '最小フォント(px)', type: 'range', min: 6, max: 24, step: 1 }
+    ]}
+];
+
+function getNestedStyleValue(obj, keyPath) {
+    var parts = String(keyPath).split('.');
+    var cur = obj;
+    for (var i = 0; i < parts.length; i++) {
+        if (cur == null) return undefined;
+        cur = cur[parts[i]];
+    }
+    return cur;
+}
+
+function setNestedStyleValue(obj, keyPath, value) {
+    var parts = String(keyPath).split('.');
+    var cur = obj;
+    for (var i = 0; i < parts.length - 1; i++) {
+        if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+        cur = cur[parts[i]];
+    }
+    var num = parseFloat(value);
+    cur[parts[parts.length - 1]] = (!isNaN(num) && String(value).indexOf('#') !== 0) ? num : value;
+}
+
+function renderFeedbackStyleForm() {
+    var form = document.getElementById('feedback-style-form');
+    if (!form) return;
+    var style = getActiveFeedbackStyle();
+    form.innerHTML = FEEDBACK_STYLE_FIELDS.map(function(section) {
+        return '<div class="border rounded p-2 bg-white"><div class="font-bold text-slate-800 mb-2">' + escapeHtml(section.section) + '</div>' +
+            '<div class="feedback-style-grid">' + section.fields.map(function(f) {
+                var val = getNestedStyleValue(style, f.key);
+                if (f.type === 'color') {
+                    return '<div class="feedback-style-field"><label>' + escapeHtml(f.label) + '</label>' +
+                        '<input type="color" class="fb-style-input border rounded" data-style-key="' + escapeHtml(f.key) + '" value="' + escapeHtml(String(val || '#000000')) + '">' +
+                        '<span class="style-val">' + escapeHtml(String(val || '')) + '</span></div>';
+                }
+                return '<div class="feedback-style-field"><label>' + escapeHtml(f.label) + '</label>' +
+                    '<input type="range" class="fb-style-input w-full" data-style-key="' + escapeHtml(f.key) + '" min="' + f.min + '" max="' + f.max + '" step="' + f.step + '" value="' + val + '">' +
+                    '<span class="style-val fb-style-val" data-style-key="' + escapeHtml(f.key) + '">' + val + '</span></div>';
+            }).join('') + '</div></div>';
+    }).join('');
+    form.querySelectorAll('.fb-style-input').forEach(function(inp) {
+        inp.addEventListener('input', onFeedbackStyleInputChange);
+    });
+}
+
+function onFeedbackStyleInputChange(ev) {
+    var inp = ev.target;
+    var key = inp.dataset.styleKey;
+    if (!key) return;
+    if (!appState.feedbackStyle) appState.feedbackStyle = FeedbackRenderer.getDefaultStyle();
+    setNestedStyleValue(appState.feedbackStyle, key, inp.value);
+    var valEl = document.querySelector('.fb-style-val[data-style-key="' + key + '"]');
+    if (valEl) valEl.textContent = inp.value;
+    else {
+        var field = inp.closest('.feedback-style-field');
+        var sv = field ? field.querySelector('.style-val') : null;
+        if (sv) sv.textContent = inp.value;
+    }
+}
+
+function readFeedbackStyleFromForm() {
+    var style = FeedbackRenderer.getDefaultStyle();
+    document.querySelectorAll('#feedback-style-form .fb-style-input').forEach(function(inp) {
+        if (inp.dataset.styleKey) setNestedStyleValue(style, inp.dataset.styleKey, inp.value);
+    });
+    return style;
+}
+
+async function loadFeedbackStyleFromServer() {
+    try {
+        appState.feedbackStyle = await gasRun('getFeedbackStyleConfig');
+    } catch (e) {
+        appState.feedbackStyle = FeedbackRenderer.getDefaultStyle();
+    }
+    renderFeedbackStyleForm();
+}
+
+async function saveFeedbackStyleToServer() {
+    var style = readFeedbackStyleFromForm();
+    appState.feedbackStyle = await gasRun('saveFeedbackStyleConfig', style);
+    renderFeedbackStyleForm();
+    setStatus('出力書式を保存しました（全テスト共通）');
+}
+
+async function resetFeedbackStyleToDefault() {
+    if (!confirm('出力書式をデフォルトに戻します。よろしいですか？')) return;
+    appState.feedbackStyle = await gasRun('resetFeedbackStyleConfig');
+    renderFeedbackStyleForm();
+    setStatus('出力書式をデフォルトに戻しました');
+}
+
 function getActiveOutputSlots() {
     var live = [];
     if (typeof RegionEditor.getRegions === 'function' && currentStep === 10) {
         try { live = RegionEditor.getRegions() || []; } catch (e) { live = []; }
     }
-    if (live.length) return live;
-    if (appState.outputSlots && appState.outputSlots.length) return appState.outputSlots;
+    var slots = normalizeOutputSlots(live.length ? live : (appState.outputSlots || []));
+    if (slots.length) return slots;
     if (appState.feedbackExportConfig && appState.feedbackExportConfig.outputSlots) {
-        return appState.feedbackExportConfig.outputSlots;
+        return normalizeOutputSlots(appState.feedbackExportConfig.outputSlots);
     }
     return [];
 }
@@ -5932,7 +6201,8 @@ async function renderFeedbackSheetForRow(rowIndex, config) {
     }
     var warped = await gasRun('getWarpedImageBase64', fileId);
     var b64 = warped.base64 || warped;
-    return FeedbackRenderer.renderToDataUrl(b64, config.fields || appState.fields, outputSlots, payload);
+    var style = getActiveFeedbackStyle();
+    return FeedbackRenderer.renderToDataUrl(b64, config.fields || appState.fields, outputSlots, payload, style);
 }
 
 function showFeedbackPreviewOnCanvas(dataUrl) {
@@ -5958,11 +6228,21 @@ async function previewFeedbackSheet() {
         setStatus('個票プレビューを描画中...');
         var config = appState.feedbackExportConfig || await gasRun('getFeedbackExportConfig');
         appState.feedbackExportConfig = config;
+        if (config.feedbackStyle) appState.feedbackStyle = config.feedbackStyle;
         config.outputSlots = getActiveOutputSlots();
+        var payload = await gasRun('getFeedbackRowPayload', rowIndex);
+        var validation = validateFeedbackTotalsForPreview(config.outputSlots, payload);
         var dataUrl = await renderFeedbackSheetForRow(rowIndex, config);
         showFeedbackPreviewOnCanvas(dataUrl);
-        var slotCount = config.outputSlots.length;
-        setStatus('プレビューを表示しました（合計欄 ' + slotCount + ' 件、保存はしていません）');
+        var msg = 'プレビューを表示しました（合計欄 ' + config.outputSlots.length + ' 件';
+        if (validation.printLine) msg += ' / 印字: ' + validation.printLine;
+        msg += '）';
+        if (validation.emptyKeys.length) {
+            msg += ' 【警告】値なし: ' + validation.emptyKeys.join(', ') + ' → ⑦で再計算を確認';
+            setStatus(msg, true);
+        } else {
+            setStatus(msg);
+        }
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -6042,6 +6322,9 @@ document.addEventListener('DOMContentLoaded', function() {
     var verifyModeCb = document.getElementById('verify-compare-mode-cb');
     if (verifyModeCb) verifyModeCb.addEventListener('change', function() { onVerifyCompareModeChange(); });
     setOcrReplaceExpanded(false);
+    setCollapsibleExpanded('roster-tsv-body', false, { toggleBtnId: 'roster-tsv-toggle', collapsedLabel: '名簿TSV貼り付け（展開）' });
+    setCollapsibleExpanded('external-csv-body', false, { toggleBtnId: 'external-csv-toggle', collapsedLabel: '外部得点CSV取込（展開）' });
+    setCollapsibleExpanded('feedback-style-body', false, { toggleBtnId: 'feedback-style-toggle', collapsedLabel: '出力書式設定' });
     var critSel = document.getElementById('criteria-field-select');
     if (critSel) critSel.addEventListener('change', function() { loadCriteriaUiForField(this.value); });
     var deemedInput = document.getElementById('deemed-canonical-input');

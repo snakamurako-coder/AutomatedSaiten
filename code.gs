@@ -138,6 +138,7 @@ function setupHubSheets(ss) {
     ensureHubSheetColumns(ss.getSheetByName(SHEET_HUB_TEST_LIST));
   }
   initHubRosterSheet_(ss);
+  ensureFeedbackStyleSheet_(ss);
   var sheet1 = ss.getSheetByName('シート1');
   if (sheet1 && ss.getSheets().length > 1 && sheet1.getLastRow() === 0) {
     ss.deleteSheet(sheet1);
@@ -215,6 +216,7 @@ var SHEET_OCR_REPLACEMENTS = 'OCR置換ルール';
 var SHEET_DEEMED_SCORING = 'みなし採点';
 var SHEET_DEEMED_DRAFT = 'みなし採点下書き';
 var SHEET_OUTPUT_SLOTS = '出力欄設定';
+var SHEET_FEEDBACK_STYLE = '出力書式設定';
 
 var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
@@ -1003,6 +1005,7 @@ function getTestRestoreData(testSsId) {
     deemedDraftByField: getDeemedDraftGrouped_(ss),
     outputSlots: getOutputSlots(ss),
     availableOutputSlotKeys: getAvailableOutputSlotKeys_(ss),
+    feedbackStyle: getFeedbackStyleConfig(),
     activeTestSsId: ss.getId()
   };
 }
@@ -3875,7 +3878,7 @@ function getOutputSlots(ss) {
   for (var i = 1; i < data.length; i++) {
     if (!data[i][0]) continue;
     slots.push({
-      slotKey: String(data[i][0]),
+      slotKey: String(data[i][0]).trim(),
       x: parseInt(data[i][1], 10) || 0,
       y: parseInt(data[i][2], 10) || 0,
       width: parseInt(data[i][3], 10) || 0,
@@ -3898,7 +3901,7 @@ function saveOutputSlots(slots) {
     var h = parseInt(s.height, 10) || 0;
     if (w <= 0 || h <= 0) return;
     sheet.appendRow([
-      String(s.slotKey),
+      String(s.slotKey).trim(),
       parseInt(s.x, 10) || 0,
       parseInt(s.y, 10) || 0,
       w,
@@ -3936,6 +3939,11 @@ function buildFeedbackRowPayload_(ss, rowIndex) {
       totals[k] = idx >= 0 && row[idx] !== '' && row[idx] != null ? row[idx] : 0;
     }
   });
+  var outputSlotKeysWithValues = [];
+  Object.keys(totals).forEach(function(k) {
+    var v = totals[k];
+    if (v !== '' && v != null) outputSlotKeysWithValues.push(k);
+  });
   return {
     rowIndex: rowIndex,
     studentId: colMap.studentId >= 0 ? String(row[colMap.studentId] || '') : '',
@@ -3944,7 +3952,8 @@ function buildFeedbackRowPayload_(ss, rowIndex) {
     fileId: colMap.fileId >= 0 ? String(row[colMap.fileId] || '') : '',
     warpedFileId: colMap.warpedFileId >= 0 ? String(row[colMap.warpedFileId] || '') : '',
     fieldMarks: fieldMarks,
-    totals: totals
+    totals: totals,
+    outputSlotKeysWithValues: outputSlotKeysWithValues
   };
 }
 
@@ -3972,11 +3981,19 @@ function getFeedbackExportConfig() {
     }
   }
   var feedbackFolder = getOrCreateFeedbackFolder_(ss);
+  var sampleTotals = null;
+  if (rows.length > 0) {
+    try {
+      sampleTotals = buildFeedbackRowPayload_(ss, rows[0].rowIndex).totals;
+    } catch (e) { /* ignore */ }
+  }
   return {
     fields: getAnswerFields(ss),
     outputSlots: getOutputSlots(ss),
     availableSlotKeys: getAvailableOutputSlotKeys_(ss),
     rows: rows,
+    sampleTotals: sampleTotals,
+    feedbackStyle: getFeedbackStyleConfig(),
     feedbackFolderUrl: feedbackFolder.getUrl()
   };
 }
@@ -4011,4 +4028,111 @@ function markFeedbackExportComplete() {
   var ss = getActiveTestSs();
   touchTestProgress_(ss, 10);
   return { feedbackFolderUrl: getOrCreateFeedbackFolder_(ss).getUrl() };
+}
+
+// ========== FeedbackStyleService.gs ==========
+
+function getDefaultFeedbackStyleConfig_() {
+  return {
+    mark: {
+      insetRatio: 0.05,
+      maru: { strokeColor: '#dc2626', fillOpacity: 0.12, strokeOpacity: 1, lineWidthRatio: 0.06 },
+      sankaku: { strokeColor: '#ea580c', strokeOpacity: 1, lineWidthRatio: 0.06 },
+      batsu: { strokeColor: '#2563eb', strokeOpacity: 1, lineWidthRatio: 0.08 },
+      score: { color: '#111827', sizeRatio: 0.35, opacity: 1, fontWeight: 'bold' }
+    },
+    total: { color: '#111827', sizeRatio: 0.5, opacity: 1, fontWeight: 'bold', minFontSize: 10 }
+  };
+}
+
+function ensureFeedbackStyleSheet_(hubSs) {
+  if (!hubSs.getSheetByName(SHEET_FEEDBACK_STYLE)) {
+    var sheet = hubSs.insertSheet(SHEET_FEEDBACK_STYLE);
+    sheet.appendRow(['key', 'value']);
+    sheet.setFrozenRows(1);
+  }
+}
+
+function flattenFeedbackStyleConfig_(obj, prefix, out) {
+  out = out || {};
+  prefix = prefix || '';
+  Object.keys(obj || {}).forEach(function(k) {
+    var val = obj[k];
+    var key = prefix ? prefix + '.' + k : k;
+    if (val !== null && typeof val === 'object' && !Array.isArray(val)) {
+      flattenFeedbackStyleConfig_(val, key, out);
+    } else {
+      out[key] = String(val);
+    }
+  });
+  return out;
+}
+
+function setNestedFeedbackStyleValue_(obj, keyPath, value) {
+  var parts = String(keyPath).split('.');
+  var cur = obj;
+  for (var i = 0; i < parts.length - 1; i++) {
+    if (!cur[parts[i]] || typeof cur[parts[i]] !== 'object') cur[parts[i]] = {};
+    cur = cur[parts[i]];
+  }
+  var last = parts[parts.length - 1];
+  var num = parseFloat(value);
+  if (!isNaN(num) && String(value).trim() !== '' && String(value).indexOf('#') !== 0) {
+    cur[last] = num;
+  } else {
+    cur[last] = value;
+  }
+}
+
+function mergeFeedbackStyleConfig_(defaults, flatOverrides) {
+  var merged = JSON.parse(JSON.stringify(defaults));
+  Object.keys(flatOverrides || {}).forEach(function(k) {
+    if (flatOverrides[k] !== '' && flatOverrides[k] != null) {
+      setNestedFeedbackStyleValue_(merged, k, flatOverrides[k]);
+    }
+  });
+  return merged;
+}
+
+function readFeedbackStyleFlatFromSheet_(sheet) {
+  var flat = {};
+  if (!sheet || sheet.getLastRow() <= 1) return flat;
+  var data = sheet.getDataRange().getValues();
+  for (var i = 1; i < data.length; i++) {
+    if (!data[i][0]) continue;
+    flat[String(data[i][0])] = String(data[i][1]);
+  }
+  return flat;
+}
+
+function getFeedbackStyleConfig() {
+  var hubSs = getHubSs();
+  ensureFeedbackStyleSheet_(hubSs);
+  var sheet = hubSs.getSheetByName(SHEET_FEEDBACK_STYLE);
+  var flat = readFeedbackStyleFlatFromSheet_(sheet);
+  return mergeFeedbackStyleConfig_(getDefaultFeedbackStyleConfig_(), flat);
+}
+
+function saveFeedbackStyleConfig(config) {
+  var hubSs = getHubSs();
+  ensureFeedbackStyleSheet_(hubSs);
+  var sheet = hubSs.getSheetByName(SHEET_FEEDBACK_STYLE);
+  var defaults = getDefaultFeedbackStyleConfig_();
+  var merged = mergeFeedbackStyleConfig_(defaults, flattenFeedbackStyleConfig_(config || {}));
+  var flat = flattenFeedbackStyleConfig_(merged);
+  sheet.clear();
+  sheet.appendRow(['key', 'value']);
+  Object.keys(flat).sort().forEach(function(k) {
+    sheet.appendRow([k, flat[k]]);
+  });
+  return getFeedbackStyleConfig();
+}
+
+function resetFeedbackStyleConfig() {
+  var hubSs = getHubSs();
+  ensureFeedbackStyleSheet_(hubSs);
+  var sheet = hubSs.getSheetByName(SHEET_FEEDBACK_STYLE);
+  sheet.clear();
+  sheet.appendRow(['key', 'value']);
+  return getDefaultFeedbackStyleConfig_();
 }
