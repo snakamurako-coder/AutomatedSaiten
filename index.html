@@ -540,7 +540,16 @@
         <p id="manual-warp-status" class="text-xs text-gray-600">—</p>
         <div class="flex flex-wrap gap-4 items-start">
             <div class="space-y-2 shrink-0">
-                <p class="text-xs font-semibold">原画像（範囲指定→四隅調整）</p>
+                <div class="flex flex-wrap items-center gap-2 justify-between">
+                    <p class="text-xs font-semibold">原画像（範囲指定→四隅調整）</p>
+                    <button type="button" id="manual-warp-save-btn" data-busy-label="処理中..." onclick="withBusyButton(event.currentTarget, function(){ return ManualWarpEditor.savePrimary(); })" class="bg-blue-600 text-white px-3 py-1 rounded font-bold whitespace-nowrap shrink-0">保存してOCR再実行</button>
+                </div>
+                <div class="flex flex-wrap gap-2 text-xs items-center">
+                    <label class="flex items-center gap-1">表示倍率
+                        <input type="range" id="manual-warp-source-zoom" min="30" max="400" value="100" class="w-24 align-middle">
+                        <input type="number" id="manual-warp-source-zoom-num" min="30" max="400" value="100" class="w-14 border rounded p-0.5 text-center font-mono">%
+                    </label>
+                </div>
                 <canvas id="manual-warp-source" tabindex="0" class="border rounded bg-gray-100 cursor-crosshair max-w-full outline-none focus:ring-2 focus:ring-blue-300"></canvas>
                 <div class="flex flex-wrap gap-3 text-xs items-center">
                     <label>二値化閾値 <span id="manual-warp-thresh-val">128</span>
@@ -551,6 +560,12 @@
             </div>
             <div class="space-y-2 shrink-0">
                 <p class="text-xs font-semibold">補正プレビュー</p>
+                <div class="flex flex-wrap gap-2 text-xs items-center">
+                    <label class="flex items-center gap-1">表示倍率
+                        <input type="range" id="manual-warp-preview-zoom" min="30" max="400" value="100" class="w-24 align-middle">
+                        <input type="number" id="manual-warp-preview-zoom-num" min="30" max="400" value="100" class="w-14 border rounded p-0.5 text-center font-mono">%
+                    </label>
+                </div>
                 <canvas id="manual-warp-preview" class="border rounded bg-gray-50 max-w-full"></canvas>
             </div>
         </div>
@@ -558,7 +573,6 @@
             <button type="button" onclick="ManualWarpEditor.autoDetect()" class="bg-gray-200 px-3 py-1 rounded">自動枠検出</button>
             <button type="button" onclick="ManualWarpEditor.resetCorners()" class="bg-gray-200 px-3 py-1 rounded">範囲再指定</button>
             <button type="button" onclick="ManualWarpEditor.updatePreview()" class="bg-gray-200 px-3 py-1 rounded">プレビュー更新</button>
-            <button type="button" id="manual-warp-save-btn" data-busy-label="処理中..." onclick="withBusyButton(event.currentTarget, function(){ return ManualWarpEditor.savePrimary(); })" class="bg-blue-600 text-white px-4 py-1 rounded font-bold ml-auto">保存してOCR再実行</button>
         </div>
     </div>
 </div>
@@ -791,6 +805,8 @@ async function driveFileToImageElement(fileData) {
 var ManualWarpEditor = (function() {
   var sourceCanvas, previewCanvas, sctx, img, fileMeta, baseCorners, rotationDeg = 0;
   var threshVal = 128, orientation = 'landscape', scale = 1, dragHandle = null;
+  var sourceZoomPct = 100, previewZoomPct = 100, fitSourceScale = 1, fitPreviewScale = 1;
+  var previewNativeW = 0, previewNativeH = 0;
   var previewMat = null, previewBase64 = null, HANDLE_R = 10;
   var interactionMode = 'rect_select';
   var rectDragStart = null, rectDragCurrent = null, isRectDragging = false;
@@ -927,12 +943,11 @@ var ManualWarpEditor = (function() {
       if (previewMat) { previewMat.delete(); previewMat = null; }
       var result = warpImageFromCorners(img, c, getOrientation());
       previewMat = result.warpedMat;
-      previewCanvas.width = previewMat.cols;
-      previewCanvas.height = previewMat.rows;
-      cv.imshow(previewCanvas, previewMat);
-      previewBase64 = matToBase64Jpeg(previewMat);
+      renderPreviewCanvas();
     } catch (e) {
       previewBase64 = null;
+      previewNativeW = 0;
+      previewNativeH = 0;
     }
   }
 
@@ -1057,10 +1072,89 @@ var ManualWarpEditor = (function() {
     updatePreview();
   }
 
-  function setScaleForImage() {
+  function clampZoomPct(v) {
+    v = parseInt(v, 10);
+    if (isNaN(v)) v = 100;
+    return Math.max(30, Math.min(400, v));
+  }
+
+  function syncZoomControls(sliderId, numId, pct) {
+    var slider = document.getElementById(sliderId);
+    var num = document.getElementById(numId);
+    if (slider && parseInt(slider.value, 10) !== pct) slider.value = String(pct);
+    if (num && parseInt(num.value, 10) !== pct) num.value = String(pct);
+  }
+
+  function computeFitSourceScale() {
+    if (!img) return 1;
     var maxW = Math.min(720, (window.innerWidth || 800) * 0.45);
     var maxH = 520;
-    scale = Math.min(maxW / img.width, maxH / img.height, 1);
+    return Math.min(maxW / img.width, maxH / img.height, 1);
+  }
+
+  function computeFitPreviewScale(w, h) {
+    if (!w || !h) return 1;
+    var maxW = Math.min(720, (window.innerWidth || 800) * 0.45);
+    var maxH = 520;
+    return Math.min(maxW / w, maxH / h, 1);
+  }
+
+  function applySourceZoom() {
+    if (!img) return;
+    fitSourceScale = computeFitSourceScale();
+    scale = fitSourceScale * (sourceZoomPct / 100);
+    drawSource();
+  }
+
+  function setSourceZoomPct(pct, skipDraw) {
+    sourceZoomPct = clampZoomPct(pct);
+    syncZoomControls('manual-warp-source-zoom', 'manual-warp-source-zoom-num', sourceZoomPct);
+    if (!skipDraw) applySourceZoom();
+  }
+
+  function renderPreviewCanvas() {
+    if (!previewMat || !previewCanvas) return;
+    previewNativeW = previewMat.cols;
+    previewNativeH = previewMat.rows;
+    fitPreviewScale = computeFitPreviewScale(previewNativeW, previewNativeH);
+    var ps = fitPreviewScale * (previewZoomPct / 100);
+    previewCanvas.width = Math.max(1, Math.round(previewNativeW * ps));
+    previewCanvas.height = Math.max(1, Math.round(previewNativeH * ps));
+    var temp = document.createElement('canvas');
+    temp.width = previewNativeW;
+    temp.height = previewNativeH;
+    cv.imshow(temp, previewMat);
+    var pctx = previewCanvas.getContext('2d');
+    pctx.clearRect(0, 0, previewCanvas.width, previewCanvas.height);
+    pctx.drawImage(temp, 0, 0, previewCanvas.width, previewCanvas.height);
+    previewBase64 = matToBase64Jpeg(previewMat);
+  }
+
+  function applyPreviewZoom() {
+    if (previewMat) renderPreviewCanvas();
+    else if (previewCanvas && previewNativeW && previewNativeH) {
+      fitPreviewScale = computeFitPreviewScale(previewNativeW, previewNativeH);
+      var ps = fitPreviewScale * (previewZoomPct / 100);
+      previewCanvas.width = Math.max(1, Math.round(previewNativeW * ps));
+      previewCanvas.height = Math.max(1, Math.round(previewNativeH * ps));
+    }
+  }
+
+  function setPreviewZoomPct(pct) {
+    previewZoomPct = clampZoomPct(pct);
+    syncZoomControls('manual-warp-preview-zoom', 'manual-warp-preview-zoom-num', previewZoomPct);
+    applyPreviewZoom();
+  }
+
+  function resetViewZoom() {
+    sourceZoomPct = 100;
+    previewZoomPct = 100;
+    syncZoomControls('manual-warp-source-zoom', 'manual-warp-source-zoom-num', 100);
+    syncZoomControls('manual-warp-preview-zoom', 'manual-warp-preview-zoom-num', 100);
+  }
+
+  function setScaleForImage() {
+    applySourceZoom();
   }
 
   function enterRectSelectMode(statusMsg) {
@@ -1078,6 +1172,8 @@ var ManualWarpEditor = (function() {
       previewCanvas.width = 0;
       previewCanvas.height = 0;
     }
+    previewNativeW = 0;
+    previewNativeH = 0;
     document.getElementById('manual-warp-rotate').value = '0';
     document.getElementById('manual-warp-rotate-val').textContent = '0';
     if (img) drawSource();
@@ -1336,6 +1432,7 @@ var ManualWarpEditor = (function() {
     interactionMode = 'rect_select';
     baseCorners = null;
     resetContinuousState();
+    resetViewZoom();
   }
 
   function autoDetect() {
@@ -1413,6 +1510,26 @@ var ManualWarpEditor = (function() {
     sourceCanvas.addEventListener('dblclick', onDblClick);
     document.getElementById('manual-warp-thresh').addEventListener('input', onThreshChange);
     document.getElementById('manual-warp-rotate').addEventListener('input', onRotateChange);
+    var srcZoom = document.getElementById('manual-warp-source-zoom');
+    var srcZoomNum = document.getElementById('manual-warp-source-zoom-num');
+    if (srcZoom) srcZoom.addEventListener('input', function() { setSourceZoomPct(srcZoom.value); });
+    if (srcZoomNum) {
+      srcZoomNum.addEventListener('change', function() { setSourceZoomPct(srcZoomNum.value); });
+      srcZoomNum.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); setSourceZoomPct(srcZoomNum.value); }
+      });
+    }
+    var prevZoom = document.getElementById('manual-warp-preview-zoom');
+    var prevZoomNum = document.getElementById('manual-warp-preview-zoom-num');
+    if (prevZoom) prevZoom.addEventListener('input', function() { setPreviewZoomPct(prevZoom.value); });
+    if (prevZoomNum) {
+      prevZoomNum.addEventListener('change', function() { setPreviewZoomPct(prevZoomNum.value); });
+      prevZoomNum.addEventListener('keydown', function(e) {
+        if (e.key === 'Enter') { e.preventDefault(); setPreviewZoomPct(prevZoomNum.value); }
+      });
+    }
+    syncZoomControls('manual-warp-source-zoom', 'manual-warp-source-zoom-num', sourceZoomPct);
+    syncZoomControls('manual-warp-preview-zoom', 'manual-warp-preview-zoom-num', previewZoomPct);
     if (!document._manualWarpKeyInit) {
       document._manualWarpKeyInit = true;
       document.addEventListener('keydown', onKeyDown);
@@ -4559,6 +4676,7 @@ async function initRosterStepUi() {
 }
 
 function hideRosterPreviewPanel() {
+    invalidateRosterAssignSummary();
     var wrap = document.getElementById('roster-preview-wrap');
     if (wrap) wrap.classList.add('hidden');
     var summary = document.getElementById('roster-assign-summary');
@@ -4575,6 +4693,28 @@ function getSelectedAbsentIndices() {
     return absentIndices;
 }
 
+var rosterSummaryRequestId = 0;
+
+function invalidateRosterAssignSummary() {
+    rosterSummaryRequestId++;
+}
+
+function isRosterSummaryRequestCurrent(requestId, rosterName) {
+    if (requestId !== rosterSummaryRequestId) return false;
+    var sel = document.getElementById('roster-select');
+    return sel && String(sel.value) === String(rosterName || '');
+}
+
+function setRosterPreviewInteractive(enabled) {
+    document.querySelectorAll('.roster-absent-cb').forEach(function(cb) {
+        cb.disabled = !enabled;
+    });
+    var sel = document.getElementById('roster-select');
+    if (sel) sel.disabled = !enabled;
+    var showBtn = document.getElementById('show-roster-absent-btn');
+    if (showBtn) showBtn.disabled = !enabled;
+}
+
 function setAssignResultMsg(msg, isError) {
     var el = document.getElementById('assign-result-msg');
     if (!el) return;
@@ -4587,13 +4727,16 @@ async function updateRosterAssignSummary() {
     var assignBtn = document.getElementById('assign-ids-btn');
     if (!summaryEl) return;
     var rosterName = document.getElementById('roster-select').value;
+    var requestId = ++rosterSummaryRequestId;
     if (!rosterName || !appState.rosterPreviewShown) {
         summaryEl.classList.add('hidden');
         if (assignBtn && !(await isAssignIdsSkipped())) assignBtn.disabled = true;
         return;
     }
+    var absentSnapshot = getSelectedAbsentIndices();
     try {
-        var preview = await gasRun('getRosterAssignmentPreview', rosterName, getSelectedAbsentIndices());
+        var preview = await gasRun('getRosterAssignmentPreview', rosterName, absentSnapshot);
+        if (!isRosterSummaryRequestCurrent(requestId, rosterName)) return;
         summaryEl.classList.remove('hidden');
         if (preview.canAssign) {
             summaryEl.className = 'text-xs text-green-900 bg-green-50 border border-green-200 rounded p-2';
@@ -4606,10 +4749,12 @@ async function updateRosterAssignSummary() {
         }
         if (assignBtn) {
             var skipped = await isAssignIdsSkipped();
+            if (!isRosterSummaryRequestCurrent(requestId, rosterName)) return;
             assignBtn.disabled = skipped || !preview.canAssign;
             assignBtn.title = preview.canAssign ? 'ファイル名順と名簿（組・番号順）を対応付けます' : (preview.mismatch || '件数一致後に有効');
         }
     } catch (e) {
+        if (!isRosterSummaryRequestCurrent(requestId, rosterName)) return;
         summaryEl.classList.remove('hidden');
         summaryEl.className = 'text-xs text-red-800 bg-red-50 border border-red-200 rounded p-2';
         summaryEl.textContent = e.message || String(e);
@@ -4652,11 +4797,13 @@ async function updateIdAssignStatusUi() {
 }
 
 async function onRosterSelectChange() {
+    invalidateRosterAssignSummary();
     var name = document.getElementById('roster-select').value;
     appState.rosterAbsent = {};
     appState.rosterPreviewShown = false;
     hideRosterPreviewPanel();
     setAssignResultMsg('');
+    setRosterPreviewInteractive(true);
     if (name) await gasRun('saveSelectedRosterName', name);
     await updateIdAssignStatusUi();
 }
@@ -4758,14 +4905,20 @@ async function assignIdsFromRosterUi() {
         setAssignResultMsg('先に「名簿を表示し未受験者を入力」を押し、未受験☑を確認してください。', true);
         return;
     }
-    var absentIndices = getSelectedAbsentIndices();
+    setRosterPreviewInteractive(false);
     try {
+        var absentIndices = getSelectedAbsentIndices();
         var preview = await gasRun('getRosterAssignmentPreview', rosterName, absentIndices);
+        if (document.getElementById('roster-select').value !== rosterName || !appState.rosterPreviewShown) {
+            setAssignResultMsg('名簿または表示状態が変わったため割当を中止しました。', true);
+            return;
+        }
         if (!preview.canAssign) {
             setAssignResultMsg(preview.mismatch || '件数が一致しないため割当できません。', true);
             await updateRosterAssignSummary();
             return;
         }
+        absentIndices = getSelectedAbsentIndices();
         var res = await gasRun('assignIdsFromRoster', rosterName, absentIndices);
         if (res.skipped) {
             setAssignResultMsg(res.reason || '割当をスキップしました。');
@@ -4774,10 +4927,12 @@ async function assignIdsFromRosterUi() {
         var msg = res.updated + ' 件のID・氏名を更新しました（ファイル' + res.fileCount + ' / 受験者' + res.rosterCount + '）。';
         if (res.warnings && res.warnings.length) msg += ' 警告: ' + res.warnings.join(' / ');
         setAssignResultMsg(msg, !!(res.warnings && res.warnings.length));
-        await updateIdAssignStatusUi();
     } catch (e) {
         setAssignResultMsg(e.message || e, true);
         await updateRosterAssignSummary();
+    } finally {
+        setRosterPreviewInteractive(true);
+        await updateIdAssignStatusUi();
     }
 }
 
@@ -4984,7 +5139,7 @@ document.addEventListener('DOMContentLoaded', function() {
             var idx = parseInt(ev.target.dataset.idx, 10);
             if (ev.target.checked) appState.rosterAbsent[idx] = true;
             else delete appState.rosterAbsent[idx];
-            updateRosterAssignSummary();
+            updateRosterAssignSummary().catch(function() {});
         }
     });
     document.getElementById('roster-map-modal').addEventListener('click', function(ev) {
