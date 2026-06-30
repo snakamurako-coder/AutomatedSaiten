@@ -2912,7 +2912,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 個票出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false, outputSlots: [], availableOutputSlotKeys: [], feedbackExportConfig: null, feedbackStyle: null };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, answerFieldsDirty: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false, outputSlots: [], availableOutputSlotKeys: [], feedbackExportConfig: null, feedbackStyle: null };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -3750,6 +3750,7 @@ function resetStepNavDone() {
 
 function goToStep(n, options) {
     options = options || {};
+    var fromStep = currentStep;
     currentStep = n;
     appState.currentStep = n;
     document.querySelectorAll('.step-panel').forEach(function(el) { el.classList.add('hidden'); });
@@ -3758,17 +3759,25 @@ function goToStep(n, options) {
         btn.classList.toggle('active', parseInt(btn.dataset.step, 10) === n);
     });
     if (n === 2) {
-        if (options.skipAutoSave || appState.restoring) renderPointsTableFromCache();
-        else autoSaveFieldsForStep2().then(function() { renderPointsTableFromCache(); });
+        var step2Chain = Promise.resolve();
+        if (!options.skipAutoSave && fromStep === 1 && appState.answerFieldsDirty) {
+            step2Chain = autoSaveFieldsForStep2();
+        } else {
+            step2Chain = refreshStepViewData(2);
+        }
+        step2Chain.then(function() { renderPointsTableFromCache(); }).catch(function() { renderPointsTableFromCache(); });
     } else if (n === 3) {
         refreshVisionKeyStatus();
         updateBatchOcrLangHint();
     } else if (n === 4) populateCriteriaSelectFromCache();
-    else if (n === 6) renderDomainTableFromCache();
-    else if (n === 7) restoreRosterStepUi();
-    else if (n === 1) restoreAnswerFieldEditorIfNeeded();
-    else if (n === 8) loadIdentityEditorFromState();
-    else if (n === 10) loadFeedbackStepUi();
+    else if (n === 6) {
+        refreshStepViewData(6).then(function() { renderDomainTableFromCache(); }).catch(function() { renderDomainTableFromCache(); });
+    } else if (n === 7) restoreRosterStepUi();
+    else if (n === 1) {
+        refreshStepViewData(1).then(function() { restoreAnswerFieldEditorIfNeeded(); }).catch(function() { restoreAnswerFieldEditorIfNeeded(); });
+    } else if (n === 8) {
+        refreshStepViewData(8).then(function() { loadIdentityEditorFromState(); }).catch(function() { loadIdentityEditorFromState(); });
+    } else if (n === 10) loadFeedbackStepUi();
 }
 
 function renderPointsTableFromCache() {
@@ -4614,6 +4623,7 @@ function restoreBatchResultsFromPreview(preview, processedIds) {
 
 async function restoreTestUi(data) {
     appState.restoring = true;
+    appState.answerFieldsDirty = false;
     appState.test = data;
     appState.fields = data.fields || [];
     appState.points = data.points || {};
@@ -4652,7 +4662,7 @@ async function restoreTestUi(data) {
     try {
         if (data.info && data.info['模範解答画像FileID'] && appState.fields.length) {
             await loadModelFromServerIfNeeded();
-            RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields, onChange: renderFieldList });
+            RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields, onChange: onAnswerFieldsEditorChange });
             RegionEditor.setImage(appState.warpedImageEl);
             renderFieldList(appState.fields);
         }
@@ -4900,13 +4910,55 @@ function getOutputSlotsForSave() {
     return (appState.outputSlots || []).slice();
 }
 
+async function refreshStepViewData(stepNum) {
+    if (!appState.test || appState.restoring) return;
+    try {
+        await ensureServerActiveTest();
+        if (stepNum === 1 || stepNum === 2) {
+            var info = await gasRun('getTestInfo');
+            if (info.fields && info.fields.length) appState.fields = info.fields;
+            if (info.points) {
+                appState.points = info.points;
+                if (appState.test) appState.test.points = info.points;
+            }
+            appState.answerFieldsDirty = false;
+            patchCurrentTestSessionCache(function(cur) {
+                cur.fields = appState.fields;
+                cur.points = appState.points;
+                return cur;
+            });
+        } else if (stepNum === 6) {
+            appState.domainRows = await gasRun('getDomainSettingsForUi') || [];
+            patchCurrentTestSessionCache(function(cur) {
+                cur.domainSettings = appState.domainRows;
+                return cur;
+            });
+        } else if (stepNum === 8) {
+            appState.identityFields = await gasRun('getIdentityFields') || [];
+            patchCurrentTestSessionCache(function(cur) {
+                cur.identityFields = appState.identityFields;
+                return cur;
+            });
+        }
+    } catch (e) { /* キャッシュ表示を維持 */ }
+}
+
+function onAnswerFieldsEditorChange(regions) {
+    appState.answerFieldsDirty = true;
+    renderFieldList(regions);
+}
+
 async function restoreAnswerFieldEditorIfNeeded() {
     if (!appState.warpedImageEl && appState.test) {
         try { await loadModelFromServerIfNeeded(); } catch (e) { return; }
     }
     if (!appState.warpedImageEl || typeof RegionEditor.getMode !== 'function') return;
-    if (RegionEditor.getMode() === 'answer') return;
-    RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields || [], onChange: renderFieldList });
+    if (RegionEditor.getMode() === 'answer') {
+        RegionEditor.setRegions(appState.fields || []);
+        renderFieldList(appState.fields || []);
+        return;
+    }
+    RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields || [], onChange: onAnswerFieldsEditorChange });
     RegionEditor.setImage(appState.warpedImageEl);
     renderFieldList(appState.fields || []);
 }
@@ -4926,6 +4978,7 @@ async function autoSaveFieldsForStep2() {
     }
     try {
         appState.fields = await gasRun('saveAnswerFields', fields);
+        appState.answerFieldsDirty = false;
         setStatus('記述欄を自動確定しました（' + fields.length + '欄）');
         markStepDone(1);
     } catch (e) { setStatus(e.message || e, true); }
@@ -5059,7 +5112,7 @@ async function applyWarpedModel(warpedMat) {
     c.width = warpedMat.cols; c.height = warpedMat.rows;
     cv.imshow(c, warpedMat);
     appState.warpedImageEl = c;
-    RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields, onChange: renderFieldList });
+    RegionEditor.init('editor-canvas', { mode: 'answer', initialRegions: appState.fields, onChange: onAnswerFieldsEditorChange });
     RegionEditor.setImage(c);
     renderFieldList(appState.fields);
     await gasRun('saveModelAnswerImage', appState.warpedBase64, c.width, c.height);
@@ -5139,6 +5192,7 @@ async function saveAnswerFieldsToServer() {
     try {
         await ensureServerActiveTest();
         appState.fields = await gasRun('saveAnswerFields', fields);
+        appState.answerFieldsDirty = false;
         RegionEditor.setRegions(appState.fields);
         renderFieldList(appState.fields);
         patchCurrentTestSessionCache(function(cur) {

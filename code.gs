@@ -1206,9 +1206,70 @@ function validateAnswerFieldsPayload_(fields) {
   }
 }
 
+function fieldsEqualForSave_(a, b) {
+  a = a || [];
+  b = b || [];
+  if (a.length !== b.length) return false;
+  for (var i = 0; i < a.length; i++) {
+    var x = a[i];
+    var y = b[i];
+    if (String(x.id) !== String(y.id)) return false;
+    if (String(x.displayName || x.id) !== String(y.displayName || y.id)) return false;
+    if ((parseInt(x.x, 10) || 0) !== (parseInt(y.x, 10) || 0)) return false;
+    if ((parseInt(x.y, 10) || 0) !== (parseInt(y.y, 10) || 0)) return false;
+    if ((parseInt(x.width, 10) || 0) !== (parseInt(y.width, 10) || 0)) return false;
+    if ((parseInt(x.height, 10) || 0) !== (parseInt(y.height, 10) || 0)) return false;
+    if ((parseInt(x.order, 10) || i + 1) !== (parseInt(y.order, 10) || i + 1)) return false;
+    if (normalizeOcrLang_(x.ocrLang) !== normalizeOcrLang_(y.ocrLang)) return false;
+  }
+  return true;
+}
+
+function identityFieldsEqual_(a, b) {
+  a = a || [];
+  b = b || [];
+  if (a.length !== b.length) return false;
+  function key(f) { return String(f.type || ''); }
+  var sa = a.slice().sort(function(x, y) { return key(x).localeCompare(key(y), 'ja'); });
+  var sb = b.slice().sort(function(x, y) { return key(x).localeCompare(key(y), 'ja'); });
+  for (var i = 0; i < sa.length; i++) {
+    if (key(sa[i]) !== key(sb[i])) return false;
+    if ((parseInt(sa[i].x, 10) || 0) !== (parseInt(sb[i].x, 10) || 0)) return false;
+    if ((parseInt(sa[i].y, 10) || 0) !== (parseInt(sb[i].y, 10) || 0)) return false;
+    if ((parseInt(sa[i].width, 10) || 0) !== (parseInt(sb[i].width, 10) || 0)) return false;
+    if ((parseInt(sa[i].height, 10) || 0) !== (parseInt(sb[i].height, 10) || 0)) return false;
+  }
+  return true;
+}
+
+function outputSlotsEqual_(a, b) {
+  a = a || [];
+  b = b || [];
+  if (a.length !== b.length) return false;
+  function key(s) { return String(s.slotKey || ''); }
+  var sa = a.slice().sort(function(x, y) { return key(x).localeCompare(key(y), 'ja'); });
+  var sb = b.slice().sort(function(x, y) { return key(x).localeCompare(key(y), 'ja'); });
+  for (var i = 0; i < sa.length; i++) {
+    if (key(sa[i]) !== key(sb[i])) return false;
+    if ((parseInt(sa[i].x, 10) || 0) !== (parseInt(sb[i].x, 10) || 0)) return false;
+    if ((parseInt(sa[i].y, 10) || 0) !== (parseInt(sb[i].y, 10) || 0)) return false;
+    if ((parseInt(sa[i].width, 10) || 0) !== (parseInt(sb[i].width, 10) || 0)) return false;
+    if ((parseInt(sa[i].height, 10) || 0) !== (parseInt(sb[i].height, 10) || 0)) return false;
+    var pmA = String(sa[i].printMode || 'number') === 'label' ? 'label' : 'number';
+    var pmB = String(sb[i].printMode || 'number') === 'label' ? 'label' : 'number';
+    if (pmA !== pmB) return false;
+  }
+  return true;
+}
+
 function saveAnswerFields(fields) {
   validateAnswerFieldsPayload_(fields);
   var ss = getActiveTestSs();
+  var existing = getAnswerFields(ss);
+  if (fieldsEqualForSave_(fields, existing)) {
+    touchTestProgress_(ss, 1);
+    return existing;
+  }
   var sheet = ss.getSheetByName(SHEET_ANSWER_FIELDS);
   ensureAnswerFieldsOcrLangColumn_(sheet);
   sheet.clear();
@@ -1303,6 +1364,11 @@ function saveIdentityFields(fields) {
     }
   }
   var ss = getActiveTestSs();
+  var existing = getIdentityFields(ss);
+  if (identityFieldsEqual_(fields, existing)) {
+    touchTestProgress_(ss, 8);
+    return existing;
+  }
   var sheet = ss.getSheetByName(SHEET_IDENTITY_FIELDS);
   sheet.clear();
   sheet.appendRow(['欄種別', 'x', 'y', 'width', 'height']);
@@ -3980,6 +4046,10 @@ function saveOutputSlots(slots) {
   }
   var ss = getActiveTestSs();
   ensureOutputSlotsSheet(ss);
+  var existing = getOutputSlots(ss);
+  if (outputSlotsEqual_(slots, existing)) {
+    return existing;
+  }
   var sheet = ss.getSheetByName(SHEET_OUTPUT_SLOTS);
   sheet.clear();
   sheet.appendRow(['slotKey', 'x', 'y', 'width', 'height', 'printMode']);
