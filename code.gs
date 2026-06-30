@@ -85,6 +85,7 @@ function onOpen() {
     .addItem('ハブを登録', 'registerHubSpreadsheet')
     .addItem('テスト一覧を再同期', 'syncHubTestListFromMenu')
     .addItem('解答用紙ひな形を再作成', 'recreateAnswerSheetTemplatesFromMenu')
+    .addItem('生徒ID欄ひな形（A4横）を再作成', 'recreateStudentIdOnlyTemplateFromMenu')
     .addItem('古いWARP設定を削除', 'cleanupWarpScriptProperties')
     .addToUi();
 }
@@ -183,6 +184,7 @@ function setupHubSheets(ss) {
   initHubRosterSheet_(ss);
   ensureFeedbackStyleSheet_(ss);
   ensureAnswerSheetTemplateSheets_(ss);
+  ensureStudentIdOnlyTemplateSheet_(ss);
   var sheet1 = ss.getSheetByName('シート1');
   if (sheet1 && ss.getSheets().length > 1 && sheet1.getLastRow() === 0) {
     ss.deleteSheet(sheet1);
@@ -263,6 +265,7 @@ var SHEET_OUTPUT_SLOTS = '出力欄設定';
 var SHEET_FEEDBACK_STYLE = '出力書式設定';
 var SHEET_TEMPLATE_A4_LANDSCAPE = 'テンプレート_共通A4横';
 var SHEET_TEMPLATE_A4_PORTRAIT = 'テンプレート_共通A4縦';
+var SHEET_TEMPLATE_ID_A4_LANDSCAPE = 'テンプレート_生徒ID欄A4横';
 var TEMPLATE_GRID_OFFSET_ROW = 2;
 var TEMPLATE_GRID_OFFSET_COL = 2;
 
@@ -3473,6 +3476,120 @@ function getPaperTemplateConfig_(orientation) {
   };
 }
 
+/** 参考マークシートと同じ生徒IDマーク欄（年/組/番 + 0〜9 塗りつぶし欄） */
+function buildStudentIdMarkBlock_(sheet, cfg, idDigits) {
+  idDigits = idDigits || 4;
+  var idStartCol = cfg.idStartCol;
+  var idStartRow = cfg.idStartRow;
+  var labelCol = idStartCol - 1;
+  var headerCol = idStartCol - 4;
+  var r;
+  var c;
+
+  sheet.getRange(idStartRow, headerCol, idDigits, 3).merge()
+    .setValue('生徒\nID')
+    .setFontWeight('bold')
+    .setBackground('#f3f3f3')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setWrap(true)
+    .setFontSize(9)
+    .setBorder(true, true, true, true, false, false, '#000000', SpreadsheetApp.BorderStyle.SOLID);
+
+  sheet.getRange(idStartRow, labelCol)
+    .setValue('年')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setFontSize(8)
+    .setBorder(true, true, true, true, false, false, '#000000', SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(idStartRow + 1, labelCol)
+    .setValue('組')
+    .setHorizontalAlignment('center')
+    .setVerticalAlignment('middle')
+    .setFontSize(8)
+    .setBorder(true, true, true, true, false, false, '#000000', SpreadsheetApp.BorderStyle.SOLID);
+  if (idDigits > 2) {
+    sheet.getRange(idStartRow + 2, labelCol, idDigits - 2, 1).merge()
+      .setValue('番')
+      .setHorizontalAlignment('center')
+      .setVerticalAlignment('middle')
+      .setFontSize(8)
+      .setBorder(true, true, true, true, false, false, '#000000', SpreadsheetApp.BorderStyle.SOLID);
+  }
+
+  for (r = 0; r < idDigits; r++) {
+    for (c = 0; c < 10; c++) {
+      sheet.getRange(idStartRow + r, idStartCol + c)
+        .setValue(String(c))
+        .setHorizontalAlignment('center')
+        .setVerticalAlignment('middle')
+        .setFontColor('#aaaaaa')
+        .setFontSize(9)
+        .setBorder(true, true, true, true, false, false, '#aaaaaa', SpreadsheetApp.BorderStyle.SOLID);
+    }
+  }
+
+  var blockEndRow = idStartRow + idDigits - 1;
+  var blockEndCol = idStartCol + 9;
+  sheet.getRange(idStartRow, headerCol, blockEndRow, blockEndCol)
+    .setBorder(true, true, true, true, true, true, '#64748b', SpreadsheetApp.BorderStyle.SOLID);
+}
+
+function applyAnswerSheetTemplateGrid_(sheet, cfg) {
+  var startRow = TEMPLATE_GRID_OFFSET_ROW + 1;
+  var startCol = TEMPLATE_GRID_OFFSET_COL + 1;
+  var endRow = startRow + cfg.borderRows - 1;
+  var endCol = startCol + cfg.borderCols - 1;
+  var c;
+  for (c = startCol; c <= endCol; c++) {
+    sheet.setColumnWidth(c, 21);
+  }
+  for (var r = startRow; r <= endRow; r++) {
+    sheet.setRowHeight(r, 15);
+  }
+  sheet.setColumnWidth(1, 36);
+  sheet.setColumnWidth(2, 36);
+  var gridRange = sheet.getRange(startRow, startCol, endRow, endCol);
+  gridRange.setBackground('#ffffff');
+  gridRange.setBorder(null, null, null, null, true, true, '#cccccc', SpreadsheetApp.BorderStyle.SOLID);
+  gridRange.setBorder(true, true, true, true, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
+  return { startRow: startRow, startCol: startCol, endRow: endRow, endCol: endCol };
+}
+
+function buildStudentIdOnlyLandscapeTemplate_(sheet) {
+  sheet.clear();
+  var cfg = getPaperTemplateConfig_('landscape');
+  var grid = applyAnswerSheetTemplateGrid_(sheet, cfg);
+
+  sheet.getRange(1, 1, 1, Math.min(grid.endCol, 55)).merge();
+  sheet.getRange(1, 1).setValue(
+    '【生徒ID欄ひな形 A4横】IDマーク欄のみ。' +
+    '独自解答用紙に貼る場合も 64列目・3行目 を基準に配置してください。' +
+    '印刷→スキャン→ Web アプリ Step③ で読み込みます。' +
+    '外枠・マス目は共通A4横ひな形と同じ座標系です。'
+  ).setFontSize(9).setWrap(true).setVerticalAlignment('top');
+
+  sheet.getRange(2, grid.startCol).setValue(
+    '→ 範囲をコピーして独自用紙の同位置へ貼り付け可能。単体印刷でも外枠付きで読取できます。'
+  ).setFontSize(8).setFontColor('#64748b');
+
+  buildStudentIdMarkBlock_(sheet, cfg, 4);
+  sheet.setFrozenRows(grid.startRow - 1);
+}
+
+function ensureStudentIdOnlyTemplateSheet_(ss) {
+  var sheet = ss.getSheetByName(SHEET_TEMPLATE_ID_A4_LANDSCAPE);
+  if (!sheet) {
+    sheet = ss.insertSheet(SHEET_TEMPLATE_ID_A4_LANDSCAPE);
+    buildStudentIdOnlyLandscapeTemplate_(sheet);
+    return sheet;
+  }
+  if (sheet.getLastRow() === 0) {
+    buildStudentIdOnlyLandscapeTemplate_(sheet);
+  }
+  return sheet;
+}
+
 function ensureAnswerSheetTemplateSheets_(ss) {
   ensureAnswerSheetTemplateSheet_(ss, SHEET_TEMPLATE_A4_LANDSCAPE, 'landscape');
   ensureAnswerSheetTemplateSheet_(ss, SHEET_TEMPLATE_A4_PORTRAIT, 'portrait');
@@ -3494,77 +3611,64 @@ function ensureAnswerSheetTemplateSheet_(ss, sheetName, orientation) {
 function buildAnswerSheetTemplate_(sheet, orientation) {
   sheet.clear();
   var cfg = getPaperTemplateConfig_(orientation);
-  var startRow = TEMPLATE_GRID_OFFSET_ROW + 1;
-  var startCol = TEMPLATE_GRID_OFFSET_COL + 1;
-  var endRow = startRow + cfg.borderRows - 1;
-  var endCol = startCol + cfg.borderCols - 1;
+  var grid = applyAnswerSheetTemplateGrid_(sheet, cfg);
   var orientLabel = orientation === 'portrait' ? 'A4縦' : 'A4横';
 
-  sheet.getRange(1, 1, 1, Math.min(endCol, 40)).merge();
+  sheet.getRange(1, 1, 1, Math.min(grid.endCol, 40)).merge();
   sheet.getRange(1, 1).setValue(
     '【解答用紙ひな形 ' + orientLabel + '】このシートを編集して印刷してください。' +
     '外枠・マス目・IDマーク欄の位置は Web アプリ Step① の座標系（1マス≈20px）と一致しています。'
   ).setFontSize(9).setWrap(true).setVerticalAlignment('top');
 
-  sheet.getRange(2, startCol).setValue(
+  sheet.getRange(2, grid.startCol).setValue(
     '→ 記述欄を追加する場合はマス目内を編集。印刷後スキャンして Step③ で読み込みます。'
   ).setFontSize(8).setFontColor('#64748b');
 
-  var c;
-  for (c = startCol; c <= endCol; c++) {
-    sheet.setColumnWidth(c, 21);
-  }
-  for (var r = startRow; r <= endRow; r++) {
-    sheet.setRowHeight(r, 15);
-  }
-  sheet.setColumnWidth(1, 36);
-  sheet.setColumnWidth(2, 36);
-
-  var gridRange = sheet.getRange(startRow, startCol, endRow, endCol);
-  gridRange.setBackground('#ffffff');
-  gridRange.setBorder(null, null, null, null, true, true, '#cccccc', SpreadsheetApp.BorderStyle.SOLID);
-  gridRange.setBorder(true, true, true, true, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
-
-  for (c = 0; c < 10; c++) {
-    sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol + c)
-      .setValue(String(c))
-      .setHorizontalAlignment('center')
+  if (orientation === 'landscape') {
+    buildStudentIdMarkBlock_(sheet, cfg, 4);
+  } else {
+    var c;
+    for (c = 0; c < 10; c++) {
+      sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol + c)
+        .setValue(String(c))
+        .setHorizontalAlignment('center')
+        .setFontSize(8)
+        .setFontWeight('bold')
+        .setBackground('#f1f5f9');
+    }
+    var digitLabels = ['1桁目', '2桁目', '3桁目', '4桁目'];
+    for (var ri = 0; ri < 4; ri++) {
+      var rowNum = cfg.idStartRow + ri;
+      sheet.getRange(rowNum, cfg.idStartCol - 1)
+        .setValue(digitLabels[ri])
+        .setFontSize(7)
+        .setHorizontalAlignment('right')
+        .setFontColor('#475569');
+      for (c = 0; c < 10; c++) {
+        sheet.getRange(rowNum, cfg.idStartCol + c)
+          .setValue('○')
+          .setHorizontalAlignment('center')
+          .setVerticalAlignment('middle')
+          .setFontColor('#cbd5e1')
+          .setFontSize(8);
+      }
+    }
+    var idBlock = sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1, cfg.idStartRow + 3, cfg.idStartCol + 9);
+    idBlock.setBorder(true, true, true, true, true, true, '#64748b', SpreadsheetApp.BorderStyle.SOLID);
+    sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1)
+      .setValue('生徒ID')
       .setFontSize(8)
       .setFontWeight('bold')
-      .setBackground('#f1f5f9');
-  }
-  var digitLabels = ['1桁目', '2桁目', '3桁目', '4桁目'];
-  for (var ri = 0; ri < 4; ri++) {
-    var rowNum = cfg.idStartRow + ri;
-    sheet.getRange(rowNum, cfg.idStartCol - 1)
-      .setValue(digitLabels[ri])
-      .setFontSize(7)
-      .setHorizontalAlignment('right')
-      .setFontColor('#475569');
-    for (c = 0; c < 10; c++) {
-      sheet.getRange(rowNum, cfg.idStartCol + c)
-        .setValue('○')
-        .setHorizontalAlignment('center')
-        .setVerticalAlignment('middle')
-        .setFontColor('#cbd5e1')
-        .setFontSize(8);
-    }
+      .setBackground('#e2e8f0');
   }
 
-  var idBlock = sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1, cfg.idStartRow + 3, cfg.idStartCol + 9);
-  idBlock.setBorder(true, true, true, true, true, true, '#64748b', SpreadsheetApp.BorderStyle.SOLID);
-  sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1)
-    .setValue('生徒ID')
-    .setFontSize(8)
-    .setFontWeight('bold')
-    .setBackground('#e2e8f0');
-
-  sheet.setFrozenRows(startRow - 1);
+  sheet.setFrozenRows(grid.startRow - 1);
 }
 
 function getAnswerSheetTemplateLinks_(ss) {
   ss = ss || getHubSs();
   ensureAnswerSheetTemplateSheets_(ss);
+  ensureStudentIdOnlyTemplateSheet_(ss);
   function linkFor(name) {
     var sh = ss.getSheetByName(name);
     if (!sh) return { name: name, url: ss.getUrl(), gid: '' };
@@ -3573,7 +3677,8 @@ function getAnswerSheetTemplateLinks_(ss) {
   return {
     hubUrl: ss.getUrl(),
     landscape: linkFor(SHEET_TEMPLATE_A4_LANDSCAPE),
-    portrait: linkFor(SHEET_TEMPLATE_A4_PORTRAIT)
+    portrait: linkFor(SHEET_TEMPLATE_A4_PORTRAIT),
+    idOnlyLandscape: linkFor(SHEET_TEMPLATE_ID_A4_LANDSCAPE)
   };
 }
 
@@ -3604,6 +3709,27 @@ function recreateAnswerSheetTemplatesFromMenu() {
   if (ans !== ui.Button.YES) return;
   recreateAnswerSheetTemplates_(ss);
   ui.alert('解答用紙ひな形シートを再作成しました。');
+}
+
+function recreateStudentIdOnlyTemplate_(ss) {
+  ss = ss || getHubSs();
+  var sheet = ss.getSheetByName(SHEET_TEMPLATE_ID_A4_LANDSCAPE);
+  if (sheet) ss.deleteSheet(sheet);
+  ensureStudentIdOnlyTemplateSheet_(ss);
+}
+
+function recreateStudentIdOnlyTemplateFromMenu() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
+  var ui = SpreadsheetApp.getUi();
+  var ans = ui.alert(
+    '生徒ID欄ひな形を再作成',
+    '「' + SHEET_TEMPLATE_ID_A4_LANDSCAPE + '」を上書き再作成します。編集内容は失われます。よろしいですか？',
+    ui.ButtonSet.YES_NO
+  );
+  if (ans !== ui.Button.YES) return;
+  recreateStudentIdOnlyTemplate_(ss);
+  ui.alert('生徒ID欄ひな形（A4横）を再作成しました。');
 }
 
 function writeHubRosterTemplate_(sheet) {

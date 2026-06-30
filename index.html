@@ -291,7 +291,7 @@
             </div>
             <div class="mt-4 border rounded p-3 bg-white space-y-2 max-w-lg">
                 <h3 class="text-sm font-bold">解答用紙ひな形（ハブSS）</h3>
-                <p class="text-xs text-gray-600">コンテナバインドの管理スプレッドシートに <strong>テンプレート_共通A4横</strong> / <strong>テンプレート_共通A4縦</strong> シートがあります。編集して印刷し、生徒用解答用紙としてご利用ください（IDマーク欄付き）。</p>
+                <p class="text-xs text-gray-600">コンテナバインドの管理スプレッドシートに <strong>テンプレート_共通A4横</strong> / <strong>テンプレート_共通A4縦</strong> シートがあります。編集して印刷し、生徒用解答用紙としてご利用ください（IDマーク欄付き）。<strong>テンプレート_生徒ID欄A4横</strong> は ID 欄だけのひな形（独自用紙へのコピペ・単体印刷用）です。</p>
                 <div id="answer-template-links" class="flex flex-wrap gap-2 text-xs"></div>
                 <button type="button" data-busy-label="準備中..." onclick="withBusyButton(event.currentTarget, ensureAnswerSheetTemplatesUi)" class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">ひな形シートを用意（未作成時のみ）</button>
             </div>
@@ -5083,9 +5083,13 @@ function renderAnswerTemplateLinks(templates) {
         wrap.innerHTML = '<span class="text-gray-400">ハブ登録後にリンクが表示されます</span>';
         return;
     }
-    wrap.innerHTML =
+    var html =
         '<a href="' + escapeHtml(templates.landscape.url) + '" target="_blank" rel="noopener" class="text-blue-700 underline bg-blue-50 px-2 py-1 rounded">' + escapeHtml(templates.landscape.name) + '</a>' +
         '<a href="' + escapeHtml(templates.portrait.url) + '" target="_blank" rel="noopener" class="text-blue-700 underline bg-blue-50 px-2 py-1 rounded">' + escapeHtml(templates.portrait.name) + '</a>';
+    if (templates.idOnlyLandscape) {
+        html += '<a href="' + escapeHtml(templates.idOnlyLandscape.url) + '" target="_blank" rel="noopener" class="text-indigo-700 underline bg-indigo-50 px-2 py-1 rounded">' + escapeHtml(templates.idOnlyLandscape.name) + '</a>';
+    }
+    wrap.innerHTML = html;
 }
 
 async function ensureAnswerSheetTemplatesUi() {
