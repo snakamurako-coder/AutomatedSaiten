@@ -171,6 +171,24 @@
             overflow: auto;
             box-sizing: border-box;
         }
+        /* 表幅＋スクロールバー＋右マージンがぴったり収まるラッパー */
+        .compact-table-fit-wrap {
+            display: inline-block;
+            max-width: 100%;
+            vertical-align: top;
+            box-sizing: border-box;
+        }
+        .compact-table-fit-wrap > .compact-table-scroll {
+            width: max-content;
+            max-width: min(calc(100vw - 3rem), 100%);
+            box-sizing: content-box;
+            padding-right: var(--compact-table-macro-pad, 0.75rem);
+        }
+        .compact-table-fit-wrap .compact-table .col-student {
+            max-width: none;
+            overflow: visible;
+            text-overflow: clip;
+        }
         .compact-table th,
         .compact-table td {
             padding: 2px 5px;
@@ -189,16 +207,27 @@
         #criteria-table-wrap {
             max-height: calc(100vh - 14rem);
         }
-        #outlier-groups-list {
-            max-height: 9rem;
-            padding: 0;
-        }
-        #outlier-groups-list .compact-table thead th {
+        #criteria-table-wrap .compact-table thead th {
             position: sticky;
             top: 0;
             z-index: 2;
             background: #f9fafb;
             box-shadow: inset 0 -1px 0 #e5e7eb;
+        }
+        #outlier-groups-list {
+            max-height: 9rem;
+            padding: 0;
+        }
+        #outlier-groups-list .compact-table thead th,
+        #roster-preview-scroll .compact-table thead th {
+            position: sticky;
+            top: 0;
+            z-index: 2;
+            background: #f9fafb;
+            box-shadow: inset 0 -1px 0 #e5e7eb;
+        }
+        #roster-preview-scroll {
+            max-height: 12rem;
         }
     </style>
 </head>
@@ -364,6 +393,7 @@
                 </div>
             </div>
 
+            <div class="compact-table-fit-wrap">
             <div id="criteria-table-wrap" class="compact-table-scroll border rounded">
                 <table class="compact-table criteria-table">
                     <thead class="bg-gray-100">
@@ -381,6 +411,7 @@
                     <tbody id="criteria-tbody"></tbody>
                 </table>
             </div>
+            </div>
 
             <div class="border rounded p-3 bg-slate-50 space-y-2">
                 <div class="text-xs font-bold text-slate-800">外れ値・少数派解答の確認（回答欄画像）</div>
@@ -397,7 +428,9 @@
                     <button type="button" onclick="selectAllOutlierRows(false)" class="bg-white border px-2 py-1 rounded">表示を解除</button>
                     <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showSelectedOutlierCrops)" class="bg-blue-600 text-white px-2 py-1 rounded font-bold">選択を画像表示</button>
                 </div>
+                <div class="compact-table-fit-wrap">
                 <div id="outlier-groups-list" class="compact-table-scroll text-xs border rounded bg-white"></div>
+                </div>
                 <div class="flex flex-wrap gap-3 items-center text-xs border rounded bg-white px-2 py-1.5">
                     <span class="font-semibold text-slate-700">表示倍率</span>
                     <input type="range" id="crop-inline-zoom" min="30" max="400" value="100" class="w-36">
@@ -453,10 +486,12 @@
                     <textarea id="roster-tsv-paste" class="w-full border rounded p-2 h-16 font-mono text-xs" placeholder="ID	年	組	番号	氏名	..."></textarea>
                     <button type="button" onclick="openRosterMapModal()" class="bg-green-600 text-white px-3 py-1 rounded">登録</button>
                 </div>
-                <div id="roster-preview-wrap" class="hidden overflow-auto max-h-48 border rounded bg-white">
-                    <table class="w-full text-xs"><thead class="bg-gray-100 sticky top-0"><tr>
-                        <th class="p-1 border">未受験</th><th class="p-1 border">組</th><th class="p-1 border">番号</th><th class="p-1 border">ID</th><th class="p-1 border">氏名</th>
-                    </tr></thead><tbody id="roster-preview-tbody"></tbody></table>
+                <div id="roster-preview-wrap" class="compact-table-fit-wrap hidden">
+                    <div id="roster-preview-scroll" class="compact-table-scroll border rounded bg-white">
+                        <table class="compact-table roster-table"><thead><tr class="bg-gray-100">
+                            <th class="col-check">未受験</th><th class="col-num">組</th><th class="col-num">番号</th><th class="col-student">ID</th><th class="col-student">氏名</th>
+                        </tr></thead><tbody id="roster-preview-tbody"></tbody></table>
+                    </div>
                 </div>
                 <p id="assign-result-msg" class="text-xs text-gray-600"></p>
             </div>
@@ -2264,6 +2299,87 @@ function sleepMs(ms) {
   return new Promise(function(resolve) { setTimeout(resolve, ms); });
 }
 
+function resolveFitCompactTableScope(scope) {
+  if (!scope || scope === document) return document;
+  if (scope.classList && scope.classList.contains('compact-table-fit-wrap')) return scope;
+  if (scope.classList && scope.classList.contains('compact-table-scroll')) {
+    var wrapFromScroll = scope.closest('.compact-table-fit-wrap');
+    if (wrapFromScroll) return wrapFromScroll;
+  }
+  return scope;
+}
+
+function fitCompactTableScrolls(scope) {
+  var root = resolveFitCompactTableScope(scope);
+  root.querySelectorAll('.compact-table-fit-wrap').forEach(function(wrap) {
+    var scroll = wrap.querySelector(':scope > .compact-table-scroll');
+    if (!scroll) return;
+    var table = scroll.querySelector('table');
+    if (!table) {
+      scroll.style.width = '';
+      return;
+    }
+    scroll.style.width = 'max-content';
+    var tableWidth = Math.ceil(table.getBoundingClientRect().width);
+    var macroPad = parseFloat(getComputedStyle(scroll).paddingRight) || 12;
+    var scrollbarW = Math.max(0, scroll.offsetWidth - scroll.clientWidth);
+    var contentWidth = tableWidth + scrollbarW;
+    var totalWidth = contentWidth + macroPad;
+    var parentMax = wrap.parentElement ? wrap.parentElement.clientWidth : (window.innerWidth - 48);
+    var availMax = Math.min(window.innerWidth - 48, parentMax || (window.innerWidth - 48));
+    if (totalWidth <= availMax) {
+      scroll.style.width = Math.ceil(contentWidth) + 'px';
+    } else {
+      scroll.style.width = Math.ceil(Math.max(0, availMax - macroPad)) + 'px';
+    }
+  });
+}
+
+function scheduleFitCompactTableScrolls(scope) {
+  requestAnimationFrame(function() {
+    fitCompactTableScrolls(scope);
+    requestAnimationFrame(function() { fitCompactTableScrolls(scope); });
+  });
+}
+
+async function fetchRosterAssignmentPreview(rosterName, absentIndices) {
+  if (typeof google !== 'undefined' && google.script && google.script.run &&
+      typeof google.script.run.getRosterAssignmentPreview === 'function') {
+    return gasRun('getRosterAssignmentPreview', rosterName, absentIndices);
+  }
+  var absentSet = {};
+  (absentIndices || []).forEach(function(i) { absentSet[parseInt(i, 10)] = true; });
+  var rows = await gasRun('getRosterRows', rosterName);
+  var rosterTotal = rows.length;
+  var absentCount = rows.filter(function(r) { return absentSet[r.rowIndex]; }).length;
+  var rosterActive = rosterTotal - absentCount;
+  var fileCount = (appState.batchFiles && appState.batchFiles.length) ? appState.batchFiles.length : 0;
+  if (!fileCount) {
+    var folderEl = document.getElementById('drive-folder-id');
+    var folderId = folderEl ? folderEl.value.trim() : '';
+    if (folderId) {
+      var files = await gasRun('listFolderFiles', folderId);
+      fileCount = files.length;
+    }
+  }
+  var canAssign = rosterActive > 0 && fileCount > 0 && fileCount === rosterActive;
+  var mismatch = '';
+  if (fileCount !== rosterActive) {
+    mismatch = 'スキャン画像 ' + fileCount + ' 件と受験予定 ' + rosterActive +
+      ' 名（名簿' + rosterTotal + '−未受験' + absentCount + '）が一致しません。' +
+      '未受験の☑を確認するか、フォルダ内の画像数を確認してください。';
+  }
+  return {
+    rosterName: rosterName,
+    rosterTotal: rosterTotal,
+    absentCount: absentCount,
+    rosterActive: rosterActive,
+    fileCount: fileCount,
+    canAssign: canAssign,
+    mismatch: mismatch
+  };
+}
+
 function gasRunWithRetry(fn, args, opts) {
   opts = opts || {};
   var maxAttempts = opts.maxAttempts || 3;
@@ -3140,14 +3256,22 @@ function initStepNav() {
 }
 
 var sideNavPinTimer = null;
-var SIDE_NAV_PIN_MS = 5000;
+var SIDE_NAV_PIN_MS = 1000;
 
-function pinSideNav() {
+function expandSideNav() {
     var nav = document.getElementById('side-nav');
     if (!nav) return;
     nav.classList.add('expanded');
     clearTimeout(sideNavPinTimer);
+}
+
+function scheduleCollapseSideNav() {
+    clearTimeout(sideNavPinTimer);
     sideNavPinTimer = setTimeout(collapseSideNavIfIdle, SIDE_NAV_PIN_MS);
+}
+
+function pinSideNav() {
+    expandSideNav();
 }
 
 function collapseSideNavNow() {
@@ -3162,7 +3286,7 @@ function collapseSideNavIfIdle() {
     var grabber = document.getElementById('nav-grabber');
     if (!nav) return;
     if (nav.matches(':hover') || (grabber && grabber.matches(':hover'))) {
-        sideNavPinTimer = setTimeout(collapseSideNavIfIdle, SIDE_NAV_PIN_MS);
+        scheduleCollapseSideNav();
         return;
     }
     collapseSideNavNow();
@@ -3172,15 +3296,13 @@ function initCollapsibleSideNav() {
     var nav = document.getElementById('side-nav');
     var grabber = document.getElementById('nav-grabber');
     if (!nav || !grabber) return;
-    nav.addEventListener('mouseenter', pinSideNav);
-    grabber.addEventListener('mouseenter', pinSideNav);
+    nav.addEventListener('mouseenter', expandSideNav);
+    nav.addEventListener('mouseleave', scheduleCollapseSideNav);
+    grabber.addEventListener('mouseenter', expandSideNav);
     grabber.addEventListener('click', function(e) {
         e.preventDefault();
         e.stopPropagation();
         collapseSideNavNow();
-    });
-    nav.addEventListener('mousemove', function() {
-        if (nav.classList.contains('expanded')) pinSideNav();
     });
 }
 
@@ -3650,6 +3772,7 @@ function renderOutlierGroupsList() {
     });
     html += '</tbody></table>';
     container.innerHTML = html;
+    scheduleFitCompactTableScrolls(container.closest('.compact-table-fit-wrap') || container);
 }
 
 function getOutlierRowByKey(key) {
@@ -3831,6 +3954,7 @@ function renderCriteriaTableFromSaved(rules) {
             '<td class="col-action">—</td></tr>';
     }).join('');
     appState.criteriaList = rules.map(function(r) { return { answer_text: r.answer_text, count: '—' }; });
+    scheduleFitCompactTableScrolls(document.getElementById('criteria-table-wrap').closest('.compact-table-fit-wrap'));
 }
 
 function renderDomainTableFromCache() {
@@ -4556,6 +4680,7 @@ function renderCriteriaTable(aiList) {
             '<td class="col-action">' + confirmCell + '</td></tr>';
     }).join('');
     updateDeemedApplyButtonState();
+    scheduleFitCompactTableScrolls(document.getElementById('criteria-table-wrap').closest('.compact-table-fit-wrap'));
 }
 
 async function askGeminiCriteria() {
@@ -4735,7 +4860,7 @@ async function updateRosterAssignSummary() {
     }
     var absentSnapshot = getSelectedAbsentIndices();
     try {
-        var preview = await gasRun('getRosterAssignmentPreview', rosterName, absentSnapshot);
+        var preview = await fetchRosterAssignmentPreview(rosterName, absentSnapshot);
         if (!isRosterSummaryRequestCurrent(requestId, rosterName)) return;
         summaryEl.classList.remove('hidden');
         if (preview.canAssign) {
@@ -4830,12 +4955,13 @@ async function loadRosterPreview(rosterName) {
     if (!tbody) return;
     tbody.innerHTML = rows.map(function(r) {
         var absent = appState.rosterAbsent[r.rowIndex];
-        return '<tr><td class="p-1 border text-center"><input type="checkbox" class="roster-absent-cb" data-idx="' + r.rowIndex + '"' + (absent ? ' checked' : '') + '></td>' +
-            '<td class="p-1 border">' + escapeHtml(r.classNo) + '</td>' +
-            '<td class="p-1 border">' + escapeHtml(r.number) + '</td>' +
-            '<td class="p-1 border">' + escapeHtml(r.studentId) + '</td>' +
-            '<td class="p-1 border">' + escapeHtml(r.name) + '</td></tr>';
+        return '<tr><td class="col-check"><input type="checkbox" class="roster-absent-cb" data-idx="' + r.rowIndex + '"' + (absent ? ' checked' : '') + '></td>' +
+            '<td class="col-num">' + escapeHtml(r.classNo) + '</td>' +
+            '<td class="col-num">' + escapeHtml(r.number) + '</td>' +
+            '<td class="col-student font-mono">' + escapeHtml(r.studentId) + '</td>' +
+            '<td class="col-student">' + escapeHtml(r.name) + '</td></tr>';
     }).join('');
+    scheduleFitCompactTableScrolls(document.getElementById('roster-preview-wrap'));
 }
 
 function openRosterMapModal() {
@@ -4908,7 +5034,7 @@ async function assignIdsFromRosterUi() {
     setRosterPreviewInteractive(false);
     try {
         var absentIndices = getSelectedAbsentIndices();
-        var preview = await gasRun('getRosterAssignmentPreview', rosterName, absentIndices);
+        var preview = await fetchRosterAssignmentPreview(rosterName, absentIndices);
         if (document.getElementById('roster-select').value !== rosterName || !appState.rosterPreviewShown) {
             setAssignResultMsg('名簿または表示状態が変わったため割当を中止しました。', true);
             return;
@@ -5069,6 +5195,7 @@ document.addEventListener('DOMContentLoaded', function() {
     window.addEventListener('pagehide', clearTestSessionCacheOnExit);
     initStepNav();
     initCollapsibleSideNav();
+    window.addEventListener('resize', function() { scheduleFitCompactTableScrolls(); });
     initCropInlineZoomControls();
     setOcrReplaceExpanded(false);
     var critSel = document.getElementById('criteria-field-select');
