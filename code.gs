@@ -178,6 +178,14 @@ function getOrCreateTestImageFolder(ss) {
   return sub;
 }
 
+function getOrCreateFeedbackFolder_(ss) {
+  ss = ss || getActiveTestSs();
+  var parent = getOrCreateTestImageFolder(ss);
+  var subs = parent.getFoldersByName(FEEDBACK_FOLDER_NAME);
+  if (subs.hasNext()) return subs.next();
+  return parent.createFolder(FEEDBACK_FOLDER_NAME);
+}
+
 
 
 
@@ -192,6 +200,7 @@ var SHEET_ROSTER = '名簿';
 var ROSTER_HEADERS = ['名簿名', 'ID', '年', '組', '番号', '氏名', 'その他属性1', 'その他属性2', 'その他属性3'];
 var ORIGINAL_ARCHIVE_FOLDER_NAME = '元画像';
 var PROCESSED_ARCHIVE_FOLDER_NAME = '処理済み';
+var FEEDBACK_FOLDER_NAME = '個票';
 
 var SHEET_TEST_INFO = 'テスト情報';
 var SHEET_ANSWER_FIELDS = '記述欄情報';
@@ -205,6 +214,7 @@ var SHEET_EXTERNAL_SCORES = '外部連携得点';
 var SHEET_OCR_REPLACEMENTS = 'OCR置換ルール';
 var SHEET_DEEMED_SCORING = 'みなし採点';
 var SHEET_DEEMED_DRAFT = 'みなし採点下書き';
+var SHEET_OUTPUT_SLOTS = '出力欄設定';
 
 var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
@@ -254,6 +264,7 @@ function buildTestSheets(ss) {
   initSummarySheet(ss.getSheetByName(SHEET_SUMMARY));
   initDomainsSheet(ss.getSheetByName(SHEET_DOMAINS));
   initIdentityFieldsSheet(ss.getSheetByName(SHEET_IDENTITY_FIELDS));
+  ensureOutputSlotsSheet(ss);
   initExternalScoresSheet(ss.getSheetByName(SHEET_EXTERNAL_SCORES));
   ensureOcrReplacementsSheet(ss);
   ensureDeemedScoringSheet(ss);
@@ -277,7 +288,8 @@ function getAllTestSheetNames() {
     EXTERNAL_SCORES: SHEET_EXTERNAL_SCORES,
     OCR_REPLACEMENTS: SHEET_OCR_REPLACEMENTS,
     DEEMED_SCORING: SHEET_DEEMED_SCORING,
-    DEEMED_DRAFT: SHEET_DEEMED_DRAFT
+    DEEMED_DRAFT: SHEET_DEEMED_DRAFT,
+    OUTPUT_SLOTS: SHEET_OUTPUT_SLOTS
   };
 }
 
@@ -377,6 +389,19 @@ function initDomainsSheet(sheet) {
 function initIdentityFieldsSheet(sheet) {
   if (sheet.getLastRow() > 0) return;
   sheet.appendRow(['欄種別', 'x', 'y', 'width', 'height']);
+  sheet.setFrozenRows(1);
+}
+
+function ensureOutputSlotsSheet(ss) {
+  if (!ss.getSheetByName(SHEET_OUTPUT_SLOTS)) {
+    var sheet = ss.insertSheet(SHEET_OUTPUT_SLOTS);
+    initOutputSlotsSheet(sheet);
+  }
+}
+
+function initOutputSlotsSheet(sheet) {
+  if (sheet.getLastRow() > 0) return;
+  sheet.appendRow(['slotKey', 'x', 'y', 'width', 'height', 'printMode']);
   sheet.setFrozenRows(1);
 }
 
@@ -953,6 +978,7 @@ function getTestRestoreData(testSsId) {
   ensureOcrReplacementsSheet(ss);
   ensureDeemedScoringSheet(ss);
   ensureDeemedDraftSheet(ss);
+  ensureOutputSlotsSheet(ss);
   var completed = inferCompletedSteps_(ss);
   var savedStep = parseInt(getTestInfoValue(ss, '現在ステップ'), 10) || 0;
   var resumeStep = savedStep > 0 ? savedStep : completed.maxStep;
@@ -976,6 +1002,8 @@ function getTestRestoreData(testSsId) {
     ocrReplacementsByField: getOcrReplacementsGrouped_(ss),
     deemedScoringByField: getDeemedScoringGrouped_(ss),
     deemedDraftByField: getDeemedDraftGrouped_(ss),
+    outputSlots: getOutputSlots(ss),
+    availableOutputSlotKeys: getAvailableOutputSlotKeys_(ss),
     activeTestSsId: ss.getId()
   };
 }
@@ -3737,4 +3765,175 @@ function getWarpedImageBase64(sourceFileId) {
     }
   }
   return getDriveFileBase64(sourceFileId);
+}
+
+// ========== ExportService.gs ==========
+
+/**
+ * 個票（判定・得点描画）出力
+ */
+
+function getAvailableOutputSlotKeys_(ss) {
+  ss = ss || getActiveTestSs();
+  var keys = [];
+  getDomainColumnLabels(ss).forEach(function(l) {
+    keys.push(String(l).replace(/_得点$/, ''));
+  });
+  keys.push('総計点');
+  keys.push('外部連携得点');
+  return keys;
+}
+
+function getResultColumnNameForSlotKey_(slotKey) {
+  var k = String(slotKey || '').trim();
+  if (!k) return '';
+  if (k === '総計点' || k === '外部連携得点') return k;
+  if (k.indexOf('_得点') >= 0) return k;
+  return k + '_得点';
+}
+
+function getOutputSlots(ss) {
+  ss = ss || getActiveTestSs();
+  ensureOutputSlotsSheet(ss);
+  var sheet = ss.getSheetByName(SHEET_OUTPUT_SLOTS);
+  var data = sheet.getDataRange().getValues();
+  if (data.length <= 1) return [];
+  var slots = [];
+  for (var i = 1; i < data.length; i++) {
+    if (!data[i][0]) continue;
+    slots.push({
+      slotKey: String(data[i][0]),
+      x: parseInt(data[i][1], 10) || 0,
+      y: parseInt(data[i][2], 10) || 0,
+      width: parseInt(data[i][3], 10) || 0,
+      height: parseInt(data[i][4], 10) || 0,
+      printMode: String(data[i][5] || 'number') === 'label' ? 'label' : 'number'
+    });
+  }
+  return slots;
+}
+
+function saveOutputSlots(slots) {
+  var ss = getActiveTestSs();
+  ensureOutputSlotsSheet(ss);
+  var sheet = ss.getSheetByName(SHEET_OUTPUT_SLOTS);
+  sheet.clear();
+  sheet.appendRow(['slotKey', 'x', 'y', 'width', 'height', 'printMode']);
+  (slots || []).forEach(function(s) {
+    if (!s || !s.slotKey) return;
+    var w = parseInt(s.width, 10) || 0;
+    var h = parseInt(s.height, 10) || 0;
+    if (w <= 0 || h <= 0) return;
+    sheet.appendRow([
+      String(s.slotKey),
+      parseInt(s.x, 10) || 0,
+      parseInt(s.y, 10) || 0,
+      w,
+      h,
+      String(s.printMode || 'number') === 'label' ? 'label' : 'number'
+    ]);
+  });
+  return getOutputSlots(ss);
+}
+
+function buildFeedbackRowPayload_(ss, rowIndex) {
+  ss = ss || getActiveTestSs();
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  if (!sheet || rowIndex < 2 || rowIndex > sheet.getLastRow()) {
+    throw new Error('無効な行番号です: ' + rowIndex);
+  }
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var colMap = getResultColumnMap(headers);
+  var row = sheet.getRange(rowIndex, 1, rowIndex, sheet.getLastColumn()).getValues()[0];
+  var fields = getAnswerFields(ss);
+  var fieldMarks = {};
+  fields.forEach(function(f) {
+    var label = f.displayName || f.id;
+    var fm = colMap.fields[label];
+    fieldMarks[f.id] = {
+      judgment: fm && fm.judgment >= 0 ? String(row[fm.judgment] || '') : '',
+      score: fm && fm.score >= 0 ? (parseInt(row[fm.score], 10) || 0) : 0
+    };
+  });
+  var totals = {};
+  getAvailableOutputSlotKeys_(ss).forEach(function(k) {
+    var colName = getResultColumnNameForSlotKey_(k);
+    var idx = headers.indexOf(colName);
+    totals[k] = idx >= 0 ? row[idx] : '';
+  });
+  return {
+    rowIndex: rowIndex,
+    studentId: colMap.studentId >= 0 ? String(row[colMap.studentId] || '') : '',
+    name: colMap.name >= 0 ? String(row[colMap.name] || '') : '',
+    fileName: colMap.fileName >= 0 ? String(row[colMap.fileName] || '') : '',
+    fileId: colMap.fileId >= 0 ? String(row[colMap.fileId] || '') : '',
+    warpedFileId: colMap.warpedFileId >= 0 ? String(row[colMap.warpedFileId] || '') : '',
+    fieldMarks: fieldMarks,
+    totals: totals
+  };
+}
+
+function getFeedbackRowPayload(rowIndex) {
+  return buildFeedbackRowPayload_(getActiveTestSs(), rowIndex);
+}
+
+function getFeedbackExportConfig() {
+  var ss = getActiveTestSs();
+  var sheet = ss.getSheetByName(SHEET_RESULTS);
+  var rows = [];
+  if (sheet && sheet.getLastRow() > 1) {
+    var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    var colMap = getResultColumnMap(headers);
+    var data = sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
+    for (var i = 0; i < data.length; i++) {
+      rows.push({
+        rowIndex: i + 2,
+        studentId: colMap.studentId >= 0 ? String(data[i][colMap.studentId] || '') : '',
+        name: colMap.name >= 0 ? String(data[i][colMap.name] || '') : '',
+        fileName: colMap.fileName >= 0 ? String(data[i][colMap.fileName] || '') : '',
+        fileId: colMap.fileId >= 0 ? String(data[i][colMap.fileId] || '') : '',
+        warpedFileId: colMap.warpedFileId >= 0 ? String(data[i][colMap.warpedFileId] || '') : ''
+      });
+    }
+  }
+  var feedbackFolder = getOrCreateFeedbackFolder_(ss);
+  return {
+    fields: getAnswerFields(ss),
+    outputSlots: getOutputSlots(ss),
+    availableSlotKeys: getAvailableOutputSlotKeys_(ss),
+    rows: rows,
+    feedbackFolderUrl: feedbackFolder.getUrl()
+  };
+}
+
+function saveFeedbackImage(rowIndex, base64Image) {
+  var ss = getActiveTestSs();
+  var payload = buildFeedbackRowPayload_(ss, rowIndex);
+  if (!payload.fileId && !payload.warpedFileId) {
+    throw new Error('補正画像がありません: ' + (payload.fileName || payload.studentId || rowIndex));
+  }
+  var folder = getOrCreateFeedbackFolder_(ss);
+  var studentId = payload.studentId || 'unknown';
+  var safeName = (payload.fileName || 'image').replace(/[^\w\u3040-\u30ff\u4e00-\u9faf.\-]/g, '_').substring(0, 80);
+  var fileName = '個票_' + studentId + '_' + safeName + '.jpg';
+  var b64 = String(base64Image || '');
+  if (b64.indexOf(',') >= 0) b64 = b64.split(',')[1];
+  var bytes = Utilities.base64Decode(b64);
+  var existing = folder.getFilesByName(fileName);
+  while (existing.hasNext()) {
+    existing.next().setTrashed(true);
+  }
+  var file = folder.createFile(Utilities.newBlob(bytes, 'image/jpeg', fileName));
+  return {
+    fileId: file.getId(),
+    fileName: fileName,
+    folderUrl: folder.getUrl(),
+    rowIndex: rowIndex
+  };
+}
+
+function markFeedbackExportComplete() {
+  var ss = getActiveTestSs();
+  touchTestProgress_(ss, 10);
+  return { feedbackFolderUrl: getOrCreateFeedbackFolder_(ss).getUrl() };
 }

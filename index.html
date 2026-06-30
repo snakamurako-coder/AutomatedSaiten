@@ -111,6 +111,12 @@
         .identity-type-btn.active { background: #2563eb; color: #fff; border-color: #1d4ed8; }
         .identity-type-btn.done { border-color: #16a34a; background: #dcfce7; color: #166534; }
         .identity-type-btn.active.done { background: #2563eb; color: #fff; }
+        .output-slot-btn { padding: 0.35rem 0.65rem; border-radius: 0.375rem; border: 1px solid #cbd5e1; background: #fff; font-size: 11px; font-weight: 600; cursor: pointer; }
+        .output-slot-btn:hover { background: #f1f5f9; }
+        .output-slot-btn.active { background: #7c3aed; color: #fff; border-color: #6d28d9; }
+        .output-slot-btn.done { border-color: #16a34a; background: #dcfce7; color: #166534; }
+        .output-slot-btn.active.done { background: #7c3aed; color: #fff; }
+        #feedback-preview-canvas, #output-canvas { max-width: 100%; }
         #outlier-crop-panel, #verify-crop-panel {
             min-height: 32rem;
             height: clamp(32rem, calc(100vh - 10rem), 85vh);
@@ -493,7 +499,7 @@
             <div><label class="text-xs font-semibold">外部得点CSV（生徒ID,得点[,ソース]）</label>
             <textarea id="external-csv" class="w-full border rounded p-2 text-xs h-24 font-mono" placeholder="1001,15&#10;1002,12"></textarea></div>
             <button type="button" data-busy-label="取込中..." onclick="withBusyButton(event.currentTarget, importExternalCsv)" class="bg-green-600 text-white px-4 py-2 rounded text-sm">外部得点を取込</button>
-            <p class="text-xs text-gray-500">フィードバック画像への判定描画は今後実装予定です。</p>
+            <p class="text-xs text-gray-500">解答用紙への判定・得点描画は <strong>⑩ 個票出力</strong> で行います。</p>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(7); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
 
@@ -550,10 +556,48 @@
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(9); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
 
-        <!-- ⑩ 出力 -->
+        <!-- ⑩ 個票 -->
         <div id="step-10" class="step-panel hidden space-y-3">
-            <h2 class="font-bold">⑩ 出力（未実装）</h2>
-            <p class="text-gray-500 text-sm">採点判定結果・合計点を解答用紙画像に上書きする機能は今後実装予定です。</p>
+            <h2 class="font-bold">⑩ 個票出力（判定・得点描画）</h2>
+            <p class="text-xs text-gray-500">補正画像の記述欄中央へ <span class="text-red-600 font-bold">○</span>・<span class="text-orange-600 font-bold">△</span>・<span class="text-blue-600 font-bold">×</span> と得点を描画し、任意位置の合計欄へ領域得点を印字します。JPEG は Drive の「個票/」フォルダへ 1 人 1 枚保存されます。</p>
+
+            <div class="border rounded p-3 bg-violet-50 space-y-2">
+                <h3 class="text-sm font-bold text-violet-900">合計欄の配置</h3>
+                <p class="text-xs text-gray-600">下のボタンで印字する項目を選び、Canvas 上をドラッグして矩形を指定します（Step⑧ 本人欄と同様）。</p>
+                <div class="flex flex-wrap gap-2 items-center text-xs">
+                    <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, loadModelForOutputSlots)" class="bg-blue-600 text-white px-3 py-1 rounded">模範解答を再表示</button>
+                    <span class="text-gray-400">|</span>
+                    <span class="font-semibold text-gray-600">印字形式:</span>
+                    <select id="output-slot-print-mode" class="border rounded p-1" onchange="onOutputPrintModeChange()">
+                        <option value="number">数字のみ（15）</option>
+                        <option value="label">ラベル付き（大問1 15）</option>
+                    </select>
+                    <button type="button" onclick="RegionEditor.deleteSelected()" class="bg-red-100 text-red-800 px-3 py-1 rounded border border-red-200">選択欄を削除</button>
+                    <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveOutputSlotsToServer)" class="bg-green-600 text-white px-3 py-1 rounded font-bold">合計欄を保存</button>
+                </div>
+                <div id="output-slot-buttons" class="flex flex-wrap gap-2 text-xs"></div>
+                <p id="output-slot-hint" class="text-xs text-violet-700">項目ボタンを押してから、Canvas 上をドラッグしてください。</p>
+                <ul id="output-slot-status" class="text-xs flex flex-wrap gap-2"></ul>
+                <canvas id="output-canvas" class="bg-white max-w-full border rounded"></canvas>
+            </div>
+
+            <div class="border rounded p-3 bg-white space-y-2">
+                <h3 class="text-sm font-bold">プレビュー</h3>
+                <div class="flex flex-wrap gap-2 items-end text-xs">
+                    <div>
+                        <label class="font-semibold block">生徒</label>
+                        <select id="feedback-preview-row" class="border rounded p-1 min-w-[240px]"></select>
+                    </div>
+                    <button type="button" data-busy-label="描画中..." onclick="withBusyButton(event.currentTarget, previewFeedbackSheet)" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">1件プレビュー</button>
+                </div>
+                <canvas id="feedback-preview-canvas" class="bg-gray-100 max-w-full border rounded"></canvas>
+            </div>
+
+            <div class="border rounded p-3 space-y-2">
+                <button type="button" data-busy-label="生成中..." onclick="withBusyButton(event.currentTarget, batchGenerateFeedbackSheets)" id="feedback-batch-btn" class="bg-green-700 text-white px-4 py-2 rounded font-bold">個票を一括生成</button>
+                <p id="feedback-export-status" class="text-xs text-gray-600"></p>
+            </div>
+            <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(10); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
     </main>
 </div>
@@ -1590,10 +1634,139 @@ var ManualWarpEditor = (function() {
   };
 })();
 
+var FeedbackRenderer = (function() {
+  var COLOR_MARU = '#dc2626';
+  var COLOR_SANKAKU = '#ea580c';
+  var COLOR_BATSU = '#2563eb';
+
+  function normalizeJudgment(j) {
+    var s = String(j || '').trim();
+    if (s === '○' || s === '〇') return 'maru';
+    if (s === '△') return 'sankaku';
+    if (s === '×' || s === 'x' || s === 'X') return 'batsu';
+    return s ? 'batsu' : '';
+  }
+
+  function insetRect(x, y, w, h, padRatio) {
+    var p = padRatio != null ? padRatio : 0.05;
+    return { x: x + w * p, y: y + h * p, w: w * (1 - 2 * p), h: h * (1 - 2 * p) };
+  }
+
+  function drawScoreText(ctx, text, cx, cy, maxW, minDim) {
+    if (text === '' || text == null) return;
+    var fontSize = Math.max(8, minDim * 0.35);
+    ctx.font = 'bold ' + fontSize + 'px sans-serif';
+    ctx.fillStyle = '#111827';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    var s = String(text);
+    while (ctx.measureText(s).width > maxW * 0.85 && fontSize > 8) {
+      fontSize *= 0.9;
+      ctx.font = 'bold ' + fontSize + 'px sans-serif';
+    }
+    ctx.fillText(s, cx, cy);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  function drawMark(ctx, x, y, w, h, judgment, score) {
+    var kind = normalizeJudgment(judgment);
+    if (!kind) return;
+    var r = insetRect(x, y, w, h, 0.05);
+    var cx = r.x + r.w / 2;
+    var cy = r.y + r.h / 2;
+    var minDim = Math.min(r.w, r.h);
+    var lw = Math.max(2, minDim * 0.06);
+
+    if (kind === 'maru') {
+      ctx.beginPath();
+      ctx.ellipse(cx, cy, r.w / 2, r.h / 2, 0, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(220, 38, 38, 0.12)';
+      ctx.fill();
+      ctx.strokeStyle = COLOR_MARU;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+    } else if (kind === 'sankaku') {
+      ctx.beginPath();
+      ctx.moveTo(cx, r.y);
+      ctx.lineTo(r.x + r.w, r.y + r.h);
+      ctx.lineTo(r.x, r.y + r.h);
+      ctx.closePath();
+      ctx.strokeStyle = COLOR_SANKAKU;
+      ctx.lineWidth = lw;
+      ctx.stroke();
+    } else {
+      ctx.strokeStyle = COLOR_BATSU;
+      ctx.lineWidth = Math.max(2, minDim * 0.08);
+      ctx.beginPath();
+      ctx.moveTo(r.x, r.y);
+      ctx.lineTo(r.x + r.w, r.y + r.h);
+      ctx.moveTo(r.x + r.w, r.y);
+      ctx.lineTo(r.x, r.y + r.h);
+      ctx.stroke();
+    }
+
+    var num = parseInt(score, 10);
+    var hideScore = kind === 'batsu' && (score === 0 || score === '0' || num === 0);
+    if (!hideScore) drawScoreText(ctx, score, cx, cy, r.w, minDim);
+  }
+
+  function formatTotalText(slot, value) {
+    if (value === '' || value == null) return '';
+    var v = String(value);
+    if (slot.printMode === 'label') return String(slot.slotKey || '') + ' ' + v;
+    return v;
+  }
+
+  function drawTotal(ctx, slot, value) {
+    if (!slot || !slot.width || !slot.height) return;
+    var text = formatTotalText(slot, value);
+    if (!text) return;
+    var x = slot.x;
+    var y = slot.y;
+    var w = slot.width;
+    var h = slot.height;
+    var fontSize = Math.max(10, Math.min(w, h) * 0.5);
+    ctx.font = 'bold ' + fontSize + 'px sans-serif';
+    ctx.fillStyle = '#111827';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    while (ctx.measureText(text).width > w * 0.92 && fontSize > 8) {
+      fontSize *= 0.9;
+      ctx.font = 'bold ' + fontSize + 'px sans-serif';
+    }
+    ctx.fillText(text, x + w / 2, y + h / 2);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  async function renderToDataUrl(base64, fields, outputSlots, payload) {
+    var img = await loadImageElementFromBase64(base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64);
+    var canvas = document.createElement('canvas');
+    canvas.width = img.width || img.naturalWidth;
+    canvas.height = img.height || img.naturalHeight;
+    var ctx = canvas.getContext('2d');
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    (fields || []).forEach(function(f) {
+      var marks = (payload.fieldMarks || {})[f.id] || {};
+      drawMark(ctx, f.x, f.y, f.width, f.height, marks.judgment, marks.score);
+    });
+    (outputSlots || []).forEach(function(slot) {
+      if (!slot.width || !slot.height) return;
+      drawTotal(ctx, slot, (payload.totals || {})[slot.slotKey]);
+    });
+    return canvas.toDataURL('image/jpeg', 0.92);
+  }
+
+  return { drawMark: drawMark, drawTotal: drawTotal, renderToDataUrl: renderToDataUrl, normalizeJudgment: normalizeJudgment };
+})();
+
 var RegionEditor = (function() {
   var canvas, ctx, image, regions, selectedIdx, mode, dragState, onChange, HANDLE = 8;
   var IDENTITY_TYPES = ['学年', '組', '番号', 'ID', '氏名'];
   var pendingIdentityType = '学年';
+  var pendingOutputSlotKey = '';
+  var outputPrintMode = 'number';
   var CURSOR_MAP = { nw: 'nwse-resize', n: 'ns-resize', ne: 'nesw-resize', e: 'ew-resize', se: 'nwse-resize', s: 'ns-resize', sw: 'nesw-resize', w: 'ew-resize' };
 
   function setPendingIdentityType(type) {
@@ -1617,6 +1790,27 @@ var RegionEditor = (function() {
     });
   }
 
+  function setPendingOutputSlotKey(key) {
+    pendingOutputSlotKey = String(key || '');
+    var idx = regions.findIndex(function(r) { return r.slotKey === pendingOutputSlotKey; });
+    if (idx >= 0) selectedIdx = idx;
+    redraw();
+  }
+  function getPendingOutputSlotKey() { return pendingOutputSlotKey; }
+  function setOutputPrintMode(pm) { outputPrintMode = pm === 'label' ? 'label' : 'number'; }
+  function getOutputPrintMode() { return outputPrintMode; }
+  function getOutputSlotStatus() {
+    return (regions || []).map(function(r) {
+      return { slotKey: r.slotKey, printMode: r.printMode || 'number' };
+    });
+  }
+  function updateSelectedPrintMode(pm) {
+    if (selectedIdx < 0 || mode !== 'output') return;
+    regions[selectedIdx].printMode = pm === 'label' ? 'label' : 'number';
+    notifyChange();
+    redraw();
+  }
+
   function init(canvasId, options) {
     canvas = document.getElementById(canvasId); if (!canvas) return;
     ctx = canvas.getContext('2d');
@@ -1630,6 +1824,11 @@ var RegionEditor = (function() {
   function getRegions() {
     return regions.map(function(r, i) {
       if (mode === 'identity') return { type: r.type || r.id, x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height) };
+      if (mode === 'output') return {
+        slotKey: r.slotKey || r.id,
+        x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height),
+        printMode: r.printMode === 'label' ? 'label' : 'number'
+      };
       return { id: r.id || ('記述欄' + (i + 1)), displayName: r.displayName || r.id || ('記述欄' + (i + 1)),
         x: Math.round(r.x), y: Math.round(r.y), width: Math.round(r.w || r.width), height: Math.round(r.h || r.height),
         order: r.order != null ? r.order : i + 1, ocrLang: r.ocrLang || 'en' };
@@ -1641,6 +1840,11 @@ var RegionEditor = (function() {
       var existIdx = regions.findIndex(function(r) { return r.type === pendingIdentityType; });
       if (existIdx >= 0) regions.splice(existIdx, 1);
       regions.push({ type: pendingIdentityType, x: x, y: y, w: w, h: h, id: pendingIdentityType });
+    } else if (mode === 'output') {
+      if (!pendingOutputSlotKey) return;
+      var existOut = regions.findIndex(function(r) { return r.slotKey === pendingOutputSlotKey; });
+      if (existOut >= 0) regions.splice(existOut, 1);
+      regions.push({ slotKey: pendingOutputSlotKey, x: x, y: y, w: w, h: h, printMode: outputPrintMode === 'label' ? 'label' : 'number' });
     } else { var num = regions.length + 1, id = '記述欄' + num; regions.push({ id: id, displayName: id, x: x, y: y, w: w, h: h, order: num, ocrLang: 'en' }); }
     selectedIdx = regions.length - 1; redraw(); notifyChange();
   }
@@ -1651,10 +1855,14 @@ var RegionEditor = (function() {
     if (image) ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
     regions.forEach(function(r, idx) {
       var x = r.x, y = r.y, w = r.w || r.width, h = r.h || r.height;
-      ctx.strokeStyle = idx === selectedIdx ? '#2563eb' : '#16a34a'; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
-      ctx.fillStyle = idx === selectedIdx ? 'rgba(37,99,235,0.15)' : 'rgba(22,163,74,0.12)'; ctx.fillRect(x, y, w, h);
-      ctx.fillStyle = '#1e40af'; ctx.font = 'bold 12px sans-serif';
-      ctx.fillText(mode === 'identity' ? (r.type || r.id) : (r.displayName || r.id), x + 4, y + 14);
+      var stroke = idx === selectedIdx ? '#2563eb' : (mode === 'output' ? '#7c3aed' : '#16a34a');
+      var fill = idx === selectedIdx ? 'rgba(37,99,235,0.15)' : (mode === 'output' ? 'rgba(124,58,237,0.12)' : 'rgba(22,163,74,0.12)');
+      ctx.strokeStyle = stroke; ctx.lineWidth = 2; ctx.strokeRect(x, y, w, h);
+      ctx.fillStyle = fill; ctx.fillRect(x, y, w, h);
+      ctx.fillStyle = mode === 'output' ? '#5b21b6' : '#1e40af'; ctx.font = 'bold 12px sans-serif';
+      var label = mode === 'identity' ? (r.type || r.id) : (mode === 'output' ? (r.slotKey || r.id) : (r.displayName || r.id));
+      if (mode === 'output' && r.printMode === 'label') label += ' (label)';
+      ctx.fillText(label, x + 4, y + 14);
     });
     if (selectedIdx >= 0) drawHandles(regions[selectedIdx]);
   }
@@ -1712,6 +1920,11 @@ var RegionEditor = (function() {
     if (idx >= 0) {
       selectedIdx = idx;
       var r = regions[idx];
+      if (mode === 'output' && r.printMode) {
+        outputPrintMode = r.printMode === 'label' ? 'label' : 'number';
+        var pmEl = document.getElementById('output-slot-print-mode');
+        if (pmEl) pmEl.value = outputPrintMode;
+      }
       if (isCenterArea(r, p.x, p.y)) {
         dragState = { type: 'move', startX: p.x, startY: p.y, orig: JSON.parse(JSON.stringify(r)) };
       }
@@ -1750,7 +1963,10 @@ var RegionEditor = (function() {
   }
   return { init: init, setImage: setImage, setRegions: setRegions, getRegions: getRegions, deleteSelected: deleteSelected, redraw: redraw,
     IDENTITY_TYPES: IDENTITY_TYPES, setPendingIdentityType: setPendingIdentityType, getPendingIdentityType: getPendingIdentityType,
-    clearAllRegions: clearAllRegions, getIdentityTypeStatus: getIdentityTypeStatus };
+    clearAllRegions: clearAllRegions, getIdentityTypeStatus: getIdentityTypeStatus,
+    setPendingOutputSlotKey: setPendingOutputSlotKey, getPendingOutputSlotKey: getPendingOutputSlotKey,
+    setOutputPrintMode: setOutputPrintMode, getOutputPrintMode: getOutputPrintMode, getOutputSlotStatus: getOutputSlotStatus,
+    updateSelectedPrintMode: updateSelectedPrintMode };
 })();
 var BatchProcessor = (function() {
   var FLUSH_CHUNK = 15;
@@ -2584,10 +2800,10 @@ var STEPS = [
     { id: 0, label: '⓪ テスト作成' }, { id: 1, label: '① 回答欄設定' }, { id: 2, label: '② 配点決定' },
     { id: 3, label: '③ テキスト化' }, { id: 4, label: '④ 採点基準' }, { id: 5, label: '⑤ 採点実行' },
     { id: 6, label: '⑥ 領域設定' }, { id: 7, label: '⑦ 合計・外部得点' }, { id: 8, label: '⑧ 本人欄設定' },
-    { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 出力' }
+    { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 個票出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false, outputSlots: [], availableOutputSlotKeys: [], feedbackExportConfig: null };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -3414,6 +3630,7 @@ function goToStep(n, options) {
     else if (n === 6) renderDomainTableFromCache();
     else if (n === 7) restoreRosterStepUi();
     else if (n === 8) loadIdentityEditorFromState();
+    else if (n === 10) loadFeedbackStepUi();
 }
 
 function renderPointsTableFromCache() {
@@ -4270,6 +4487,8 @@ async function restoreTestUi(data) {
     appState.deemedCheckedByField = {};
     appState.incorrectCheckedByField = {};
     appState.domainRows = data.domainSettings || [];
+    appState.outputSlots = data.outputSlots || [];
+    appState.availableOutputSlotKeys = data.availableOutputSlotKeys || [];
     appState.criteriaList = [];
     appState.warpedBase64 = null;
     appState.warpedImageEl = null;
@@ -5573,6 +5792,215 @@ async function saveIdentityToServer() {
         setStatus('本人確認欄を保存しました（' + fields.length + ' 欄）');
         markStepDone(8);
     } catch (e) { setStatus(e.message || e, true); }
+}
+
+function renderOutputSlotButtons(keys) {
+    var wrap = document.getElementById('output-slot-buttons');
+    if (!wrap) return;
+    var list = keys || appState.availableOutputSlotKeys || [];
+    if (!list.length) {
+        wrap.innerHTML = '<span class="text-orange-600">⑥で領域を設定すると候補が表示されます</span>';
+        return;
+    }
+    var pending = RegionEditor.getPendingOutputSlotKey ? RegionEditor.getPendingOutputSlotKey() : '';
+    var status = RegionEditor.getOutputSlotStatus ? RegionEditor.getOutputSlotStatus() : [];
+    wrap.innerHTML = list.map(function(k) {
+        var st = status.find(function(s) { return s.slotKey === k; });
+        var cls = 'output-slot-btn' + (k === pending ? ' active' : '') + (st ? ' done' : '');
+        return '<button type="button" class="' + cls + '" data-slot-key="' + escapeHtml(k) + '" onclick="selectOutputSlotKey(this.dataset.slotKey)">' + escapeHtml(k) + '</button>';
+    }).join('');
+}
+
+function updateOutputSlotUi() {
+    renderOutputSlotButtons(appState.availableOutputSlotKeys);
+    var statusEl = document.getElementById('output-slot-status');
+    if (statusEl && typeof RegionEditor.getOutputSlotStatus === 'function') {
+        var slots = RegionEditor.getOutputSlotStatus();
+        statusEl.innerHTML = slots.length ? slots.map(function(s) {
+            var pm = s.printMode === 'label' ? 'ラベル付き' : '数字のみ';
+            return '<li class="bg-violet-50 text-violet-900 px-2 py-0.5 rounded border border-violet-200">' + escapeHtml(s.slotKey) + ' ✓ (' + pm + ')</li>';
+        }).join('') : '<li class="text-orange-600">未配置 — 任意</li>';
+    }
+}
+
+function selectOutputSlotKey(key) {
+    RegionEditor.setPendingOutputSlotKey(key);
+    var slots = RegionEditor.getRegions();
+    var existing = slots.find(function(s) { return s.slotKey === key; });
+    if (existing && existing.printMode) {
+        RegionEditor.setOutputPrintMode(existing.printMode);
+        var pmEl = document.getElementById('output-slot-print-mode');
+        if (pmEl) pmEl.value = existing.printMode;
+    }
+    updateOutputSlotUi();
+    var hint = document.getElementById('output-slot-hint');
+    if (hint) hint.textContent = '「' + key + '」を配置中 — Canvas 上をドラッグして矩形を指定してください。';
+}
+
+function onOutputPrintModeChange() {
+    var pmEl = document.getElementById('output-slot-print-mode');
+    var pm = pmEl ? pmEl.value : 'number';
+    RegionEditor.setOutputPrintMode(pm);
+    if (typeof RegionEditor.updateSelectedPrintMode === 'function') {
+        RegionEditor.updateSelectedPrintMode(pm);
+    }
+    updateOutputSlotUi();
+}
+
+function initOutputSlotEditor(slots) {
+    RegionEditor.init('output-canvas', {
+        mode: 'output',
+        initialRegions: (slots || []).map(function(s) {
+            return { slotKey: s.slotKey, x: s.x, y: s.y, w: s.width, h: s.height, printMode: s.printMode || 'number' };
+        }),
+        onChange: updateOutputSlotUi
+    });
+    if (appState.warpedImageEl) RegionEditor.setImage(appState.warpedImageEl);
+    var keys = appState.availableOutputSlotKeys || [];
+    if (keys.length) selectOutputSlotKey(keys[0]);
+    else updateOutputSlotUi();
+}
+
+function populateFeedbackPreviewSelect(rows) {
+    var sel = document.getElementById('feedback-preview-row');
+    if (!sel) return;
+    rows = rows || [];
+    sel.innerHTML = rows.map(function(r) {
+        var label = (r.studentId || '—') + ' / ' + (r.name || '—') + ' / ' + (r.fileName || '—');
+        return '<option value="' + r.rowIndex + '">' + escapeHtml(label) + '</option>';
+    }).join('');
+}
+
+async function loadFeedbackStepUi() {
+    try {
+        var config = await gasRun('getFeedbackExportConfig');
+        appState.feedbackExportConfig = config;
+        appState.outputSlots = config.outputSlots || appState.outputSlots || [];
+        appState.availableOutputSlotKeys = config.availableSlotKeys || appState.availableOutputSlotKeys || [];
+        populateFeedbackPreviewSelect(config.rows || []);
+        var statusEl = document.getElementById('feedback-export-status');
+        if (statusEl && config.feedbackFolderUrl) {
+            statusEl.innerHTML = '保存先: <a class="text-blue-700 underline" href="' + escapeHtml(config.feedbackFolderUrl) + '" target="_blank" rel="noopener">個票フォルダ</a>';
+        }
+        await loadModelFromServerIfNeeded();
+        initOutputSlotEditor(appState.outputSlots);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function loadModelForOutputSlots() {
+    try {
+        await loadModelFromServerIfNeeded();
+        var slots = await gasRun('getOutputSlots');
+        appState.outputSlots = slots;
+        initOutputSlotEditor(slots);
+        setStatus('模範解答を表示しました');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function saveOutputSlotsToServer() {
+    var slots = RegionEditor.getRegions();
+    try {
+        appState.outputSlots = await gasRun('saveOutputSlots', slots);
+        updateOutputSlotUi();
+        setStatus('合計欄を保存しました（' + slots.length + ' 欄）');
+        markStepDone(10);
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function renderFeedbackSheetForRow(rowIndex, config) {
+    config = config || appState.feedbackExportConfig || {};
+    var payload = await gasRun('getFeedbackRowPayload', rowIndex);
+    var fileId = payload.fileId || payload.warpedFileId;
+    if (!fileId) throw new Error('補正画像がありません');
+    var warped = await gasRun('getWarpedImageBase64', fileId);
+    var b64 = warped.base64 || warped;
+    return FeedbackRenderer.renderToDataUrl(b64, config.fields || appState.fields, config.outputSlots || appState.outputSlots, payload);
+}
+
+function showFeedbackPreviewOnCanvas(dataUrl) {
+    var canvas = document.getElementById('feedback-preview-canvas');
+    if (!canvas) return;
+    var img = new Image();
+    img.onload = function() {
+        canvas.width = img.width;
+        canvas.height = img.height;
+        canvas.getContext('2d').drawImage(img, 0, 0);
+    };
+    img.src = dataUrl;
+}
+
+async function previewFeedbackSheet() {
+    var sel = document.getElementById('feedback-preview-row');
+    var rowIndex = sel ? parseInt(sel.value, 10) : 0;
+    if (!rowIndex) {
+        setStatus('プレビューする生徒を選択してください', true);
+        return;
+    }
+    try {
+        setStatus('個票プレビューを描画中...');
+        var config = appState.feedbackExportConfig || await gasRun('getFeedbackExportConfig');
+        appState.feedbackExportConfig = config;
+        var dataUrl = await renderFeedbackSheetForRow(rowIndex, config);
+        showFeedbackPreviewOnCanvas(dataUrl);
+        setStatus('プレビューを表示しました（保存はしていません）');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
+async function batchGenerateFeedbackSheets() {
+    var statusEl = document.getElementById('feedback-export-status');
+    try {
+        var config = await gasRun('getFeedbackExportConfig');
+        appState.feedbackExportConfig = config;
+        appState.outputSlots = config.outputSlots || appState.outputSlots || [];
+        var rows = config.rows || [];
+        if (!rows.length) {
+            setStatus('採点結果がありません', true);
+            return;
+        }
+        var success = 0, skipped = 0, failed = 0;
+        var skipNames = [], failNames = [];
+        var CONCURRENCY = 4;
+        for (var i = 0; i < rows.length; i += CONCURRENCY) {
+            var chunk = rows.slice(i, i + CONCURRENCY);
+            var results = await Promise.all(chunk.map(async function(row) {
+                if (!row.fileId && !row.warpedFileId) {
+                    return { status: 'skip', row: row };
+                }
+                try {
+                    var dataUrl = await renderFeedbackSheetForRow(row.rowIndex, config);
+                    await gasRun('saveFeedbackImage', row.rowIndex, dataUrl);
+                    return { status: 'ok', row: row };
+                } catch (e) {
+                    return { status: 'fail', row: row, error: String(e.message || e) };
+                }
+            }));
+            results.forEach(function(r) {
+                if (r.status === 'ok') success++;
+                else if (r.status === 'skip') {
+                    skipped++;
+                    skipNames.push(r.row.fileName || r.row.studentId || String(r.row.rowIndex));
+                } else {
+                    failed++;
+                    failNames.push((r.row.fileName || r.row.studentId || '') + ': ' + (r.error || ''));
+                }
+            });
+            var done = success + skipped + failed;
+            var msg = '個票生成中... ' + done + ' / ' + rows.length + '（成功 ' + success + ' / スキップ ' + skipped + ' / 失敗 ' + failed + '）';
+            setStatus(msg);
+            if (statusEl) statusEl.textContent = msg;
+        }
+        var complete = await gasRun('markFeedbackExportComplete');
+        var folderLink = complete.feedbackFolderUrl ? ' <a class="text-blue-700 underline" href="' + escapeHtml(complete.feedbackFolderUrl) + '" target="_blank" rel="noopener">個票フォルダを開く</a>' : '';
+        var summary = '個票一括生成完了: 成功 ' + success + ' / スキップ ' + skipped + ' / 失敗 ' + failed + folderLink;
+        if (skipNames.length) summary += '<br><span class="text-amber-800">スキップ: ' + escapeHtml(skipNames.slice(0, 8).join(', ')) + (skipNames.length > 8 ? ' 他' + (skipNames.length - 8) + '件' : '') + '</span>';
+        if (failNames.length) summary += '<br><span class="text-red-700">失敗: ' + escapeHtml(failNames.slice(0, 3).join(' | ')) + (failNames.length > 3 ? ' 他' + (failNames.length - 3) + '件' : '') + '</span>';
+        if (statusEl) statusEl.innerHTML = summary;
+        setStatus('個票一括生成完了: 成功 ' + success + ' / スキップ ' + skipped + ' / 失敗 ' + failed);
+        markStepDone(10);
+    } catch (e) {
+        setStatus(e.message || e, true);
+        if (statusEl) statusEl.textContent = String(e.message || e);
+    }
 }
 
 document.addEventListener('DOMContentLoaded', function() {
