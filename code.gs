@@ -3476,6 +3476,20 @@ function getPaperTemplateConfig_(orientation) {
   };
 }
 
+/** テンプレート描画前にシートの行・列数を確保（新規シートは既定26列のため col75 で範囲外になる） */
+function ensureSheetDimensions_(sheet, minRows, minCols) {
+  minRows = Math.max(1, minRows || 1);
+  minCols = Math.max(1, minCols || 1);
+  var maxCols = sheet.getMaxColumns();
+  if (maxCols < minCols) {
+    sheet.insertColumnsAfter(maxCols, minCols - maxCols);
+  }
+  var maxRows = sheet.getMaxRows();
+  if (maxRows < minRows) {
+    sheet.insertRowsAfter(maxRows, minRows - maxRows);
+  }
+}
+
 /** 参考マークシートと同じ生徒IDマーク欄（年/組/番 + 0〜9 塗りつぶし欄） */
 function buildStudentIdMarkBlock_(sheet, cfg, idDigits) {
   idDigits = idDigits || 4;
@@ -3486,6 +3500,7 @@ function buildStudentIdMarkBlock_(sheet, cfg, idDigits) {
   var r;
   var c;
 
+  ensureSheetDimensions_(sheet, idStartRow + idDigits - 1, idStartCol + 9);
   sheet.getRange(idStartRow, headerCol, idDigits, 3).merge()
     .setValue('生徒\nID')
     .setFontWeight('bold')
@@ -3540,6 +3555,7 @@ function applyAnswerSheetTemplateGrid_(sheet, cfg) {
   var startCol = TEMPLATE_GRID_OFFSET_COL + 1;
   var endRow = startRow + cfg.borderRows - 1;
   var endCol = startCol + cfg.borderCols - 1;
+  ensureSheetDimensions_(sheet, endRow, endCol);
   var c;
   for (c = startCol; c <= endCol; c++) {
     sheet.setColumnWidth(c, 21);
