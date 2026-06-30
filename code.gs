@@ -434,24 +434,34 @@ function initResultsSheet(sheet, fields, extraColumns) {
   sheet.setFrozenRows(1);
 }
 
-function rebuildResultsSheetHeaders(ss) {
+/** 採点結果シートのヘッダーを不足分だけ追加（データ行は消さない） */
+function syncResultsSheetHeaders_(ss) {
+  ss = ss || getActiveTestSs();
   var fields = getAnswerFields(ss);
   var extra = getDynamicResultExtraColumns(ss);
   var sheet = ss.getSheetByName(SHEET_RESULTS);
-  var oldData = [];
-  if (sheet.getLastRow() > 1) {
-    var numCols = sheet.getLastColumn();
-    oldData = sheet.getRange(2, 1, sheet.getLastRow(), numCols).getValues();
-  }
-  var oldHeaders = sheet.getLastRow() >= 1 ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
-  initResultsSheet(sheet, fields, extra);
-  if (oldData.length === 0) return;
+  var expected = buildResultHeaders(fields, extra);
 
-  var newHeaders = buildResultHeaders(fields, extra);
-  oldData.forEach(function(row) {
-    var newRow = mapResultRow(oldHeaders, row, newHeaders);
-    sheet.appendRow(newRow);
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, expected.length).setValues([expected]);
+    sheet.setFrozenRows(1);
+    return expected;
+  }
+
+  ensureWarpedFileIdColumn(sheet);
+  var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  expected.forEach(function(h) {
+    if (headers.indexOf(h) >= 0) return;
+    var lastCol = sheet.getLastColumn();
+    sheet.insertColumnAfter(lastCol);
+    sheet.getRange(1, lastCol + 1).setValue(h);
+    headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   });
+  return headers;
+}
+
+function rebuildResultsSheetHeaders(ss) {
+  syncResultsSheetHeaders_(ss);
 }
 
 function getDynamicResultExtraColumns(ss) {
@@ -1215,7 +1225,7 @@ function saveAnswerFields(fields) {
   });
 
   syncPointsSheet(ss, fields);
-  rebuildResultsSheetHeaders(ss);
+  syncResultsSheetHeaders_(ss);
   touchTestProgress_(ss, 1);
   return getAnswerFields(ss);
 }
@@ -1282,8 +1292,15 @@ function getIdentityFields(ss) {
 }
 
 function saveIdentityFields(fields) {
-  if (!fields || !fields.length) {
+  fields = fields || [];
+  if (!fields.length) {
     throw new Error('本人確認欄を1つ以上設定してください。');
+  }
+  for (var i = 0; i < fields.length; i++) {
+    var f = fields[i];
+    if (!f || !f.type || f.slotKey || f.id) {
+      throw new Error('本人確認欄データ形式が不正です（記述欄・出力欄のデータが混ざっている可能性があります）。Step⑧で保存し直してください。');
+    }
   }
   var ss = getActiveTestSs();
   var sheet = ss.getSheetByName(SHEET_IDENTITY_FIELDS);
@@ -2872,7 +2889,7 @@ function saveGradingCriteria(fieldId, confirmedRules, testSsId) {
   sheet.clear();
   sheet.appendRow(['記述欄ID', '解答パターン', '判定', '付与得点', '備考']);
   if (kept.length) {
-    sheet.getRange(2, 1, kept.length, 5).setValues(kept);
+    sheet.getRange(2, 1, 1 + kept.length, 5).setValues(kept);
   }
   SpreadsheetApp.flush();
   touchTestProgress_(ss, 4);
@@ -2960,7 +2977,7 @@ function buildSummary(ss, unregisteredCount) {
   var headers = resultSheet.getRange(1, 1, 1, resultSheet.getLastColumn()).getValues()[0];
   var colMap = getResultColumnMap(headers);
   var data = resultSheet.getLastRow() > 1
-    ? resultSheet.getRange(2, 1, resultSheet.getLastRow() - 1, resultSheet.getLastColumn()).getValues()
+    ? resultSheet.getRange(2, 1, resultSheet.getLastRow(), resultSheet.getLastColumn()).getValues()
     : [];
   var fields = getAnswerFields(ss);
   var studentCount = data.length;
@@ -3058,14 +3075,19 @@ function getDomainSettings(ss) {
 }
 
 function saveDomainSettings(settings) {
+  settings = settings || [];
   var ss = getActiveTestSs();
+  var fields = getAnswerFields(ss);
+  if (fields.length && !settings.length) {
+    throw new Error('領域設定が空のため保存しません（既存データを保護しています）');
+  }
   var sheet = ss.getSheetByName(SHEET_DOMAINS);
   sheet.clear();
   sheet.appendRow(['記述欄ID', '大問', '範囲', '能力']);
   settings.forEach(function(s) {
     sheet.appendRow([s.fieldId, s.daiMon || '', s.hanI || '', s.noryoku || '']);
   });
-  rebuildResultsSheetHeaders(ss);
+  syncResultsSheetHeaders_(ss);
   touchTestProgress_(ss, 6);
   return getDomainSettings(ss);
 }
@@ -3077,7 +3099,7 @@ function calculateDomainScores() {
   var sheet = ss.getSheetByName(SHEET_RESULTS);
   if (sheet.getLastRow() <= 1) return;
 
-  rebuildResultsSheetHeaders(ss);
+  syncResultsSheetHeaders_(ss);
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var colMap = getResultColumnMap(headers);
   var data = sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
@@ -3949,6 +3971,13 @@ function getOutputSlots(ss) {
 }
 
 function saveOutputSlots(slots) {
+  slots = slots || [];
+  for (var i = 0; i < slots.length; i++) {
+    var s = slots[i];
+    if (!s || !s.slotKey || s.type || s.id) {
+      throw new Error('出力欄データ形式が不正です（記述欄・本人欄のデータが混ざっている可能性があります）。Step⑩で保存し直してください。');
+    }
+  }
   var ss = getActiveTestSs();
   ensureOutputSlotsSheet(ss);
   var sheet = ss.getSheetByName(SHEET_OUTPUT_SLOTS);

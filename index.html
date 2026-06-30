@@ -4865,11 +4865,39 @@ function looksLikeAnswerFields(fields) {
     });
 }
 
+function looksLikeIdentityFields(fields) {
+    if (!fields || !fields.length) return false;
+    return fields.every(function(f) {
+        return f && f.type && !f.slotKey && !f.id;
+    });
+}
+
+function looksLikeOutputSlots(slots) {
+    if (!slots || !slots.length) return true;
+    return slots.every(function(s) {
+        return s && s.slotKey && !s.type && !s.id;
+    });
+}
+
 function getAnswerFieldsForSave() {
     if (typeof RegionEditor.getMode === 'function' && RegionEditor.getMode() === 'answer') {
         return mergeFieldOcrLangFromUi(RegionEditor.getRegions());
     }
     return (appState.fields || []).slice();
+}
+
+function getIdentityFieldsForSave() {
+    if (typeof RegionEditor.getMode === 'function' && RegionEditor.getMode() === 'identity') {
+        return RegionEditor.getRegions();
+    }
+    return (appState.identityFields || []).slice();
+}
+
+function getOutputSlotsForSave() {
+    if (typeof RegionEditor.getMode === 'function' && RegionEditor.getMode() === 'output') {
+        return RegionEditor.getRegions();
+    }
+    return (appState.outputSlots || []).slice();
 }
 
 async function restoreAnswerFieldEditorIfNeeded() {
@@ -4941,7 +4969,12 @@ async function saveCurrentStepProgress(stepNum) {
         if (payload.rosterName) await gasRun('saveSelectedRosterName', payload.rosterName);
         if (payload.rosterName) await gasRun('saveRosterAbsentState', payload.rosterName, payload.absentStudents);
     } else if (stepNum === 8) {
-        payload.identityFields = RegionEditor.getRegions();
+        var identityFields = getIdentityFieldsForSave();
+        if (!looksLikeIdentityFields(identityFields)) {
+            setStatus('本人欄の保存は Step⑧ の編集画面で行ってください', true);
+            return;
+        }
+        payload.identityFields = identityFields;
         if (!payload.identityFields.length) {
             setStatus('学年・組・番号・ID・氏名のうち1つ以上を設定してください', true);
             return;
@@ -5952,8 +5985,12 @@ async function loadModelForIdentity() {
 }
 
 async function saveIdentityToServer() {
-    var fields = RegionEditor.getRegions();
-    if (!fields.length) {
+    if (typeof RegionEditor.getMode === 'function' && RegionEditor.getMode() !== 'identity') {
+        setStatus('本人欄編集画面（Step⑧）で保存してください', true);
+        return;
+    }
+    var fields = getIdentityFieldsForSave();
+    if (!looksLikeIdentityFields(fields)) {
         setStatus('学年・組・番号・ID・氏名のうち1つ以上を設定してください', true);
         return;
     }
@@ -6076,7 +6113,15 @@ async function loadModelForOutputSlots() {
 }
 
 async function saveOutputSlotsToServer() {
-    var slots = RegionEditor.getRegions();
+    if (typeof RegionEditor.getMode === 'function' && RegionEditor.getMode() !== 'output') {
+        setStatus('合計欄編集画面（Step⑩）で保存してください', true);
+        return;
+    }
+    var slots = getOutputSlotsForSave();
+    if (!looksLikeOutputSlots(slots)) {
+        setStatus('合計欄データ形式が不正です', true);
+        return;
+    }
     try {
         appState.outputSlots = await gasRun('saveOutputSlots', slots);
         if (appState.feedbackExportConfig) appState.feedbackExportConfig.outputSlots = appState.outputSlots;
