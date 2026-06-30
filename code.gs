@@ -3,6 +3,44 @@
  */
 
 var HUB_SS_ID_KEY = 'HUB_SS_ID';
+var SCRIPT_CONTAINER_FILE_ID_KEY = 'SCRIPT_CONTAINER_FILE_ID';
+var SCRIPT_PARENT_FOLDER_ID_KEY = 'SCRIPT_PARENT_FOLDER_ID';
+
+/** コンテナ（GAS 紐付けスプレッドシート）の親フォルダ ID を記録 */
+function syncScriptContainerContextFromFileId_(fileId) {
+  if (!fileId) return;
+  var props = PropertiesService.getScriptProperties();
+  props.setProperty(SCRIPT_CONTAINER_FILE_ID_KEY, String(fileId));
+  try {
+    var file = DriveApp.getFileById(String(fileId));
+    var parents = file.getParents();
+    if (parents.hasNext()) {
+      props.setProperty(SCRIPT_PARENT_FOLDER_ID_KEY, parents.next().getId());
+    }
+  } catch (e) { /* ignore */ }
+}
+
+/** Webアプリ（GAS）コードデータと同じ親フォルダ */
+function getScriptProjectParentFolder_() {
+  var props = PropertiesService.getScriptProperties();
+  var folderId = props.getProperty(SCRIPT_PARENT_FOLDER_ID_KEY);
+  if (folderId) {
+    try { return DriveApp.getFolderById(folderId); } catch (e) { /* refresh below */ }
+  }
+  var fileId = props.getProperty(SCRIPT_CONTAINER_FILE_ID_KEY) || props.getProperty(HUB_SS_ID_KEY);
+  if (!fileId) throw new Error('管理用スプレッドシートが未登録です。');
+  syncScriptContainerContextFromFileId_(fileId);
+  folderId = props.getProperty(SCRIPT_PARENT_FOLDER_ID_KEY);
+  if (!folderId) {
+    throw new Error('GAS 管理用スプレッドシートの親フォルダが見つかりません。Drive 上でフォルダ内に配置してください。');
+  }
+  return DriveApp.getFolderById(folderId);
+}
+
+function moveFileToScriptProjectFolder_(fileId) {
+  var folder = getScriptProjectParentFolder_();
+  DriveApp.getFileById(fileId).moveTo(folder);
+}
 
 function doGet(e) {
   try {
@@ -27,6 +65,7 @@ function applyHubIdFromRequest_(e) {
   var hubId = e.parameter.hubId || e.parameter.hubSsId;
   if (!hubId) return;
   PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, hubId);
+  syncScriptContainerContextFromFileId_(hubId);
   try {
     setupHubSheets(SpreadsheetApp.openById(hubId));
   } catch (err) { /* hubId invalid */ }
@@ -36,6 +75,7 @@ function onOpen() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (ss) {
     PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
+    syncScriptContainerContextFromFileId_(ss.getId());
     setupHubSheets(ss);
     try { syncHubTestList(); } catch (e) { /* ignore on first open */ }
   }
@@ -44,6 +84,7 @@ function onOpen() {
     .addItem('Webアプリを開く', 'openWebAppFromMenu')
     .addItem('ハブを登録', 'registerHubSpreadsheet')
     .addItem('テスト一覧を再同期', 'syncHubTestListFromMenu')
+    .addItem('解答用紙ひな形を再作成', 'recreateAnswerSheetTemplatesFromMenu')
     .addItem('古いWARP設定を削除', 'cleanupWarpScriptProperties')
     .addToUi();
 }
@@ -52,6 +93,7 @@ function openWebAppFromMenu() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
   PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
+  syncScriptContainerContextFromFileId_(ss.getId());
   setupHubSheets(ss);
   syncHubTestList();
   var url = ScriptApp.getService().getUrl();
@@ -72,6 +114,7 @@ function syncHubTestListFromMenu() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
   PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
+  syncScriptContainerContextFromFileId_(ss.getId());
   setupHubSheets(ss);
   var n = syncHubTestList();
   SpreadsheetApp.getUi().alert('テスト一覧を再同期しました（' + n + ' 件）。');
@@ -81,6 +124,7 @@ function registerHubSpreadsheet() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
   PropertiesService.getScriptProperties().setProperty(HUB_SS_ID_KEY, ss.getId());
+  syncScriptContainerContextFromFileId_(ss.getId());
   setupHubSheets(ss);
   initializeHub();
   var n = syncHubTestList();
@@ -93,6 +137,7 @@ function getHubSs() {
   var hubId = props.getProperty(HUB_SS_ID_KEY);
   if (hubId) {
     try {
+      syncScriptContainerContextFromFileId_(hubId);
       return SpreadsheetApp.openById(hubId);
     } catch (e) {
       props.deleteProperty(HUB_SS_ID_KEY);
@@ -101,6 +146,7 @@ function getHubSs() {
   var active = SpreadsheetApp.getActiveSpreadsheet();
   if (active) {
     props.setProperty(HUB_SS_ID_KEY, active.getId());
+    syncScriptContainerContextFromFileId_(active.getId());
     return active;
   }
   throw new Error('ハブ用スプレッドシートが未登録です。スプレッドシートを開き「自動採点 → ハブを登録」を実行してください。');
@@ -109,6 +155,7 @@ function getHubSs() {
 function initializeHub() {
   var properties = PropertiesService.getScriptProperties();
   var ss = getHubSs();
+  syncScriptContainerContextFromFileId_(ss.getId());
   setupHubSheets(ss);
 
   var rootFolderId = properties.getProperty('ROOT_IMAGE_FOLDER_ID');
@@ -119,11 +166,7 @@ function initializeHub() {
     } catch (e) { /* recreate */ }
   }
 
-  var file = DriveApp.getFileById(ss.getId());
-  var parents = file.getParents();
-  if (!parents.hasNext()) throw new Error('親フォルダの取得に失敗しました。');
-
-  var parentFolder = parents.next();
+  var parentFolder = getScriptProjectParentFolder_();
   var subFolders = parentFolder.getFoldersByName('採点システム画像');
   var rootFolder = subFolders.hasNext() ? subFolders.next() : parentFolder.createFolder('採点システム画像');
   properties.setProperty('ROOT_IMAGE_FOLDER_ID', rootFolder.getId());
@@ -139,6 +182,7 @@ function setupHubSheets(ss) {
   }
   initHubRosterSheet_(ss);
   ensureFeedbackStyleSheet_(ss);
+  ensureAnswerSheetTemplateSheets_(ss);
   var sheet1 = ss.getSheetByName('シート1');
   if (sheet1 && ss.getSheets().length > 1 && sheet1.getLastRow() === 0) {
     ss.deleteSheet(sheet1);
@@ -217,6 +261,10 @@ var SHEET_DEEMED_SCORING = 'みなし採点';
 var SHEET_DEEMED_DRAFT = 'みなし採点下書き';
 var SHEET_OUTPUT_SLOTS = '出力欄設定';
 var SHEET_FEEDBACK_STYLE = '出力書式設定';
+var SHEET_TEMPLATE_A4_LANDSCAPE = 'テンプレート_共通A4横';
+var SHEET_TEMPLATE_A4_PORTRAIT = 'テンプレート_共通A4縦';
+var TEMPLATE_GRID_OFFSET_ROW = 2;
+var TEMPLATE_GRID_OFFSET_COL = 2;
 
 var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
@@ -602,11 +650,8 @@ function createTest(testName, subject, dateTime) {
   var folder = getOrCreateTestImageFolder(ss);
   setTestInfoValue(ss, '生徒解答フォルダID', folder.getId());
 
-  var hubFile = DriveApp.getFileById(hubSs.getId());
-  var parents = hubFile.getParents();
-  if (parents.hasNext()) {
-    DriveApp.getFileById(ss.getId()).moveTo(parents.next());
-  }
+  syncScriptContainerContextFromFileId_(hubSs.getId());
+  moveFileToScriptProjectFolder_(ss.getId());
 
   ensureHubSheetColumns(hubSs.getSheetByName(SHEET_HUB_TEST_LIST));
   hubSs.getSheetByName(SHEET_HUB_TEST_LIST).appendRow([
@@ -704,7 +749,8 @@ function getAppBootstrap() {
       hubUrl: hubSs.getUrl(),
       hubName: hubSs.getName(),
       activeTestSsId: getActiveTestSsId(),
-      tests: tests
+      tests: tests,
+      answerSheetTemplates: getAnswerSheetTemplateLinks_(hubSs)
     });
   } catch (e) {
     return serializeForClient_({
@@ -720,9 +766,12 @@ function getAppBootstrap() {
 }
 
 function getHubParentFolder_(hubSs) {
-  var hubFile = DriveApp.getFileById(hubSs.getId());
-  var parents = hubFile.getParents();
-  return parents.hasNext() ? parents.next() : null;
+  syncScriptContainerContextFromFileId_(hubSs.getId());
+  try {
+    return getScriptProjectParentFolder_();
+  } catch (e) {
+    return null;
+  }
 }
 
 function buildTestListEntryFromSs(ss) {
@@ -3410,6 +3459,151 @@ function ensureRosterHeaders_(sheet) {
     sheet.setFrozenRows(1);
     formatHubRosterSheet_(sheet);
   }
+}
+
+/** index.html getPaperConfig と同じグリッド定義 */
+function getPaperTemplateConfig_(orientation) {
+  var isPortrait = orientation === 'portrait';
+  return {
+    orientation: orientation,
+    borderCols: isPortrait ? 51 : 73,
+    borderRows: isPortrait ? 73 : 51,
+    idStartCol: isPortrait ? 42 : 64,
+    idStartRow: 3
+  };
+}
+
+function ensureAnswerSheetTemplateSheets_(ss) {
+  ensureAnswerSheetTemplateSheet_(ss, SHEET_TEMPLATE_A4_LANDSCAPE, 'landscape');
+  ensureAnswerSheetTemplateSheet_(ss, SHEET_TEMPLATE_A4_PORTRAIT, 'portrait');
+}
+
+function ensureAnswerSheetTemplateSheet_(ss, sheetName, orientation) {
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    buildAnswerSheetTemplate_(sheet, orientation);
+    return sheet;
+  }
+  if (sheet.getLastRow() === 0) {
+    buildAnswerSheetTemplate_(sheet, orientation);
+  }
+  return sheet;
+}
+
+function buildAnswerSheetTemplate_(sheet, orientation) {
+  sheet.clear();
+  var cfg = getPaperTemplateConfig_(orientation);
+  var startRow = TEMPLATE_GRID_OFFSET_ROW + 1;
+  var startCol = TEMPLATE_GRID_OFFSET_COL + 1;
+  var endRow = startRow + cfg.borderRows - 1;
+  var endCol = startCol + cfg.borderCols - 1;
+  var orientLabel = orientation === 'portrait' ? 'A4縦' : 'A4横';
+
+  sheet.getRange(1, 1, 1, Math.min(endCol, 40)).merge();
+  sheet.getRange(1, 1).setValue(
+    '【解答用紙ひな形 ' + orientLabel + '】このシートを編集して印刷してください。' +
+    '外枠・マス目・IDマーク欄の位置は Web アプリ Step① の座標系（1マス≈20px）と一致しています。'
+  ).setFontSize(9).setWrap(true).setVerticalAlignment('top');
+
+  sheet.getRange(2, startCol).setValue(
+    '→ 記述欄を追加する場合はマス目内を編集。印刷後スキャンして Step③ で読み込みます。'
+  ).setFontSize(8).setFontColor('#64748b');
+
+  var c;
+  for (c = startCol; c <= endCol; c++) {
+    sheet.setColumnWidth(c, 21);
+  }
+  for (var r = startRow; r <= endRow; r++) {
+    sheet.setRowHeight(r, 15);
+  }
+  sheet.setColumnWidth(1, 36);
+  sheet.setColumnWidth(2, 36);
+
+  var gridRange = sheet.getRange(startRow, startCol, endRow, endCol);
+  gridRange.setBackground('#ffffff');
+  gridRange.setBorder(null, null, null, null, true, true, '#cccccc', SpreadsheetApp.BorderStyle.SOLID);
+  gridRange.setBorder(true, true, true, true, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
+
+  for (c = 0; c < 10; c++) {
+    sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol + c)
+      .setValue(String(c))
+      .setHorizontalAlignment('center')
+      .setFontSize(8)
+      .setFontWeight('bold')
+      .setBackground('#f1f5f9');
+  }
+  var digitLabels = ['1桁目', '2桁目', '3桁目', '4桁目'];
+  for (var ri = 0; ri < 4; ri++) {
+    var rowNum = cfg.idStartRow + ri;
+    sheet.getRange(rowNum, cfg.idStartCol - 1)
+      .setValue(digitLabels[ri])
+      .setFontSize(7)
+      .setHorizontalAlignment('right')
+      .setFontColor('#475569');
+    for (c = 0; c < 10; c++) {
+      sheet.getRange(rowNum, cfg.idStartCol + c)
+        .setValue('○')
+        .setHorizontalAlignment('center')
+        .setVerticalAlignment('middle')
+        .setFontColor('#cbd5e1')
+        .setFontSize(8);
+    }
+  }
+
+  var idBlock = sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1, cfg.idStartRow + 3, cfg.idStartCol + 9);
+  idBlock.setBorder(true, true, true, true, true, true, '#64748b', SpreadsheetApp.BorderStyle.SOLID);
+  sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1)
+    .setValue('生徒ID')
+    .setFontSize(8)
+    .setFontWeight('bold')
+    .setBackground('#e2e8f0');
+
+  sheet.setFrozenRows(startRow - 1);
+}
+
+function getAnswerSheetTemplateLinks_(ss) {
+  ss = ss || getHubSs();
+  ensureAnswerSheetTemplateSheets_(ss);
+  function linkFor(name) {
+    var sh = ss.getSheetByName(name);
+    if (!sh) return { name: name, url: ss.getUrl(), gid: '' };
+    return { name: name, url: ss.getUrl() + '#gid=' + sh.getSheetId(), gid: String(sh.getSheetId()) };
+  }
+  return {
+    hubUrl: ss.getUrl(),
+    landscape: linkFor(SHEET_TEMPLATE_A4_LANDSCAPE),
+    portrait: linkFor(SHEET_TEMPLATE_A4_PORTRAIT)
+  };
+}
+
+function ensureAnswerSheetTemplatesForWeb() {
+  var ss = getHubSs();
+  setupHubSheets(ss);
+  return getAnswerSheetTemplateLinks_(ss);
+}
+
+function recreateAnswerSheetTemplates_(ss) {
+  ss = ss || getHubSs();
+  [SHEET_TEMPLATE_A4_LANDSCAPE, SHEET_TEMPLATE_A4_PORTRAIT].forEach(function(name) {
+    var sheet = ss.getSheetByName(name);
+    if (sheet) ss.deleteSheet(sheet);
+  });
+  ensureAnswerSheetTemplateSheets_(ss);
+}
+
+function recreateAnswerSheetTemplatesFromMenu() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
+  var ui = SpreadsheetApp.getUi();
+  var ans = ui.alert(
+    '解答用紙ひな形を再作成',
+    '「' + SHEET_TEMPLATE_A4_LANDSCAPE + '」「' + SHEET_TEMPLATE_A4_PORTRAIT + '」を上書き再作成します。編集内容は失われます。よろしいですか？',
+    ui.ButtonSet.YES_NO
+  );
+  if (ans !== ui.Button.YES) return;
+  recreateAnswerSheetTemplates_(ss);
+  ui.alert('解答用紙ひな形シートを再作成しました。');
 }
 
 function writeHubRosterTemplate_(sheet) {

@@ -117,6 +117,17 @@
         .output-slot-btn.done { border-color: #16a34a; background: #dcfce7; color: #166534; }
         .output-slot-btn.active.done { background: #7c3aed; color: #fff; }
         #feedback-preview-canvas, #output-canvas { max-width: 100%; }
+        #feedback-preview-wrap {
+            min-height: 240px;
+            height: 70vh;
+            max-height: 85vh;
+            overflow: auto;
+        }
+        #feedback-preview-img {
+            display: block;
+            height: auto;
+            max-width: none;
+        }
         .collapsible-toggle-btn { padding: 0.35rem 0.75rem; border-radius: 0.375rem; border: 1px solid #cbd5e1; background: #f8fafc; font-size: 12px; font-weight: 600; cursor: pointer; text-align: left; width: 100%; }
         .collapsible-toggle-btn:hover { background: #f1f5f9; }
         .collapsible-toggle-btn[aria-expanded="true"] { background: #e2e8f0; border-color: #94a3b8; }
@@ -277,6 +288,12 @@
                 <div><label class="text-xs font-semibold">科目名</label><input id="test-subject" class="w-full border rounded p-2 text-sm"></div>
                 <div><label class="text-xs font-semibold">実施日時</label><input id="test-datetime" type="datetime-local" class="w-full border rounded p-2 text-sm"></div>
                 <button type="button" data-busy-label="作成中..." onclick="withBusyButton(event.currentTarget, createNewTest)" class="bg-blue-600 text-white py-2 rounded font-bold text-sm hover:bg-blue-700">テスト用スプレッドシートを作成</button>
+            </div>
+            <div class="mt-4 border rounded p-3 bg-white space-y-2 max-w-lg">
+                <h3 class="text-sm font-bold">解答用紙ひな形（ハブSS）</h3>
+                <p class="text-xs text-gray-600">コンテナバインドの管理スプレッドシートに <strong>テンプレート_共通A4横</strong> / <strong>テンプレート_共通A4縦</strong> シートがあります。編集して印刷し、生徒用解答用紙としてご利用ください（IDマーク欄付き）。</p>
+                <div id="answer-template-links" class="flex flex-wrap gap-2 text-xs"></div>
+                <button type="button" data-busy-label="準備中..." onclick="withBusyButton(event.currentTarget, ensureAnswerSheetTemplatesUi)" class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">ひな形シートを用意（未作成時のみ）</button>
             </div>
             <div class="mt-4">
                 <h3 class="text-sm font-bold mb-2">既存テストを開く</h3>
@@ -616,10 +633,18 @@
                         <select id="feedback-preview-row" class="border rounded p-1 min-w-[240px]"></select>
                     </div>
                     <button type="button" data-busy-label="描画中..." onclick="withBusyButton(event.currentTarget, previewFeedbackSheet)" class="bg-blue-600 text-white px-4 py-2 rounded font-bold">1件プレビュー</button>
+                    <div class="flex flex-wrap gap-2 items-center text-xs border-l border-gray-300 pl-2">
+                        <span class="font-semibold text-slate-700">表示倍率</span>
+                        <input type="range" id="feedback-preview-zoom" min="30" max="400" value="100" class="w-32">
+                        <label class="flex items-center gap-1">
+                            <input type="number" id="feedback-preview-zoom-num" min="30" max="400" value="100" class="w-14 border rounded p-1 text-center font-mono">
+                            <span>%</span>
+                        </label>
+                    </div>
                 </div>
-                <div id="feedback-preview-wrap" class="overflow-auto max-h-[70vh] border rounded bg-gray-100 min-h-[120px]">
+                <div id="feedback-preview-wrap" class="border rounded bg-gray-100">
                     <p id="feedback-preview-placeholder" class="text-xs text-gray-400 p-4">「1件プレビュー」実行後にここへ表示されます</p>
-                    <img id="feedback-preview-img" class="max-w-full h-auto hidden" alt="個票プレビュー">
+                    <img id="feedback-preview-img" class="hidden" alt="個票プレビュー">
                     <canvas id="feedback-preview-canvas" class="max-w-full h-auto hidden"></canvas>
                 </div>
             </div>
@@ -2912,7 +2937,7 @@ var STEPS = [
     { id: 9, label: '⑨ ID・氏名照合' }, { id: 10, label: '⑩ 個票出力' }
 ];
 var currentStep = 0, opencvReady = false, visionKeyOk = false;
-var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, answerFieldsDirty: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false, outputSlots: [], availableOutputSlotKeys: [], feedbackExportConfig: null, feedbackStyle: null };
+var appState = { test: null, fields: [], criteriaList: [], warpedBase64: null, warpedImageEl: null, batchFiles: [], currentStep: 0, batchFlushedIds: {}, identityFields: [], criteriaByField: {}, domainRows: [], restoring: false, answerFieldsDirty: false, ocrReplacementsByField: {}, outlierGroups: [], outlierMaxCount: 2, deemedCheckedByField: {}, incorrectCheckedByField: {}, hideIncorrectCropImages: true, deemedDraftByField: {}, deemedScoringByField: {}, cropGridResults: [], verifyCropResults: [], verifyLoadContext: null, verifyCompareMode: 'name', cropInlineZoom: 100, verifyCropZoom: 100, feedbackPreviewZoom: 100, rosterAbsent: {}, rosterImportRows: null, rosterPreviewShown: false, outputSlots: [], availableOutputSlotKeys: [], feedbackExportConfig: null, feedbackStyle: null, answerSheetTemplates: null };
 
 function escapeHtml(s) {
     return String(s == null ? '' : s).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
@@ -3582,6 +3607,8 @@ async function loadAppBootstrap() {
             return;
         }
         document.getElementById('hub-label').innerHTML = 'ハブ: <a href="' + boot.hubUrl + '" target="_blank" class="text-blue-600 underline">' + escapeHtml(boot.hubName) + '</a>';
+        appState.answerSheetTemplates = boot.answerSheetTemplates || null;
+        renderAnswerTemplateLinks(appState.answerSheetTemplates);
         applyTestsToUi(boot.tests);
         TestSessionCache.clear();
         await preloadTestsToSessionCache(boot.tests);
@@ -5048,6 +5075,28 @@ function markStepDone(n) {
     if (btn) btn.classList.add('done');
 }
 
+function renderAnswerTemplateLinks(templates) {
+    var wrap = document.getElementById('answer-template-links');
+    if (!wrap) return;
+    templates = templates || appState.answerSheetTemplates;
+    if (!templates || !templates.landscape) {
+        wrap.innerHTML = '<span class="text-gray-400">ハブ登録後にリンクが表示されます</span>';
+        return;
+    }
+    wrap.innerHTML =
+        '<a href="' + escapeHtml(templates.landscape.url) + '" target="_blank" rel="noopener" class="text-blue-700 underline bg-blue-50 px-2 py-1 rounded">' + escapeHtml(templates.landscape.name) + '</a>' +
+        '<a href="' + escapeHtml(templates.portrait.url) + '" target="_blank" rel="noopener" class="text-blue-700 underline bg-blue-50 px-2 py-1 rounded">' + escapeHtml(templates.portrait.name) + '</a>';
+}
+
+async function ensureAnswerSheetTemplatesUi() {
+    try {
+        var links = await gasRun('ensureAnswerSheetTemplatesForWeb');
+        appState.answerSheetTemplates = links;
+        renderAnswerTemplateLinks(links);
+        setStatus('解答用紙ひな形シートを確認しました（未作成の場合は自動作成済み）');
+    } catch (e) { setStatus(e.message || e, true); }
+}
+
 async function createNewTest() {
     var name = document.getElementById('test-name').value.trim();
     if (!name) { setStatus('テスト名を入力してください', true); return; }
@@ -6434,6 +6483,43 @@ async function renderFeedbackSheetForRow(rowIndex, config, options) {
     return FeedbackRenderer.renderToDataUrl(b64, fields, outputSlots, payload, style);
 }
 
+function clampFeedbackPreviewZoom(v) {
+    v = parseInt(v, 10);
+    if (isNaN(v)) v = 100;
+    return Math.max(30, Math.min(400, v));
+}
+
+function syncFeedbackPreviewZoomControls(pct) {
+    pct = clampFeedbackPreviewZoom(pct);
+    var slider = document.getElementById('feedback-preview-zoom');
+    var num = document.getElementById('feedback-preview-zoom-num');
+    if (slider && parseInt(slider.value, 10) !== pct) slider.value = String(pct);
+    if (num && parseInt(num.value, 10) !== pct) num.value = String(pct);
+}
+
+function applyFeedbackPreviewZoom(pct) {
+    pct = clampFeedbackPreviewZoom(pct);
+    appState.feedbackPreviewZoom = pct;
+    syncFeedbackPreviewZoomControls(pct);
+    var imgEl = document.getElementById('feedback-preview-img');
+    if (!imgEl || imgEl.classList.contains('hidden') || !imgEl.naturalWidth) return;
+    imgEl.style.width = Math.round(imgEl.naturalWidth * pct / 100) + 'px';
+    imgEl.style.height = 'auto';
+}
+
+function initFeedbackPreviewZoomControls() {
+    var slider = document.getElementById('feedback-preview-zoom');
+    var num = document.getElementById('feedback-preview-zoom-num');
+    if (slider) slider.addEventListener('input', function() { applyFeedbackPreviewZoom(slider.value); });
+    if (num) {
+        num.addEventListener('change', function() { applyFeedbackPreviewZoom(num.value); });
+        num.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') { e.preventDefault(); applyFeedbackPreviewZoom(num.value); }
+        });
+    }
+    applyFeedbackPreviewZoom(appState.feedbackPreviewZoom || 100);
+}
+
 function showFeedbackPreviewOnCanvas(dataUrl) {
     var imgEl = document.getElementById('feedback-preview-img');
     var canvas = document.getElementById('feedback-preview-canvas');
@@ -6448,6 +6534,7 @@ function showFeedbackPreviewOnCanvas(dataUrl) {
         imgEl.classList.remove('hidden');
         if (ph) ph.classList.add('hidden');
         if (wrap) wrap.scrollTop = 0;
+        applyFeedbackPreviewZoom(appState.feedbackPreviewZoom || 100);
     };
     imgEl.onerror = function() {
         setStatus('プレビュー画像の読込に失敗しました', true);
@@ -6572,6 +6659,7 @@ document.addEventListener('DOMContentLoaded', function() {
     initCollapsibleSideNav();
     window.addEventListener('resize', function() { scheduleFitCompactTableScrolls(); });
     initCropInlineZoomControls();
+    initFeedbackPreviewZoomControls();
     syncVerifyCompareSwitchVisual();
     var verifyModeCb = document.getElementById('verify-compare-mode-cb');
     if (verifyModeCb) verifyModeCb.addEventListener('change', function() { onVerifyCompareModeChange(); });
