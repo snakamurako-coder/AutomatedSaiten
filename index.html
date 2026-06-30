@@ -563,7 +563,7 @@
 
             <div class="border rounded p-3 bg-violet-50 space-y-2">
                 <h3 class="text-sm font-bold text-violet-900">合計欄の配置</h3>
-                <p class="text-xs text-gray-600">下のボタンで印字する項目を選び、Canvas 上をドラッグして矩形を指定します（Step⑧ 本人欄と同様）。</p>
+                <p class="text-xs text-gray-600">「総計点」「大問1」などの<strong>項目ボタン</strong>を押し、Canvas 上を<strong>ドラッグして矩形</strong>を指定してください（ボタンを押すだけでは印字されません）。</p>
                 <div class="flex flex-wrap gap-2 items-center text-xs">
                     <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, loadModelForOutputSlots)" class="bg-blue-600 text-white px-3 py-1 rounded">模範解答を再表示</button>
                     <span class="text-gray-400">|</span>
@@ -1719,7 +1719,7 @@ var FeedbackRenderer = (function() {
   }
 
   function drawTotal(ctx, slot, value) {
-    if (!slot || !slot.width || !slot.height) return;
+    if (!slot || !(slot.width > 0) || !(slot.height > 0)) return;
     var text = formatTotalText(slot, value);
     if (!text) return;
     var x = slot.x;
@@ -5901,10 +5901,24 @@ async function saveOutputSlotsToServer() {
     var slots = RegionEditor.getRegions();
     try {
         appState.outputSlots = await gasRun('saveOutputSlots', slots);
+        if (appState.feedbackExportConfig) appState.feedbackExportConfig.outputSlots = appState.outputSlots;
         updateOutputSlotUi();
         setStatus('合計欄を保存しました（' + slots.length + ' 欄）');
         markStepDone(10);
     } catch (e) { setStatus(e.message || e, true); }
+}
+
+function getActiveOutputSlots() {
+    var live = [];
+    if (typeof RegionEditor.getRegions === 'function' && currentStep === 10) {
+        try { live = RegionEditor.getRegions() || []; } catch (e) { live = []; }
+    }
+    if (live.length) return live;
+    if (appState.outputSlots && appState.outputSlots.length) return appState.outputSlots;
+    if (appState.feedbackExportConfig && appState.feedbackExportConfig.outputSlots) {
+        return appState.feedbackExportConfig.outputSlots;
+    }
+    return [];
 }
 
 async function renderFeedbackSheetForRow(rowIndex, config) {
@@ -5912,9 +5926,13 @@ async function renderFeedbackSheetForRow(rowIndex, config) {
     var payload = await gasRun('getFeedbackRowPayload', rowIndex);
     var fileId = payload.fileId || payload.warpedFileId;
     if (!fileId) throw new Error('補正画像がありません');
+    var outputSlots = getActiveOutputSlots();
+    if (!outputSlots.length) {
+        throw new Error('合計欄が未配置です。項目ボタンを選び Canvas 上で矩形を指定して「合計欄を保存」してください。');
+    }
     var warped = await gasRun('getWarpedImageBase64', fileId);
     var b64 = warped.base64 || warped;
-    return FeedbackRenderer.renderToDataUrl(b64, config.fields || appState.fields, config.outputSlots || appState.outputSlots, payload);
+    return FeedbackRenderer.renderToDataUrl(b64, config.fields || appState.fields, outputSlots, payload);
 }
 
 function showFeedbackPreviewOnCanvas(dataUrl) {
@@ -5940,9 +5958,11 @@ async function previewFeedbackSheet() {
         setStatus('個票プレビューを描画中...');
         var config = appState.feedbackExportConfig || await gasRun('getFeedbackExportConfig');
         appState.feedbackExportConfig = config;
+        config.outputSlots = getActiveOutputSlots();
         var dataUrl = await renderFeedbackSheetForRow(rowIndex, config);
         showFeedbackPreviewOnCanvas(dataUrl);
-        setStatus('プレビューを表示しました（保存はしていません）');
+        var slotCount = config.outputSlots.length;
+        setStatus('プレビューを表示しました（合計欄 ' + slotCount + ' 件、保存はしていません）');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -5952,6 +5972,12 @@ async function batchGenerateFeedbackSheets() {
         var config = await gasRun('getFeedbackExportConfig');
         appState.feedbackExportConfig = config;
         appState.outputSlots = config.outputSlots || appState.outputSlots || [];
+        var outputSlots = getActiveOutputSlots();
+        if (!outputSlots.length) {
+            setStatus('合計欄が未配置です。項目を選んで Canvas 上に矩形を指定し「合計欄を保存」してください。', true);
+            return;
+        }
+        config.outputSlots = outputSlots;
         var rows = config.rows || [];
         if (!rows.length) {
             setStatus('採点結果がありません', true);

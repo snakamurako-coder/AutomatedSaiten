@@ -438,9 +438,8 @@ function rebuildResultsSheetHeaders(ss) {
   var sheet = ss.getSheetByName(SHEET_RESULTS);
   var oldData = [];
   if (sheet.getLastRow() > 1) {
-    var numRows = sheet.getLastRow() - 1;
     var numCols = sheet.getLastColumn();
-    oldData = sheet.getRange(2, 1, numRows, numCols).getValues();
+    oldData = sheet.getRange(2, 1, sheet.getLastRow(), numCols).getValues();
   }
   var oldHeaders = sheet.getLastRow() >= 1 ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
   initResultsSheet(sheet, fields, extra);
@@ -3059,7 +3058,7 @@ function calculateDomainScores() {
   rebuildResultsSheetHeaders(ss);
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var colMap = getResultColumnMap(headers);
-  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  var data = sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
 
   var daiMonGroups = {}, hanIGroups = {}, noryokuGroups = {};
   domains.forEach(function(d) {
@@ -3124,7 +3123,9 @@ function calculateDomainScores() {
     data[r] = row;
   }
 
-  sheet.getRange(2, 1, data.length, headers.length).setValues(data);
+  if (data.length > 0) {
+    sheet.getRange(2, 1, 1 + data.length, headers.length).setValues(data);
+  }
   return data.length;
 }
 
@@ -3792,6 +3793,78 @@ function getResultColumnNameForSlotKey_(slotKey) {
   return k + '_得点';
 }
 
+function computeFeedbackTotalsFromRow_(ss, row, headers, colMap) {
+  var fields = getAnswerFields(ss);
+  var domains = getDomainSettings(ss);
+  var daiMonGroups = {}, hanIGroups = {}, noryokuGroups = {};
+  domains.forEach(function(d) {
+    if (d.daiMon) {
+      if (!daiMonGroups[d.daiMon]) daiMonGroups[d.daiMon] = [];
+      daiMonGroups[d.daiMon].push(d.fieldId);
+    }
+    if (d.hanI) {
+      if (!hanIGroups[d.hanI]) hanIGroups[d.hanI] = [];
+      hanIGroups[d.hanI].push(d.fieldId);
+    }
+    if (d.noryoku) {
+      if (!noryokuGroups[d.noryoku]) noryokuGroups[d.noryoku] = [];
+      noryokuGroups[d.noryoku].push(d.fieldId);
+    }
+  });
+
+  function sumFieldScores(fieldIds) {
+    var total = 0;
+    fieldIds.forEach(function(fid) {
+      var f = fields.find(function(x) { return x.id === fid; });
+      if (!f) return;
+      var label = f.displayName || f.id;
+      var fm = colMap.fields[label];
+      if (fm && fm.score >= 0) total += parseInt(row[fm.score], 10) || 0;
+    });
+    return total;
+  }
+
+  function readSheetTotal(slotKey) {
+    var colName = getResultColumnNameForSlotKey_(slotKey);
+    var idx = headers.indexOf(colName);
+    if (idx < 0) return null;
+    var v = row[idx];
+    if (v === '' || v == null) return null;
+    return v;
+  }
+
+  var totals = {};
+  Object.keys(daiMonGroups).forEach(function(k) {
+    var key = '大問' + k;
+    totals[key] = readSheetTotal(key);
+    if (totals[key] == null) totals[key] = sumFieldScores(daiMonGroups[k]);
+  });
+  Object.keys(hanIGroups).forEach(function(k) {
+    var key = '範囲' + k;
+    totals[key] = readSheetTotal(key);
+    if (totals[key] == null) totals[key] = sumFieldScores(hanIGroups[k]);
+  });
+  Object.keys(noryokuGroups).forEach(function(k) {
+    var key = '能力' + k;
+    totals[key] = readSheetTotal(key);
+    if (totals[key] == null) totals[key] = sumFieldScores(noryokuGroups[k]);
+  });
+
+  var subtotal = 0;
+  fields.forEach(function(f) {
+    var label = f.displayName || f.id;
+    var fm = colMap.fields[label];
+    if (fm && fm.score >= 0) subtotal += parseInt(row[fm.score], 10) || 0;
+  });
+  var extIdx = headers.indexOf('外部連携得点');
+  var extScore = extIdx >= 0 ? (parseFloat(row[extIdx]) || 0) : 0;
+  totals['外部連携得点'] = readSheetTotal('外部連携得点');
+  if (totals['外部連携得点'] == null) totals['外部連携得点'] = extScore;
+  totals['総計点'] = readSheetTotal('総計点');
+  if (totals['総計点'] == null) totals['総計点'] = subtotal + extScore;
+  return totals;
+}
+
 function getOutputSlots(ss) {
   ss = ss || getActiveTestSs();
   ensureOutputSlotsSheet(ss);
@@ -3855,11 +3928,13 @@ function buildFeedbackRowPayload_(ss, rowIndex) {
       score: fm && fm.score >= 0 ? (parseInt(row[fm.score], 10) || 0) : 0
     };
   });
-  var totals = {};
+  var totals = computeFeedbackTotalsFromRow_(ss, row, headers, colMap);
   getAvailableOutputSlotKeys_(ss).forEach(function(k) {
-    var colName = getResultColumnNameForSlotKey_(k);
-    var idx = headers.indexOf(colName);
-    totals[k] = idx >= 0 ? row[idx] : '';
+    if (totals[k] === undefined || totals[k] === null || totals[k] === '') {
+      var colName = getResultColumnNameForSlotKey_(k);
+      var idx = headers.indexOf(colName);
+      totals[k] = idx >= 0 && row[idx] !== '' && row[idx] != null ? row[idx] : 0;
+    }
   });
   return {
     rowIndex: rowIndex,
