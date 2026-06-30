@@ -10,8 +10,11 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
         body { font-family: 'Noto Sans JP', sans-serif; background: #f3f4f6; margin: 0; }
-        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 18px; height: 18px; animation: spin 1s linear infinite; display: inline-block; }
+        .loader { border: 3px solid #f3f3f3; border-top: 3px solid #3b82f6; border-radius: 50%; width: 18px; height: 18px; animation: spin 1s linear infinite; display: inline-block; vertical-align: middle; }
         @keyframes spin { to { transform: rotate(360deg); } }
+        @keyframes btn-finish-flash { 0% { box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.75); } 100% { box-shadow: none; } }
+        button.is-btn-busy { cursor: wait; }
+        button.btn-finish-flash { animation: btn-finish-flash 0.55s ease-out; }
         .step-btn.active { background: #2563eb; color: white; }
         .step-btn.done { background: #dcfce7; color: #166534; }
         #editor-canvas, #batch-preview-canvas { max-width: 100%; cursor: crosshair; box-shadow: 0 4px 12px rgba(0,0,0,0.15); }
@@ -740,13 +743,14 @@ function detectOmrId(warpedMat, cfg, fillThreshold) {
   gray.delete(); thresh.delete(); return detectedId;
 }
 function cropRegionFromBase64(base64, region) {
-  return new Promise(function(resolve) {
+  return new Promise(function(resolve, reject) {
     var img = new Image();
     img.onload = function() {
       var canvas = document.createElement('canvas'); canvas.width = region.width; canvas.height = region.height;
       canvas.getContext('2d').drawImage(img, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
       resolve(canvas.toDataURL('image/jpeg', 0.9));
     };
+    img.onerror = function() { reject(new Error('画像の切り出しに失敗しました')); };
     img.src = base64.indexOf('data:') === 0 ? base64 : 'data:image/jpeg;base64,' + base64;
   });
 }
@@ -1241,7 +1245,7 @@ var ManualWarpEditor = (function() {
 
   function updateSaveButtonUI() {
     var btn = document.getElementById('manual-warp-save-btn');
-    if (!btn) return;
+    if (!btn || btn.classList.contains('is-btn-busy')) return;
     if (continuousMode) {
       var isLast = queueIndex >= continuousQueue.length - 1;
       btn.textContent = isLast ? '保存して一括OCR開始' : '保存・次の画像に移る';
@@ -1511,8 +1515,6 @@ var ManualWarpEditor = (function() {
       setStatus('補正プレビューがありません。範囲を指定して四隅を調整してください。', true);
       return;
     }
-    var btn = document.getElementById('manual-warp-save-btn');
-    if (btn) btn.disabled = true;
     document.getElementById('manual-warp-status').textContent = '保存・OCR実行中...';
     try {
       var cfg = getPaperConfig(getOrientation());
@@ -1527,8 +1529,6 @@ var ManualWarpEditor = (function() {
     } catch (e) {
       document.getElementById('manual-warp-status').textContent = '失敗: ' + (e.message || e);
       setStatus(e.message || e, true);
-    } finally {
-      if (btn) btn.disabled = false;
     }
   }
 
@@ -2493,25 +2493,84 @@ async function refreshCurrentTestInCache() {
   } catch (e) { return null; }
 }
 
-async function withBusyButton(btn, fn) {
-  if (!btn || btn.disabled) return;
-  btn.disabled = true;
-  btn.dataset.originalHtml = btn.innerHTML;
-  btn.innerHTML = '<span class="loader inline-block mr-1"></span>' + (btn.dataset.busyLabel || '処理中...');
-  try { return await fn(); }
-  finally {
-    if (btn.dataset.keepBusy !== '1') {
-      btn.disabled = false;
-      if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
-    }
+function resolveBusyButton(btn) {
+  if (!btn) return null;
+  if (btn.isConnected) return btn;
+  if (btn.id) return document.getElementById(btn.id);
+  return btn;
+}
+
+function syncButtonDisabledAfterBusy_(btn) {
+  if (!btn || !btn.id) return;
+  if (btn.id === 'assign-ids-btn') refreshRosterAssignUi();
+  else if (btn.id === 'deemed-apply-btn') updateDeemedApplyButtonState();
+  else if (btn.id === 'batch-retry-failed-btn' || btn.id === 'batch-continuous-warp-btn') updateBatchRetryFailedButton();
+}
+
+function setButtonBusy(btn, busy) {
+  btn = resolveBusyButton(btn);
+  if (!btn) return;
+  if (busy) {
+    if (btn.classList.contains('is-btn-busy')) return;
+    btn.classList.add('is-btn-busy');
+    btn.dataset.busyWasDisabled = btn.disabled ? '1' : '0';
+    btn.dataset.busyOriginalHtml = btn.innerHTML;
+    btn.disabled = true;
+    var label = btn.dataset.busyLabel || '処理中...';
+    btn.innerHTML = '<span class="loader inline-block mr-1"></span>' + escapeHtml(label);
+  } else {
+    releaseBusyButton(btn);
   }
 }
 
-function releaseBusyButton(btn) {
+function flashButtonFinished(btn) {
+  btn = resolveBusyButton(btn);
   if (!btn) return;
+  btn.classList.remove('btn-finish-flash');
+  void btn.offsetWidth;
+  btn.classList.add('btn-finish-flash');
+  setTimeout(function() {
+    var el = resolveBusyButton(btn);
+    if (el) el.classList.remove('btn-finish-flash');
+  }, 600);
+}
+
+function releaseBusyButton(btn, opts) {
+  btn = resolveBusyButton(btn);
+  if (!btn) return;
+  opts = opts || {};
+  btn.classList.remove('is-btn-busy');
   btn.dataset.keepBusy = '0';
-  btn.disabled = false;
-  if (btn.dataset.originalHtml) btn.innerHTML = btn.dataset.originalHtml;
+  var html = btn.dataset.busyOriginalHtml != null ? btn.dataset.busyOriginalHtml : btn.dataset.originalHtml;
+  if (html != null) {
+    btn.innerHTML = html;
+    delete btn.dataset.busyOriginalHtml;
+    delete btn.dataset.originalHtml;
+  }
+  if (opts.disabled != null) {
+    btn.disabled = !!opts.disabled;
+  } else if (opts.restoreDisabled) {
+    btn.disabled = btn.dataset.busyWasDisabled === '1';
+  } else {
+    btn.disabled = false;
+  }
+  delete btn.dataset.busyWasDisabled;
+  syncButtonDisabledAfterBusy_(btn);
+  if (opts.flash !== false) flashButtonFinished(btn);
+}
+
+async function withBusyButton(btn, fn) {
+  btn = resolveBusyButton(btn);
+  if (!btn || (btn.disabled && !btn.classList.contains('is-btn-busy'))) return;
+  setButtonBusy(btn, true);
+  try {
+    return await Promise.resolve().then(function() { return fn(); });
+  } finally {
+    btn = resolveBusyButton(btn);
+    if (btn && btn.dataset.keepBusy !== '1') {
+      releaseBusyButton(btn);
+    }
+  }
 }
 
 /** --- アプリ UI --- */
@@ -4681,9 +4740,7 @@ async function startBatchOcr(mode) {
     var batchBtn = document.getElementById('batch-start-btn');
     if (batchBtn) {
         batchBtn.dataset.keepBusy = '1';
-        batchBtn.disabled = true;
-        batchBtn.dataset.originalHtml = batchBtn.innerHTML;
-        batchBtn.innerHTML = '<span class="loader inline-block mr-1"></span>' + (batchBtn.dataset.busyLabel || 'OCR実行中...');
+        setButtonBusy(batchBtn, true);
     }
 
     if (!document.getElementById('batch-results-tbody').children.length) {
@@ -5354,9 +5411,10 @@ async function saveIdentityToServer() {
 }
 
 async function runVerification() {
-    var rosterCsv = document.getElementById('roster-csv').value;
-    var roster = rosterCsv.trim() ? await gasRun('parseRosterCsv', rosterCsv) : [];
     try {
+        setStatus('照合準備中...');
+        var rosterCsv = document.getElementById('roster-csv').value;
+        var roster = rosterCsv.trim() ? await gasRun('parseRosterCsv', rosterCsv) : [];
         var results = await gasRun('verifyIdentityWithRoster', roster);
         var identityFields = sortIdentityFieldsByOrder(await gasRun('getIdentityFields'));
         if (!identityFields.length) {
@@ -5367,6 +5425,7 @@ async function runVerification() {
         var issueCount = 0;
         for (var i = 0; i < results.length; i++) {
             var r = results[i];
+            setStatus('照合中... 画像読込 ' + (i + 1) + ' / ' + results.length);
             var st = verifyStatusLabel(r.status);
             if (r.status !== 'ok') issueCount++;
             var cropsHtml = '<p class="text-gray-400 text-xs">画像なし</p>';
