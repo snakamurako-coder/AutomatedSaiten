@@ -2899,14 +2899,14 @@ function executeGrading() {
   var ruleMap = buildRuleMap(ss);
   var headers = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
   var colMap = getResultColumnMap(headers);
-  var data = sheet.getRange(2, 1, sheet.getLastRow() - 1, sheet.getLastColumn()).getValues();
+  var data = sheet.getRange(2, 1, sheet.getLastRow(), sheet.getLastColumn()).getValues();
   var unregisteredCount = 0;
 
   for (var r = 0; r < data.length; r++) {
     var row = data[r];
     fields.forEach(function(f) {
       var label = f.displayName || f.id;
-      var fm = colMap.fields[label];
+      var fm = resolveFieldResultColumns_(headers, colMap, f) || colMap.fields[label];
       if (!fm) return;
       var answer = String(row[fm.text] || '').trim() || 'なし';
       var rule = ruleMap[f.id] && ruleMap[f.id][answer];
@@ -2922,7 +2922,7 @@ function executeGrading() {
     data[r] = row;
   }
 
-  sheet.getRange(2, 1, data.length, headers.length).setValues(data);
+  sheet.getRange(2, 1, 1 + data.length, headers.length).setValues(data);
   calculateDomainScores();
   applyExternalScoresToResults();
   buildSummary(ss, unregisteredCount);
@@ -3796,6 +3796,46 @@ function getResultColumnNameForSlotKey_(slotKey) {
   return k + '_得点';
 }
 
+function resolveFieldResultColumns_(headers, colMap, field) {
+  var labels = [];
+  var dn = String(field.displayName || '').trim();
+  var id = String(field.id || '').trim();
+  if (dn) labels.push(dn);
+  if (id && labels.indexOf(id) < 0) labels.push(id);
+  var i;
+  for (i = 0; i < labels.length; i++) {
+    var fm = colMap.fields[labels[i]];
+    if (fm && fm.judgment >= 0) return fm;
+  }
+  for (i = 0; i < labels.length; i++) {
+    var label = labels[i];
+    var jIdx = headers.indexOf(label + '_判定');
+    if (jIdx >= 0) {
+      return {
+        judgment: jIdx,
+        score: headers.indexOf(label + '_得点'),
+        text: headers.indexOf(label + '_テキスト')
+      };
+    }
+  }
+  return null;
+}
+
+function inferJudgmentFromScore_(fieldId, score, pointsMap) {
+  var s = parseInt(score, 10) || 0;
+  var maxPts = pointsMap && pointsMap[fieldId] != null ? (parseInt(pointsMap[fieldId], 10) || 0) : 0;
+  if (s <= 0) return '×';
+  if (maxPts > 0 && s >= maxPts) return '○';
+  return '△';
+}
+
+function normalizeJudgmentForExport_(judgment, fieldId, score, pointsMap) {
+  var j = String(judgment || '').trim();
+  if (j) return j;
+  if (score === '' || score == null) return '';
+  return inferJudgmentFromScore_(fieldId, score, pointsMap);
+}
+
 function computeFeedbackTotalsFromRow_(ss, row, headers, colMap) {
   var fields = getAnswerFields(ss);
   var domains = getDomainSettings(ss);
@@ -3922,14 +3962,18 @@ function buildFeedbackRowPayload_(ss, rowIndex) {
   var colMap = getResultColumnMap(headers);
   var row = sheet.getRange(rowIndex, 1, rowIndex, sheet.getLastColumn()).getValues()[0];
   var fields = getAnswerFields(ss);
+  var pointsMap = getPointsMap(ss);
   var fieldMarks = {};
   fields.forEach(function(f) {
-    var label = f.displayName || f.id;
-    var fm = colMap.fields[label];
-    fieldMarks[f.id] = {
-      judgment: fm && fm.judgment >= 0 ? String(row[fm.judgment] || '') : '',
-      score: fm && fm.score >= 0 ? (parseInt(row[fm.score], 10) || 0) : 0
-    };
+    var fm = resolveFieldResultColumns_(headers, colMap, f);
+    var scoreVal = fm && fm.score >= 0 ? (parseInt(row[fm.score], 10) || 0) : 0;
+    var judgmentVal = fm && fm.judgment >= 0 ? String(row[fm.judgment] || '') : '';
+    judgmentVal = normalizeJudgmentForExport_(judgmentVal, f.id, scoreVal, pointsMap);
+    var mark = { judgment: judgmentVal, score: scoreVal };
+    fieldMarks[f.id] = mark;
+    if (f.displayName && String(f.displayName).trim() !== String(f.id).trim()) {
+      fieldMarks[String(f.displayName).trim()] = mark;
+    }
   });
   var totals = computeFeedbackTotalsFromRow_(ss, row, headers, colMap);
   getAvailableOutputSlotKeys_(ss).forEach(function(k) {
