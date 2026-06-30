@@ -3945,11 +3945,12 @@ function renderVerifyCropGrid(results, mode) {
             ? '<div><span class="text-gray-500">ID</span> <input class="verify-id" data-row="' + row.rowIndex + '" value="' + escapeHtml(row.studentId || '') + '"></div>'
             : '<div><span class="text-gray-500">氏名</span> <input class="verify-name" data-row="' + row.rowIndex + '" value="' + escapeHtml(row.name || '') + '"></div>';
         return '<div class="crop-tile verify-tile border rounded p-1 bg-white shadow-sm" data-row="' + row.rowIndex + '">' +
-            '<img src="' + r.crop + '" class="crop-tile-img w-full h-auto border bg-gray-50" alt="' + escapeHtml(getVerifyCompareTypeLabel(mode)) + '欄" draggable="false">' +
             '<div class="verify-tile-meta p-1 space-y-0.5">' +
             '<div class="truncate text-gray-600" title="' + escapeHtml(row.fileName || '') + '">' + escapeHtml(row.fileName || '—') + '</div>' +
             valueCell +
-            '</div></div>';
+            '</div>' +
+            '<img src="' + r.crop + '" class="crop-tile-img w-full h-auto border bg-gray-50" alt="' + escapeHtml(getVerifyCompareTypeLabel(mode)) + '欄" draggable="false">' +
+            '</div>';
     }).join('');
     applyVerifyCropZoom(appState.verifyCropZoom || 100);
 }
