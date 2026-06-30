@@ -3287,6 +3287,17 @@ function assignIdsFromRoster(rosterName, absentIndices) {
   if (!folderId) throw new Error('生徒解答フォルダIDが未設定です。Step③でフォルダを指定してください。');
   var filesSorted = listFolderFiles(folderId);
 
+  if (filesSorted.length !== rosterSorted.length) {
+    throw new Error(
+      'スキャン画像 ' + filesSorted.length + ' 件と受験予定 ' + rosterSorted.length +
+      ' 名（名簿' + rosterAll.length + '−未受験' + (rosterAll.length - rosterSorted.length) + '）が一致しないため割当を中止しました。' +
+      '未受験の☑を確認するか、フォルダ内の画像数を確認してください。'
+    );
+  }
+  if (!filesSorted.length) {
+    throw new Error('スキャン画像がありません。Step③でフォルダを確認してください。');
+  }
+
   var sheet = ss.getSheetByName(SHEET_RESULTS);
   var resultByFileId = {};
   var rowIndexByFileId = {};
@@ -3305,9 +3316,8 @@ function assignIdsFromRoster(rosterName, absentIndices) {
 
   var updated = 0;
   var warnings = [];
-  var pairCount = Math.min(filesSorted.length, rosterSorted.length);
 
-  for (var i = 0; i < pairCount; i++) {
+  for (var i = 0; i < filesSorted.length; i++) {
     var file = filesSorted[i];
     var student = rosterSorted[i];
     var rowIdx = rowIndexByFileId[file.id];
@@ -3319,12 +3329,6 @@ function assignIdsFromRoster(rosterName, absentIndices) {
     }
   }
 
-  if (filesSorted.length > rosterSorted.length) {
-    warnings.push('ファイル数(' + filesSorted.length + ')が受験者数(' + rosterSorted.length + ')を超えています。');
-  } else if (rosterSorted.length > filesSorted.length) {
-    warnings.push('受験者数(' + rosterSorted.length + ')がファイル数(' + filesSorted.length + ')を超えています。');
-  }
-
   setTestInfoValue(ss, '選択名簿名', rosterName);
   return {
     skipped: false,
@@ -3332,6 +3336,44 @@ function assignIdsFromRoster(rosterName, absentIndices) {
     fileCount: filesSorted.length,
     rosterCount: rosterSorted.length,
     warnings: warnings
+  };
+}
+
+function getRosterAssignmentPreview(rosterName, absentIndices) {
+  var ss = getActiveTestSs();
+  rosterName = rosterName || getTestInfoValue(ss, '選択名簿名');
+  if (!rosterName) throw new Error('名簿を選択してください。');
+
+  var absentSet = {};
+  (absentIndices || []).forEach(function(i) { absentSet[parseInt(i, 10)] = true; });
+
+  var rosterAll = getRosterRows(rosterName);
+  var rosterTotal = rosterAll.length;
+  var absentCount = rosterAll.filter(function(r) { return absentSet[r.rowIndex]; }).length;
+  var rosterActive = rosterTotal - absentCount;
+
+  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var fileCount = 0;
+  if (folderId) {
+    try { fileCount = listFolderFiles(folderId).length; } catch (e) { fileCount = 0; }
+  }
+
+  var canAssign = rosterActive > 0 && fileCount > 0 && fileCount === rosterActive;
+  var mismatch = '';
+  if (fileCount !== rosterActive) {
+    mismatch = 'スキャン画像 ' + fileCount + ' 件と受験予定 ' + rosterActive +
+      ' 名（名簿' + rosterTotal + '−未受験' + absentCount + '）が一致しません。' +
+      '未受験の☑を確認するか、フォルダ内の画像数を確認してください。';
+  }
+
+  return {
+    rosterName: rosterName,
+    rosterTotal: rosterTotal,
+    absentCount: absentCount,
+    rosterActive: rosterActive,
+    fileCount: fileCount,
+    canAssign: canAssign,
+    mismatch: mismatch
   };
 }
 
