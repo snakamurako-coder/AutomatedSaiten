@@ -6,7 +6,7 @@
     <title>模範解答ベース自動採点システム</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
-    <script async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()"></script>
+    <script id="opencv-js-script" async src="https://docs.opencv.org/4.8.0/opencv.js" onload="onOpenCvReady()" onerror="onOpenCvLoadError()"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <style>
         body { font-family: 'Noto Sans JP', sans-serif; background: #f3f4f6; margin: 0; }
@@ -219,7 +219,10 @@
         <button type="button" id="nav-grabber" title="メニューを格納">メニュー</button>
         <div id="side-nav-inner">
             <h1 class="text-lg font-bold text-gray-800 mb-1 pr-6"><i class="fa-solid fa-graduation-cap text-blue-600 mr-2"></i>自動採点</h1>
-            <p id="opencv-status" class="text-xs text-orange-600 mb-2"><i class="fa-solid fa-spinner fa-spin"></i> OpenCV.js 読込中...</p>
+            <div class="flex flex-wrap items-center gap-x-2 gap-y-1 mb-2">
+                <p id="opencv-status" class="text-xs text-orange-600 mb-0"><i class="fa-solid fa-spinner fa-spin"></i> OpenCV.js 読込中...</p>
+                <button type="button" id="opencv-reload-btn" onclick="reloadOpenCvJs()" class="text-xs text-blue-700 underline whitespace-nowrap" title="OpenCV.js を再読み込み">再取得</button>
+            </div>
             <select id="recent-test-select" class="w-full text-xs border rounded p-1 mb-1" onchange="onRecentTestChange(this.value)">
                 <option value="">-- 作業中のテスト --</option>
             </select>
@@ -311,10 +314,6 @@
             </div>
             <div class="overflow-auto max-h-80 border rounded">
                 <table class="w-full text-xs"><thead id="batch-results-thead" class="bg-gray-100 sticky top-0"></thead><tbody id="batch-results-tbody"></tbody></table>
-            </div>
-            <div id="batch-manual-warp-panel" class="hidden border rounded p-2 bg-sky-50 text-xs space-y-2">
-                <div class="font-bold text-sky-900">補正に失敗したファイル — 手動で枠・傾きを調整</div>
-                <ul id="batch-manual-warp-list" class="space-y-1"></ul>
             </div>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(3); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
@@ -535,8 +534,8 @@
         <p id="manual-warp-status" class="text-xs text-gray-600">—</p>
         <div class="flex flex-wrap gap-4 items-start">
             <div class="space-y-2 shrink-0">
-                <p class="text-xs font-semibold">原画像（四隅ドラッグ・枠線調整）</p>
-                <canvas id="manual-warp-source" class="border rounded bg-gray-100 cursor-crosshair max-w-full"></canvas>
+                <p class="text-xs font-semibold">原画像（範囲指定→四隅調整）</p>
+                <canvas id="manual-warp-source" tabindex="0" class="border rounded bg-gray-100 cursor-crosshair max-w-full outline-none focus:ring-2 focus:ring-blue-300"></canvas>
                 <div class="flex flex-wrap gap-3 text-xs items-center">
                     <label>二値化閾値 <span id="manual-warp-thresh-val">128</span>
                         <input type="range" id="manual-warp-thresh" min="50" max="200" value="128" class="align-middle ml-1 w-24"></label>
@@ -551,7 +550,7 @@
         </div>
         <div class="flex flex-wrap gap-2 text-xs">
             <button type="button" onclick="ManualWarpEditor.autoDetect()" class="bg-gray-200 px-3 py-1 rounded">自動枠検出</button>
-            <button type="button" onclick="ManualWarpEditor.resetCorners()" class="bg-gray-200 px-3 py-1 rounded">四隅リセット</button>
+            <button type="button" onclick="ManualWarpEditor.resetCorners()" class="bg-gray-200 px-3 py-1 rounded">範囲再指定</button>
             <button type="button" onclick="ManualWarpEditor.updatePreview()" class="bg-gray-200 px-3 py-1 rounded">プレビュー更新</button>
             <button type="button" id="manual-warp-save-btn" data-busy-label="処理中..." onclick="withBusyButton(event.currentTarget, function(){ return ManualWarpEditor.saveAndOcr(); })" class="bg-blue-600 text-white px-4 py-1 rounded font-bold ml-auto">保存してOCR再実行</button>
         </div>
@@ -784,11 +783,32 @@ async function driveFileToImageElement(fileData) {
 }
 
 var ManualWarpEditor = (function() {
-  var sourceCanvas, previewCanvas, sctx, img, fileMeta, baseCorners, corners, rotationDeg = 0;
+  var sourceCanvas, previewCanvas, sctx, img, fileMeta, baseCorners, rotationDeg = 0;
   var threshVal = 128, orientation = 'landscape', scale = 1, dragHandle = null;
   var previewMat = null, previewBase64 = null, HANDLE_R = 10;
+  var interactionMode = 'rect_select';
+  var rectDragStart = null, rectDragCurrent = null, isRectDragging = false;
+  var keyboardCorner = null, blinkOn = false, blinkTimer = null;
   var CORNER_KEYS = ['tl', 'tr', 'br', 'bl'];
   var CORNER_COLORS = { tl: '#ef4444', tr: '#22c55e', br: '#3b82f6', bl: '#eab308' };
+
+  function cornersFromRect(x1, y1, x2, y2) {
+    var left = Math.min(x1, x2), right = Math.max(x1, x2);
+    var top = Math.min(y1, y2), bottom = Math.max(y1, y2);
+    return {
+      tl: { x: left, y: top },
+      tr: { x: right, y: top },
+      br: { x: right, y: bottom },
+      bl: { x: left, y: bottom }
+    };
+  }
+
+  function clampImagePoint(p) {
+    return {
+      x: Math.max(0, Math.min(img.width, p.x)),
+      y: Math.max(0, Math.min(img.height, p.y))
+    };
+  }
 
   function getOrientation() {
     var el = document.getElementById('orientation-1');
@@ -808,12 +828,53 @@ var ManualWarpEditor = (function() {
     return { x: p.x / scale, y: p.y / scale };
   }
 
+  function stopBlink() {
+    if (blinkTimer) { clearInterval(blinkTimer); blinkTimer = null; }
+    blinkOn = false;
+  }
+
+  function startBlink() {
+    stopBlink();
+    blinkOn = true;
+    blinkTimer = setInterval(function() {
+      blinkOn = !blinkOn;
+      drawSource();
+    }, 280);
+  }
+
+  function clearKeyboardCorner() {
+    keyboardCorner = null;
+    stopBlink();
+  }
+
+  function selectKeyboardCorner(k) {
+    keyboardCorner = k;
+    if (sourceCanvas) sourceCanvas.focus();
+    startBlink();
+    var labels = { tl: '左上', tr: '右上', br: '右下', bl: '左下' };
+    document.getElementById('manual-warp-status').textContent =
+      (labels[k] || k) + 'を選択中 — 方向キーで1pxずつ微調整（Escで解除）';
+  }
+
   function drawSource() {
     if (!sctx || !img) return;
     sourceCanvas.width = Math.round(img.width * scale);
     sourceCanvas.height = Math.round(img.height * scale);
     sctx.clearRect(0, 0, sourceCanvas.width, sourceCanvas.height);
     sctx.drawImage(img, 0, 0, sourceCanvas.width, sourceCanvas.height);
+
+    if (isRectDragging && rectDragStart && rectDragCurrent) {
+      var a = imageToCanvas(rectDragStart), b = imageToCanvas(rectDragCurrent);
+      var rx = Math.min(a.x, b.x), ry = Math.min(a.y, b.y);
+      var rw = Math.abs(b.x - a.x), rh = Math.abs(b.y - a.y);
+      sctx.setLineDash([6, 4]);
+      sctx.lineWidth = 2;
+      sctx.strokeStyle = '#f59e0b';
+      sctx.strokeRect(rx, ry, rw, rh);
+      sctx.setLineDash([]);
+      return;
+    }
+
     var c = getEffectiveCorners();
     if (!c) return;
     sctx.lineWidth = 2;
@@ -826,13 +887,15 @@ var ManualWarpEditor = (function() {
     sctx.closePath();
     sctx.stroke();
     CORNER_KEYS.forEach(function(k) {
+      if (k === keyboardCorner && !blinkOn) return;
       var p = imageToCanvas(c[k]);
+      var r = (k === keyboardCorner) ? HANDLE_R + 3 : HANDLE_R;
       sctx.beginPath();
       sctx.fillStyle = CORNER_COLORS[k];
-      sctx.arc(p.x, p.y, HANDLE_R, 0, Math.PI * 2);
+      sctx.arc(p.x, p.y, r, 0, Math.PI * 2);
       sctx.fill();
-      sctx.strokeStyle = '#fff';
-      sctx.lineWidth = 2;
+      sctx.strokeStyle = k === keyboardCorner ? '#000' : '#fff';
+      sctx.lineWidth = k === keyboardCorner ? 3 : 2;
       sctx.stroke();
     });
   }
@@ -840,10 +903,10 @@ var ManualWarpEditor = (function() {
   function hitHandle(mx, my) {
     var c = getEffectiveCorners();
     if (!c) return null;
-    for (var i = 0; i < CORNER_KEYS.length; i++) {
+    for (var i = CORNER_KEYS.length - 1; i >= 0; i--) {
       var k = CORNER_KEYS[i];
       var p = imageToCanvas(c[k]);
-      if (Math.hypot(mx - p.x, my - p.y) <= HANDLE_R + 4) return k;
+      if (Math.hypot(mx - p.x, my - p.y) <= HANDLE_R + 6) return k;
     }
     return null;
   }
@@ -865,20 +928,41 @@ var ManualWarpEditor = (function() {
     }
   }
 
+  function beginRectDrag(mx, my) {
+    clearKeyboardCorner();
+    isRectDragging = true;
+    rectDragStart = clampImagePoint(canvasToImage({ x: mx, y: my }));
+    rectDragCurrent = { x: rectDragStart.x, y: rectDragStart.y };
+    dragHandle = null;
+    drawSource();
+  }
+
   function onMouseDown(e) {
     var rect = sourceCanvas.getBoundingClientRect();
     var mx = e.clientX - rect.left, my = e.clientY - rect.top;
-    dragHandle = hitHandle(mx, my);
-    if (dragHandle) sourceCanvas.style.cursor = 'grabbing';
+    if (interactionMode === 'corner_edit' && baseCorners) {
+      dragHandle = hitHandle(mx, my);
+      if (dragHandle) {
+        clearKeyboardCorner();
+        sourceCanvas.style.cursor = 'grabbing';
+        return;
+      }
+      return;
+    }
+    beginRectDrag(mx, my);
+    sourceCanvas.style.cursor = 'crosshair';
   }
 
   function onMouseMove(e) {
     var rect = sourceCanvas.getBoundingClientRect();
     var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    if (isRectDragging) {
+      rectDragCurrent = clampImagePoint(canvasToImage({ x: mx, y: my }));
+      drawSource();
+      return;
+    }
     if (dragHandle) {
-      var ip = canvasToImage({ x: mx, y: my });
-      ip.x = Math.max(0, Math.min(img.width, ip.x));
-      ip.y = Math.max(0, Math.min(img.height, ip.y));
+      var ip = clampImagePoint(canvasToImage({ x: mx, y: my }));
       if (Math.abs(rotationDeg) < 0.01) {
         baseCorners[dragHandle] = ip;
       } else {
@@ -892,12 +976,77 @@ var ManualWarpEditor = (function() {
       updatePreview();
       return;
     }
-    sourceCanvas.style.cursor = hitHandle(mx, my) ? 'grab' : 'crosshair';
+    if (interactionMode === 'corner_edit' && baseCorners) {
+      sourceCanvas.style.cursor = hitHandle(mx, my) ? 'grab' : 'crosshair';
+    } else {
+      sourceCanvas.style.cursor = 'crosshair';
+    }
+  }
+
+  function finishRectDrag() {
+    if (!isRectDragging || !rectDragStart || !rectDragCurrent) {
+      isRectDragging = false;
+      return;
+    }
+    isRectDragging = false;
+    var dx = Math.abs(rectDragCurrent.x - rectDragStart.x);
+    var dy = Math.abs(rectDragCurrent.y - rectDragStart.y);
+    if (dx >= 10 && dy >= 10) {
+      baseCorners = cornersFromRect(rectDragStart.x, rectDragStart.y, rectDragCurrent.x, rectDragCurrent.y);
+      interactionMode = 'corner_edit';
+      rotationDeg = 0;
+      document.getElementById('manual-warp-rotate').value = '0';
+      document.getElementById('manual-warp-rotate-val').textContent = '0';
+      drawSource();
+      updatePreview();
+      document.getElementById('manual-warp-status').textContent =
+        '四隅をドラッグして台形補正（赤=左上 緑=右上 青=右下 黄=左下）。点をダブルクリック→方向キーで1px微調整';
+    }
+    rectDragStart = null;
+    rectDragCurrent = null;
   }
 
   function onMouseUp() {
+    if (isRectDragging) finishRectDrag();
     dragHandle = null;
-    sourceCanvas.style.cursor = 'crosshair';
+    sourceCanvas.style.cursor = interactionMode === 'corner_edit' ? 'crosshair' : 'crosshair';
+  }
+
+  function onDblClick(e) {
+    if (interactionMode !== 'corner_edit' || !baseCorners) return;
+    var rect = sourceCanvas.getBoundingClientRect();
+    var mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    var hit = hitHandle(mx, my);
+    if (hit) {
+      e.preventDefault();
+      selectKeyboardCorner(hit);
+    }
+  }
+
+  function onKeyDown(e) {
+    if (!document.getElementById('manual-warp-modal') || document.getElementById('manual-warp-modal').classList.contains('hidden')) return;
+    if (e.key === 'Escape') {
+      clearKeyboardCorner();
+      drawSource();
+      if (interactionMode === 'corner_edit' && baseCorners) {
+        document.getElementById('manual-warp-status').textContent =
+          '四隅をドラッグして台形補正。点をダブルクリック→方向キーで1px微調整';
+      }
+      return;
+    }
+    if (!keyboardCorner || !baseCorners) return;
+    var dx = 0, dy = 0;
+    if (e.key === 'ArrowLeft') dx = -1;
+    else if (e.key === 'ArrowRight') dx = 1;
+    else if (e.key === 'ArrowUp') dy = -1;
+    else if (e.key === 'ArrowDown') dy = 1;
+    else return;
+    e.preventDefault();
+    var p = baseCorners[keyboardCorner];
+    p.x = Math.max(0, Math.min(img.width, p.x + dx));
+    p.y = Math.max(0, Math.min(img.height, p.y + dy));
+    drawSource();
+    updatePreview();
   }
 
   function setScaleForImage() {
@@ -906,13 +1055,33 @@ var ManualWarpEditor = (function() {
     scale = Math.min(maxW / img.width, maxH / img.height, 1);
   }
 
+  function enterRectSelectMode(statusMsg) {
+    interactionMode = 'rect_select';
+    baseCorners = null;
+    rotationDeg = 0;
+    clearKeyboardCorner();
+    isRectDragging = false;
+    rectDragStart = null;
+    rectDragCurrent = null;
+    dragHandle = null;
+    previewBase64 = null;
+    if (previewMat) { previewMat.delete(); previewMat = null; }
+    if (previewCanvas) {
+      previewCanvas.width = 0;
+      previewCanvas.height = 0;
+    }
+    document.getElementById('manual-warp-rotate').value = '0';
+    document.getElementById('manual-warp-rotate-val').textContent = '0';
+    if (img) drawSource();
+    if (statusMsg) document.getElementById('manual-warp-status').textContent = statusMsg;
+  }
+
   async function open(file) {
     if (!opencvReady) { setStatus('OpenCV.js 未準備', true); return; }
     if (!file || !file.id) { setStatus('ファイルIDがありません', true); return; }
     fileMeta = file;
     orientation = getOrientation();
     threshVal = parseInt(document.getElementById('thresh-1') ? document.getElementById('thresh-1').value : 128, 10);
-    rotationDeg = 0;
     document.getElementById('manual-warp-modal').classList.remove('hidden');
     document.getElementById('manual-warp-title').textContent = '手動補正: ' + (file.name || '');
     document.getElementById('manual-warp-status').textContent = '画像読込中...';
@@ -920,19 +1089,9 @@ var ManualWarpEditor = (function() {
       var fileData = await gasRun('getDriveFileBase64', file.id);
       img = await driveFileToImageElement(fileData);
       setScaleForImage();
-      try {
-        baseCorners = detectPaperCorners(img, threshVal);
-      } catch (e) {
-        baseCorners = defaultPaperCorners(img.width, img.height);
-      }
-      corners = cloneCorners(baseCorners);
       document.getElementById('manual-warp-thresh').value = String(threshVal);
       document.getElementById('manual-warp-thresh-val').textContent = String(threshVal);
-      document.getElementById('manual-warp-rotate').value = '0';
-      document.getElementById('manual-warp-rotate-val').textContent = '0';
-      drawSource();
-      updatePreview();
-      document.getElementById('manual-warp-status').textContent = '四隅をドラッグして枠を合わせてください（赤=左上 緑=右上 青=右下 黄=左下）';
+      enterRectSelectMode('ドラッグで用紙の範囲を指定（始点=左上・終点=右下の長方形）');
     } catch (err) {
       document.getElementById('manual-warp-status').textContent = '読込失敗: ' + (err.message || err);
       setStatus(err.message || err, true);
@@ -941,8 +1100,14 @@ var ManualWarpEditor = (function() {
 
   function close() {
     document.getElementById('manual-warp-modal').classList.add('hidden');
+    clearKeyboardCorner();
     if (previewMat) { previewMat.delete(); previewMat = null; }
     img = null; fileMeta = null; previewBase64 = null; dragHandle = null;
+    isRectDragging = false;
+    rectDragStart = null;
+    rectDragCurrent = null;
+    interactionMode = 'rect_select';
+    baseCorners = null;
   }
 
   function autoDetect() {
@@ -950,25 +1115,23 @@ var ManualWarpEditor = (function() {
     threshVal = parseInt(document.getElementById('manual-warp-thresh').value, 10);
     try {
       baseCorners = detectPaperCorners(img, threshVal);
+      interactionMode = 'corner_edit';
       rotationDeg = 0;
+      clearKeyboardCorner();
       document.getElementById('manual-warp-rotate').value = '0';
       document.getElementById('manual-warp-rotate-val').textContent = '0';
       drawSource();
       updatePreview();
-      document.getElementById('manual-warp-status').textContent = '自動検出しました。必要なら四隅を微調整してください。';
+      document.getElementById('manual-warp-status').textContent = '自動検出しました。四隅をドラッグまたはダブルクリック→方向キーで微調整';
     } catch (e) {
-      document.getElementById('manual-warp-status').textContent = '自動検出失敗: ' + e.message + ' — 四隅を手動で合わせてください。';
+      document.getElementById('manual-warp-status').textContent = '自動検出失敗: ' + e.message + ' — ドラッグで範囲を指定してください';
+      enterRectSelectMode(null);
     }
   }
 
   function resetCorners() {
     if (!img) return;
-    baseCorners = defaultPaperCorners(img.width, img.height);
-    rotationDeg = 0;
-    document.getElementById('manual-warp-rotate').value = '0';
-    document.getElementById('manual-warp-rotate-val').textContent = '0';
-    drawSource();
-    updatePreview();
+    enterRectSelectMode('ドラッグで用紙の範囲を指定（始点=左上・終点=右下の長方形）');
   }
 
   function onRotateChange() {
@@ -985,7 +1148,7 @@ var ManualWarpEditor = (function() {
 
   async function saveAndOcr() {
     if (!fileMeta || !previewBase64) {
-      setStatus('補正プレビューがありません。四隅を調整してください。', true);
+      setStatus('補正プレビューがありません。範囲を指定して四隅を調整してください。', true);
       return;
     }
     var btn = document.getElementById('manual-warp-save-btn');
@@ -1012,14 +1175,20 @@ var ManualWarpEditor = (function() {
   function init() {
     sourceCanvas = document.getElementById('manual-warp-source');
     previewCanvas = document.getElementById('manual-warp-preview');
-    if (!sourceCanvas || !previewCanvas) return;
+    if (!sourceCanvas || !previewCanvas || sourceCanvas._manualWarpInit) return;
+    sourceCanvas._manualWarpInit = true;
     sctx = sourceCanvas.getContext('2d');
     sourceCanvas.addEventListener('mousedown', onMouseDown);
     sourceCanvas.addEventListener('mousemove', onMouseMove);
     sourceCanvas.addEventListener('mouseup', onMouseUp);
     sourceCanvas.addEventListener('mouseleave', onMouseUp);
+    sourceCanvas.addEventListener('dblclick', onDblClick);
     document.getElementById('manual-warp-thresh').addEventListener('input', onThreshChange);
     document.getElementById('manual-warp-rotate').addEventListener('input', onRotateChange);
+    if (!document._manualWarpKeyInit) {
+      document._manualWarpKeyInit = true;
+      document.addEventListener('keydown', onKeyDown);
+    }
   }
 
   return {
@@ -2010,6 +2179,20 @@ function updateBatchWorkQueueHint(stats) {
         '・シート登録済 ' + stats.inSheet + ' 件（追記成功分は「元画像/」へ）';
 }
 
+function batchManualWarpBtnHtml(file) {
+    if (!file || !file.id) return '<span class="text-gray-400">—</span>';
+    return '<button type="button" class="text-blue-700 underline whitespace-nowrap manual-warp-row-btn" data-file-id="' + escapeHtml(String(file.id)) + '">手動補正</button>';
+}
+
+function bindBatchManualWarpButtons(container) {
+    var root = container || document.getElementById('batch-results-tbody');
+    if (!root) return;
+    root.querySelectorAll('.manual-warp-row-btn').forEach(function(btn) {
+        var fid = btn.getAttribute('data-file-id');
+        btn.onclick = function() { openManualWarpForFile(fid); };
+    });
+}
+
 function initBatchResultsTable(files) {
     var fields = appState.fields || [];
     var head = '<tr><th class="p-1 border">状態</th><th class="p-1 border min-w-[120px]">失敗理由</th><th class="p-1 border">ファイル名</th><th class="p-1 border">生徒ID</th>';
@@ -2028,8 +2211,9 @@ function initBatchResultsTable(files) {
             '<td class="p-1 border truncate max-w-[140px]" title="' + escapeHtml(f.name) + '">' + escapeHtml(f.name) + stageHint + '</td>' +
             '<td class="p-1 border batch-student-id">—</td>' + cells +
             '<td class="p-1 border batch-sheet-status text-gray-400">—</td>' +
-            '<td class="p-1 border batch-action text-gray-400">—</td></tr>';
+            '<td class="p-1 border batch-action">' + batchManualWarpBtnHtml(f) + '</td></tr>';
     }).join('');
+    bindBatchManualWarpButtons(tbody);
 }
 
 function updateBatchResultRow(ev) {
@@ -2043,16 +2227,10 @@ function updateBatchResultRow(ev) {
     var sheetCell = row.querySelector('.batch-sheet-status');
     var actionCell = row.querySelector('.batch-action');
 
-    function setManualWarpAction(show) {
+    function refreshManualWarpAction() {
         if (!actionCell) return;
-        if (!show || !ev.file || !ev.file.id) {
-            actionCell.textContent = '—';
-            actionCell.className = 'p-1 border batch-action text-gray-400';
-            return;
-        }
-        actionCell.innerHTML = '<button type="button" class="text-blue-700 underline whitespace-nowrap manual-warp-row-btn">手動補正</button>';
-        var btn = actionCell.querySelector('.manual-warp-row-btn');
-        if (btn) btn.onclick = function() { openManualWarpForFile(ev.file.id); };
+        actionCell.innerHTML = batchManualWarpBtnHtml(ev.file);
+        bindBatchManualWarpButtons(actionCell);
     }
 
     function setFailDetail(stepKey, errorMsg) {
@@ -2075,24 +2253,19 @@ function updateBatchResultRow(ev) {
         var procLabel = ev.processStep ? BatchProcessor.getFailStepLabel(ev.processStep) : '処理中';
         if (statusCell) statusCell.innerHTML = '<span class="text-blue-600"><i class="fa-solid fa-spinner fa-spin"></i> ' + escapeHtml(procLabel) + '</span>';
         setFailDetail(null, null);
-        setManualWarpAction(false);
     } else if (ev.status === 'skipped') {
         row.className = 'bg-gray-100';
         if (statusCell) statusCell.textContent = 'スキップ';
         setFailDetail(null, null);
-        setManualWarpAction(false);
         if (sheetCell) sheetCell.textContent = '済';
     } else if (ev.status === 'failed') {
         row.className = 'bg-red-50';
         if (statusCell) statusCell.innerHTML = '<span class="text-red-600 font-semibold">失敗</span>';
         setFailDetail(ev.failStep || ev.failStage, ev.error || '');
         if (sheetCell) sheetCell.textContent = '—';
-        var warpSteps = ['detect_warp', 'save_warp', 'load_src', 'load_warped'];
-        setManualWarpAction(warpSteps.indexOf(ev.failStep) >= 0 || ev.failStage === 'warp');
     } else if (ev.status === 'done' && ev.result) {
         row.className = 'bg-green-50';
         if (statusCell) statusCell.textContent = '完了';
-        setManualWarpAction(false);
         if (ev.flushError) {
             setFailDetail(ev.failStep || 'flush', ev.error || 'シートへの反映に失敗');
         } else {
@@ -2112,8 +2285,8 @@ function updateBatchResultRow(ev) {
             sheetCell.className = 'p-1 border batch-sheet-status text-orange-600';
         }
     }
+    refreshManualWarpAction();
     updateBatchFlushStatus();
-    updateBatchManualWarpPanel();
 }
 
 function findBatchFileById(fileId) {
@@ -2176,7 +2349,6 @@ async function runOcrAfterManualWarp(file, previewBase64, studentId, warpedFileI
     });
     if (!flushError && file.id) markBatchRowsFlushed([file.id]);
     updateBatchRetryFailedButton();
-    updateBatchManualWarpPanel();
     updateBatchFlushStatus();
     if (flushError) {
         refreshBatchPendingTsv();
@@ -2186,59 +2358,10 @@ async function runOcrAfterManualWarp(file, previewBase64, studentId, warpedFileI
     }
 }
 
-function updateBatchManualWarpPanel() {
-    var panel = document.getElementById('batch-manual-warp-panel');
-    var list = document.getElementById('batch-manual-warp-list');
-    if (!panel || !list) return;
-    BatchProcessor.reloadFailedFromStorage();
-    var meta = BatchProcessor.getFailedFileMeta();
-    var warpSteps = ['detect_warp', 'save_warp', 'load_src', 'load_warped'];
-    var seen = {};
-    var items = [];
-    Object.keys(meta).forEach(function(k) {
-        var m = meta[k];
-        if (!m) return;
-        if (warpSteps.indexOf(m.failStep) < 0 && m.stage !== 'warp') return;
-        var name = m.fileName || k;
-        if (seen[name]) return;
-        seen[name] = true;
-        var fid = k.indexOf('name:') === 0 ? '' : k;
-        items.push({ id: fid, name: name, error: m.error, failStep: m.failStep });
-    });
-    if (!items.length) {
-        panel.classList.add('hidden');
-        list.innerHTML = '';
-        return;
-    }
-    panel.classList.remove('hidden');
-    list.innerHTML = items.map(function(it) {
-        var label = BatchProcessor.getFailStepLabel(it.failStep);
-        var btn = it.id
-            ? '<button type="button" data-manual-warp-id="' + escapeHtml(it.id) + '" class="bg-blue-600 text-white px-2 py-0.5 rounded shrink-0 manual-warp-list-btn">手動補正</button>'
-            : '<span class="text-gray-400">ID不明（一覧を再取得）</span>';
-        return '<li class="flex flex-wrap items-center gap-2 border-b border-sky-100 pb-1">' +
-            '<span class="font-medium truncate max-w-[200px]" title="' + escapeHtml(it.name) + '">' + escapeHtml(it.name) + '</span>' +
-            '<span class="text-gray-600 truncate flex-1" title="' + escapeHtml(it.error || '') + '">' + escapeHtml(label) + '</span>' + btn + '</li>';
-    }).join('');
-}
-
-function initBatchManualWarpPanel() {
-    var list = document.getElementById('batch-manual-warp-list');
-    if (!list || list._manualWarpDelegated) return;
-    list._manualWarpDelegated = true;
-    list.addEventListener('click', function(e) {
-        var btn = e.target.closest('[data-manual-warp-id]');
-        if (btn) openManualWarpForFile(btn.getAttribute('data-manual-warp-id'));
-    });
-}
-
 function restoreBatchFailedRowsFromStorage() {
     BatchProcessor.reloadFailedFromStorage();
     var meta = BatchProcessor.getFailedFileMeta();
-    if (!Object.keys(meta).length) {
-        updateBatchManualWarpPanel();
-        return;
-    }
+    if (!Object.keys(meta).length) return;
     var nameToFile = {};
     (appState.batchFiles || []).forEach(function(f) {
         nameToFile[normalizeBatchFileName(f.name)] = f;
@@ -2261,7 +2384,6 @@ function restoreBatchFailedRowsFromStorage() {
             error: m.error || ''
         });
     });
-    updateBatchManualWarpPanel();
 }
 
 function markBatchRowsFlushed(fileIds) {
@@ -2322,9 +2444,62 @@ async function manualFlushToSheet() {
     }
 }
 
-function onOpenCvReady() {
+function setOpenCvStatusLoading(msg) {
+    opencvReady = false;
+    var el = document.getElementById('opencv-status');
+    var btn = document.getElementById('opencv-reload-btn');
+    if (el) {
+        el.className = 'text-xs text-orange-600 mb-0';
+        el.innerHTML = '<i class="fa-solid fa-spinner fa-spin"></i> ' + (msg || 'OpenCV.js 読込中...');
+    }
+    if (btn) btn.classList.remove('hidden');
+}
+
+function setOpenCvStatusReady() {
     opencvReady = true;
-    document.getElementById('opencv-status').innerHTML = '<span class="text-green-600"><i class="fa-solid fa-check"></i> OpenCV.js 準備完了</span>';
+    var el = document.getElementById('opencv-status');
+    var btn = document.getElementById('opencv-reload-btn');
+    if (el) {
+        el.className = 'text-xs text-green-600 mb-0';
+        el.innerHTML = '<i class="fa-solid fa-check"></i> OpenCV.js 準備完了';
+    }
+    if (btn) btn.classList.add('hidden');
+}
+
+function setOpenCvStatusError(msg) {
+    opencvReady = false;
+    var el = document.getElementById('opencv-status');
+    var btn = document.getElementById('opencv-reload-btn');
+    if (el) {
+        el.className = 'text-xs text-red-600 mb-0';
+        el.innerHTML = '<i class="fa-solid fa-triangle-exclamation"></i> ' + (msg || 'OpenCV.js 読込失敗');
+    }
+    if (btn) btn.classList.remove('hidden');
+}
+
+function reloadOpenCvJs() {
+    setOpenCvStatusLoading('OpenCV.js 再取得中...');
+    var old = document.getElementById('opencv-js-script');
+    if (old) old.remove();
+    var s = document.createElement('script');
+    s.id = 'opencv-js-script';
+    s.async = true;
+    s.src = 'https://docs.opencv.org/4.8.0/opencv.js?t=' + Date.now();
+    s.onload = onOpenCvReady;
+    s.onerror = onOpenCvLoadError;
+    document.head.appendChild(s);
+}
+
+function onOpenCvLoadError() {
+    setOpenCvStatusError('OpenCV.js 読込失敗 — 「再取得」を押してください');
+}
+
+function onOpenCvReady() {
+    if (typeof cv === 'undefined' || !cv.Mat) {
+        setTimeout(onOpenCvReady, 100);
+        return;
+    }
+    setOpenCvStatusReady();
     ManualWarpEditor.init();
 }
 
@@ -3845,7 +4020,6 @@ function updateBatchRetryFailedButton() {
     });
     var breakdown = Object.keys(parts).map(function(l) { return l + parts[l]; }).join(' / ');
     btn.title = n > 0 ? ('失敗 ' + n + ' 件: ' + breakdown) : '失敗したファイルがありません';
-    updateBatchManualWarpPanel();
 }
 
 function populateCriteriaSelect() {
@@ -4277,7 +4451,6 @@ async function saveVerificationEdits() {
 document.addEventListener('DOMContentLoaded', function() {
     TestSessionCache.clear();
     ManualWarpEditor.init();
-    initBatchManualWarpPanel();
     window.addEventListener('pagehide', clearTestSessionCacheOnExit);
     initStepNav();
     initCollapsibleSideNav();
