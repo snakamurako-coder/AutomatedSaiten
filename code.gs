@@ -1044,8 +1044,11 @@ function saveStepProgress(stepNum, clientPayload) {
     if (clientPayload.rosterName != null) {
       setTestInfoValue(ss, '選択名簿名', clientPayload.rosterName || '');
     }
-    if (clientPayload.absentIndices) {
-      saveRosterAbsentState_(ss, clientPayload.rosterName || getTestInfoValue(ss, '選択名簿名'), clientPayload.absentIndices);
+    if (clientPayload.absentStudents) {
+      saveRosterAbsentState_(ss, clientPayload.rosterName || getTestInfoValue(ss, '選択名簿名'), clientPayload.absentStudents);
+    } else if (clientPayload.absentIndices) {
+      saveRosterAbsentState_(ss, clientPayload.rosterName || getTestInfoValue(ss, '選択名簿名'),
+        migrateAbsentIndicesToStudents_(clientPayload.rosterName || getTestInfoValue(ss, '選択名簿名'), clientPayload.absentIndices));
     }
   } else if (stepNum === 8 && clientPayload && clientPayload.identityFields) {
     saveIdentityFields(clientPayload.identityFields);
@@ -1335,26 +1338,89 @@ function getWarpedFileCountForRosterAssign_(ss) {
   }
 }
 
-function parseRosterAbsentStateJson_(raw) {
+function normalizeAbsentStudentEntry_(entry) {
+  if (entry == null) return null;
+  var norm = {
+    studentId: String(entry.studentId != null ? entry.studentId : (entry.id != null ? entry.id : '')).trim(),
+    name: String(entry.name || '').trim()
+  };
+  if (!norm.studentId && !norm.name) return null;
+  return norm;
+}
+
+function normalizeAbsentStudentEntries_(entries) {
+  var out = [];
+  var seen = {};
+  (entries || []).forEach(function(e) {
+    var norm = normalizeAbsentStudentEntry_(e);
+    if (!norm) return;
+    var key = (norm.studentId ? 'id:' + norm.studentId : '') + '|' + (norm.name ? 'name:' + norm.name : '');
+    if (seen[key]) return;
+    seen[key] = true;
+    out.push(norm);
+  });
+  return out;
+}
+
+function rosterRowMatchesAbsent_(row, entry) {
+  var sid = String(entry.studentId || '').trim();
+  var name = String(entry.name || '').trim();
+  if (!sid && !name) return false;
+  var rowSid = String(row.studentId || '').trim();
+  var rowName = String(row.name || '').trim();
+  if (sid && rowSid && sid === rowSid) return true;
+  if (name && rowName && name === rowName) return true;
+  return false;
+}
+
+function buildAbsentRowIndexSet_(rosterName, absentStudents) {
+  var entries = normalizeAbsentStudentEntries_(absentStudents);
+  var rosterAll = getRosterRows(rosterName);
+  var absentSet = {};
+  rosterAll.forEach(function(r) {
+    for (var i = 0; i < entries.length; i++) {
+      if (rosterRowMatchesAbsent_(r, entries[i])) {
+        absentSet[r.rowIndex] = true;
+        break;
+      }
+    }
+  });
+  return { absentSet: absentSet, rosterAll: rosterAll, entries: entries };
+}
+
+function migrateAbsentIndicesToStudents_(rosterName, absentIndices) {
+  var rows = getRosterRows(rosterName);
+  return (absentIndices || []).map(function(i) {
+    var r = rows[parseInt(i, 10)];
+    return r ? normalizeAbsentStudentEntry_({ studentId: r.studentId, name: r.name }) : null;
+  }).filter(function(e) { return !!e; });
+}
+
+function parseRosterAbsentStateJson_(raw, rosterNameForMigration) {
   if (!raw) return null;
   try {
     var parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!parsed || typeof parsed !== 'object') return null;
-    parsed.absentIndices = (parsed.absentIndices || []).map(function(i) {
-      return parseInt(i, 10);
-    }).filter(function(i) { return !isNaN(i); });
     parsed.rosterName = parsed.rosterName != null ? String(parsed.rosterName) : '';
+    if (parsed.absentStudents && parsed.absentStudents.length) {
+      parsed.absentStudents = normalizeAbsentStudentEntries_(parsed.absentStudents);
+    } else if (parsed.absentIndices && parsed.absentIndices.length) {
+      var rn = parsed.rosterName || rosterNameForMigration || '';
+      parsed.absentStudents = migrateAbsentIndicesToStudents_(rn, parsed.absentIndices);
+    } else {
+      parsed.absentStudents = [];
+    }
     return parsed;
   } catch (e) {
     return null;
   }
 }
 
-function saveRosterAbsentState_(ss, rosterName, absentIndices) {
+function saveRosterAbsentState_(ss, rosterName, absentStudents) {
   ss = ss || getActiveTestSs();
   var payload = {
     rosterName: rosterName || '',
-    absentIndices: (absentIndices || []).map(function(i) { return parseInt(i, 10); }).filter(function(i) { return !isNaN(i); }),
+    absentStudents: normalizeAbsentStudentEntries_(absentStudents),
     savedAt: Utilities.formatDate(new Date(), 'JST', 'yyyy-MM-dd HH:mm:ss')
   };
   setTestInfoValue(ss, '未受験者', JSON.stringify(payload));
@@ -1364,11 +1430,13 @@ function saveRosterAbsentState_(ss, rosterName, absentIndices) {
 
 function getRosterAbsentState() {
   var ss = getActiveTestSs();
-  return parseRosterAbsentStateJson_(getTestInfoValue(ss, '未受験者')) || { rosterName: '', absentIndices: [], savedAt: '' };
+  var rosterName = getTestInfoValue(ss, '選択名簿名');
+  return parseRosterAbsentStateJson_(getTestInfoValue(ss, '未受験者'), rosterName) ||
+    { rosterName: '', absentStudents: [], savedAt: '' };
 }
 
-function saveRosterAbsentState(rosterName, absentIndices) {
-  return saveRosterAbsentState_(getActiveTestSs(), rosterName, absentIndices);
+function saveRosterAbsentState(rosterName, absentStudents) {
+  return saveRosterAbsentState_(getActiveTestSs(), rosterName, absentStudents);
 }
 
 function buildResultRowLookups_(sheet) {
@@ -3385,7 +3453,7 @@ function getRosterCsvForVerification(rosterName) {
   }).join('\n');
 }
 
-function assignIdsFromRoster(rosterName, absentIndices) {
+function assignIdsFromRoster(rosterName, absentStudents) {
   var ss = getActiveTestSs();
   rosterName = rosterName || getTestInfoValue(ss, '選択名簿名');
   if (!rosterName) throw new Error('名簿を選択してください。');
@@ -3400,10 +3468,9 @@ function assignIdsFromRoster(rosterName, absentIndices) {
     };
   }
 
-  var absentSet = {};
-  (absentIndices || []).forEach(function(i) { absentSet[parseInt(i, 10)] = true; });
-
-  var rosterAll = getRosterRows(rosterName);
+  var absentBuilt = buildAbsentRowIndexSet_(rosterName, absentStudents);
+  var absentSet = absentBuilt.absentSet;
+  var rosterAll = absentBuilt.rosterAll;
   var rosterSorted = rosterAll.filter(function(r) {
     return !absentSet[r.rowIndex];
   }).sort(compareRosterRows_);
@@ -3442,7 +3509,7 @@ function assignIdsFromRoster(rosterName, absentIndices) {
     }
   }
 
-  saveRosterAbsentState_(ss, rosterName, absentIndices);
+  saveRosterAbsentState_(ss, rosterName, absentBuilt.entries);
   setTestInfoValue(ss, '選択名簿名', rosterName);
   return {
     skipped: false,
@@ -3453,15 +3520,14 @@ function assignIdsFromRoster(rosterName, absentIndices) {
   };
 }
 
-function getRosterAssignmentPreview(rosterName, absentIndices) {
+function getRosterAssignmentPreview(rosterName, absentStudents) {
   var ss = getActiveTestSs();
   rosterName = rosterName || getTestInfoValue(ss, '選択名簿名');
   if (!rosterName) throw new Error('名簿を選択してください。');
 
-  var absentSet = {};
-  (absentIndices || []).forEach(function(i) { absentSet[parseInt(i, 10)] = true; });
-
-  var rosterAll = getRosterRows(rosterName);
+  var absentBuilt = buildAbsentRowIndexSet_(rosterName, absentStudents);
+  var absentSet = absentBuilt.absentSet;
+  var rosterAll = absentBuilt.rosterAll;
   var rosterTotal = rosterAll.length;
   var absentCount = rosterAll.filter(function(r) { return absentSet[r.rowIndex]; }).length;
   var rosterActive = rosterTotal - absentCount;
