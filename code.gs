@@ -3531,7 +3531,7 @@ function buildStudentIdMarkBlock_(sheet, cfg, idDigits) {
 
   var blockEndRow = idStartRow + idDigits - 1;
   var blockEndCol = idStartCol + 9;
-  sheet.getRange(idStartRow, headerCol, blockEndRow, blockEndCol)
+  sheet.getRange(idStartRow, headerCol, blockEndRow - idStartRow + 1, blockEndCol - headerCol + 1)
     .setBorder(true, true, true, true, true, true, '#64748b', SpreadsheetApp.BorderStyle.SOLID);
 }
 
@@ -3549,7 +3549,7 @@ function applyAnswerSheetTemplateGrid_(sheet, cfg) {
   }
   sheet.setColumnWidth(1, 36);
   sheet.setColumnWidth(2, 36);
-  var gridRange = sheet.getRange(startRow, startCol, endRow, endCol);
+  var gridRange = sheet.getRange(startRow, startCol, endRow - startRow + 1, endCol - startCol + 1);
   gridRange.setBackground('#ffffff');
   gridRange.setBorder(null, null, null, null, true, true, '#cccccc', SpreadsheetApp.BorderStyle.SOLID);
   gridRange.setBorder(true, true, true, true, null, null, '#000000', SpreadsheetApp.BorderStyle.SOLID_THICK);
@@ -3653,7 +3653,11 @@ function buildAnswerSheetTemplate_(sheet, orientation) {
           .setFontSize(8);
       }
     }
-    var idBlock = sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1, cfg.idStartRow + 3, cfg.idStartCol + 9);
+    var idTopRow = cfg.idStartRow - 1;
+    var idLeftCol = cfg.idStartCol - 1;
+    var idBottomRow = cfg.idStartRow + 3;
+    var idRightCol = cfg.idStartCol + 9;
+    var idBlock = sheet.getRange(idTopRow, idLeftCol, idBottomRow - idTopRow + 1, idRightCol - idLeftCol + 1);
     idBlock.setBorder(true, true, true, true, true, true, '#64748b', SpreadsheetApp.BorderStyle.SOLID);
     sheet.getRange(cfg.idStartRow - 1, cfg.idStartCol - 1)
       .setValue('生徒ID')
