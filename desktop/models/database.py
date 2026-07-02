@@ -110,6 +110,35 @@ CREATE TABLE IF NOT EXISTS summary_rows (
     note TEXT DEFAULT '',
     FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS ocr_replacements (
+    test_id TEXT NOT NULL,
+    field_id TEXT NOT NULL,
+    search_text TEXT NOT NULL,
+    replace_text TEXT DEFAULT '',
+    use_regex INTEGER DEFAULT 0,
+    PRIMARY KEY (test_id, field_id, search_text),
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS deemed_draft (
+    test_id TEXT NOT NULL,
+    field_id TEXT NOT NULL,
+    canonical TEXT DEFAULT '',
+    source_answer TEXT NOT NULL,
+    PRIMARY KEY (test_id, field_id, source_answer),
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS deemed_scoring (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_id TEXT NOT NULL,
+    field_id TEXT NOT NULL,
+    canonical TEXT NOT NULL,
+    source_answer TEXT NOT NULL,
+    applied_at TEXT NOT NULL,
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
 """
 
 

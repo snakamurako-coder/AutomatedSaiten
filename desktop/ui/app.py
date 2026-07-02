@@ -10,6 +10,14 @@ from typing import Any
 from constants import DESKTOP_READY_STEPS, STEPS
 from models.database import init_db
 from models.criteria_repo import merge_unique_with_criteria, save_grading_criteria
+from models.text_processing import (
+    apply_deemed_scoring_to_field,
+    apply_text_replacements_to_field,
+    get_deemed_draft,
+    get_ocr_replacements,
+    save_deemed_scoring_draft,
+    save_ocr_replacements,
+)
 from models.test_repo import (
     create_test,
     export_results_to_excel,
@@ -27,9 +35,10 @@ from services.gemini_rubric import generate_rubric_with_gemini
 from services.grading import execute_grading, get_summary_data
 from services.ocr import check_ocr_config
 from services.work_queue import build_ocr_work_queue
+from ui.step4_outlier import Step4OutlierMixin
 
 
-class AutomatedSaitenApp(tk.Tk):
+class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("模範解答ベース自動採点システム（PC版）")
@@ -41,6 +50,8 @@ class AutomatedSaitenApp(tk.Tk):
         self.current_step = 0
         self._field_rows: list[dict[str, Any]] = []
         self._criteria_rows: list[dict[str, Any]] = []
+        self._ocr_replace_rows: list[dict[str, Any]] = []
+        self._init_step4_state()
 
         self._build_layout()
         self._refresh_ocr_status()
@@ -555,14 +566,34 @@ class AutomatedSaitenApp(tk.Tk):
     # --- Step 4 ---
     def _build_step4(self) -> None:
         f = self.frames[4]
-        ttk.Label(f, text="④ 採点基準の設定", font=("", 14, "bold")).pack(anchor="w")
-        ttk.Label(
-            f,
-            text="記述欄ごとに OCR 解答を集約し、判定（○△×）と得点を設定して保存します。",
-            font=("", 9),
-        ).pack(anchor="w", pady=4)
+        outer = ttk.Frame(f)
+        outer.pack(fill="both", expand=True)
+        canvas = tk.Canvas(outer, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(outer, orient="vertical", command=canvas.yview)
+        scroll = ttk.Frame(canvas)
+        scroll.bind(
+            "<Configure>",
+            lambda e: canvas.configure(scrollregion=canvas.bbox("all")),
+        )
+        canvas.create_window((0, 0), window=scroll, anchor="nw")
+        canvas.configure(yscrollcommand=scrollbar.set)
+        canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
 
-        toolbar = ttk.Frame(f)
+        def _on_mousewheel(event: tk.Event) -> None:
+            canvas.yview_scroll(int(-1 * (event.delta / 120)), "units")
+
+        canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
+        canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
+
+        ttk.Label(scroll, text="④ 採点基準の設定", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(
+            scroll,
+            text="OCR置換・みなし採点で解答を整えてから、判定・得点の基準を設定します。",
+            font=("", 9),
+        ).pack(anchor="w", pady=(0, 4))
+
+        toolbar = ttk.Frame(scroll)
         toolbar.pack(fill="x", pady=4)
         ttk.Label(toolbar, text="記述欄").pack(side="left")
         self.criteria_field_var = tk.StringVar()
@@ -570,28 +601,89 @@ class AutomatedSaitenApp(tk.Tk):
             toolbar, textvariable=self.criteria_field_var, width=28, state="readonly"
         )
         self.criteria_field_combo.pack(side="left", padx=4)
+        self.criteria_field_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_criteria_field_changed())
         ttk.Button(toolbar, text="解答を集約", command=self._on_aggregate_criteria).pack(
             side="left", padx=2
         )
         ttk.Button(toolbar, text="AI原案", command=self._on_gemini_criteria).pack(side="left", padx=2)
         ttk.Button(toolbar, text="基準を保存", command=self._on_save_criteria).pack(side="left", padx=2)
 
-        cols = ("answer", "count", "judgment", "score", "reason")
-        self.criteria_tree = ttk.Treeview(f, columns=cols, show="headings", height=14)
+        ocr_frame = ttk.LabelFrame(scroll, text="OCRテキスト置換", padding=8)
+        ocr_frame.pack(fill="x", pady=6)
+        ttk.Label(
+            ocr_frame,
+            text="置換ルール保存はルールのみ。「置換を適用して再集約」で採点結果のテキスト列を書き換えます。",
+            font=("", 8),
+            wraplength=900,
+        ).pack(anchor="w")
+
+        ocr_cols = ("search", "replace", "regex")
+        self.ocr_replace_tree = ttk.Treeview(ocr_frame, columns=ocr_cols, show="headings", height=4)
+        for c, label, w in [("search", "検索", 220), ("replace", "置換後", 220), ("regex", "正規表現", 70)]:
+            self.ocr_replace_tree.heading(c, text=label)
+            self.ocr_replace_tree.column(c, width=w)
+        self.ocr_replace_tree.pack(fill="x", pady=4)
+
+        ocr_edit = ttk.Frame(ocr_frame)
+        ocr_edit.pack(fill="x")
+        self.ocr_edit_search = ttk.Entry(ocr_edit, width=24)
+        self.ocr_edit_search.pack(side="left", padx=2)
+        self.ocr_edit_replace = ttk.Entry(ocr_edit, width=24)
+        self.ocr_edit_replace.pack(side="left", padx=2)
+        self.ocr_regex_var = tk.BooleanVar(value=False)
+        ttk.Checkbutton(ocr_edit, text="正規表現", variable=self.ocr_regex_var).pack(side="left", padx=4)
+        ttk.Button(ocr_edit, text="行追加", command=self._on_ocr_row_add).pack(side="left", padx=2)
+        ttk.Button(ocr_edit, text="行削除", command=self._on_ocr_row_delete).pack(side="left", padx=2)
+        ttk.Button(ocr_edit, text="ルール保存", command=self._on_save_ocr_rules).pack(side="left", padx=2)
+        ttk.Button(
+            ocr_edit,
+            text="置換を適用して再集約",
+            command=self._on_apply_ocr_replacements,
+        ).pack(side="left", padx=2)
+
+        deemed_frame = ttk.LabelFrame(scroll, text="みなし採点", padding=8)
+        deemed_frame.pack(fill="x", pady=6)
+        ttk.Label(
+            deemed_frame,
+            text="正答例を指定し、表の「みなし」「不正解」列をダブルクリックで選択 → 適用で正答例に統一します。",
+            font=("", 8),
+            wraplength=900,
+        ).pack(anchor="w")
+        deemed_row = ttk.Frame(deemed_frame)
+        deemed_row.pack(fill="x", pady=4)
+        ttk.Label(deemed_row, text="正答例").pack(side="left")
+        self.deemed_canonical_var = tk.StringVar()
+        ttk.Entry(deemed_row, textvariable=self.deemed_canonical_var, width=48).pack(
+            side="left", padx=4
+        )
+        ttk.Button(deemed_row, text="下書き保存", command=self._on_save_deemed_draft).pack(
+            side="left", padx=2
+        )
+        ttk.Button(
+            deemed_row,
+            text="みなし採点を適用して再集約",
+            command=self._on_apply_deemed_scoring,
+        ).pack(side="left", padx=2)
+
+        cols = ("deemed", "incorrect", "answer", "count", "judgment", "score", "reason")
+        self.criteria_tree = ttk.Treeview(scroll, columns=cols, show="headings", height=8)
         for c, label, w in [
-            ("answer", "解答", 280),
-            ("count", "人数", 60),
-            ("judgment", "判定", 60),
-            ("score", "得点", 60),
-            ("reason", "備考", 320),
+            ("deemed", "みなし", 44),
+            ("incorrect", "不正解", 44),
+            ("answer", "解答", 220),
+            ("count", "人数", 44),
+            ("judgment", "判定", 44),
+            ("score", "得点", 44),
+            ("reason", "備考", 220),
         ]:
             self.criteria_tree.heading(c, text=label)
             self.criteria_tree.column(c, width=w)
         self.criteria_tree.pack(fill="both", expand=True, pady=6)
         self.criteria_tree.bind("<<TreeviewSelect>>", self._on_criteria_select)
+        self.criteria_tree.bind("<Double-1>", self._on_criteria_double_click)
 
-        edit = ttk.LabelFrame(f, text="選択行の編集", padding=8)
-        edit.pack(fill="x")
+        edit = ttk.LabelFrame(scroll, text="選択行の編集", padding=8)
+        edit.pack(fill="x", pady=(0, 8))
         self.criteria_edit: dict[str, ttk.Entry] = {}
         for i, (key, label) in enumerate(
             [("judgment", "判定(○/△/×)"), ("score", "得点"), ("reason", "備考")]
@@ -604,6 +696,182 @@ class AutomatedSaitenApp(tk.Tk):
             row=0, column=6, padx=8
         )
 
+        self._build_step4_outlier_section(scroll)
+
+    def _on_criteria_field_changed(self) -> None:
+        if not self.active_test_id:
+            return
+        self._outlier_groups = []
+        self._outlier_flat_rows = []
+        self._crop_grid_results = []
+        self._load_ocr_and_deemed_for_field()
+        self._on_aggregate_criteria()
+        if hasattr(self, "outlier_tree"):
+            self._render_outlier_tree()
+            self._render_crop_grid()
+
+    def _load_ocr_and_deemed_for_field(self) -> None:
+        fid = self._selected_criteria_field_id()
+        if not self.active_test_id or not fid:
+            return
+        self._ocr_replace_rows = [
+            {
+                "search": r["search"],
+                "replace": r["replace"],
+                "useRegex": r["useRegex"],
+            }
+            for r in get_ocr_replacements(self.active_test_id, fid)
+        ]
+        self._render_ocr_replace_tree()
+        draft = get_deemed_draft(self.active_test_id, fid)
+        self.deemed_canonical_var.set(draft.get("canonical", ""))
+        self._deemed_sources = set(draft.get("sources") or [])
+        self._load_deemed_maps_from_draft()
+
+    def _render_ocr_replace_tree(self) -> None:
+        self.ocr_replace_tree.delete(*self.ocr_replace_tree.get_children())
+        for i, row in enumerate(self._ocr_replace_rows):
+            self.ocr_replace_tree.insert(
+                "",
+                tk.END,
+                iid=str(i),
+                values=(
+                    row.get("search", ""),
+                    row.get("replace", ""),
+                    "はい" if row.get("useRegex") else "",
+                ),
+            )
+
+    def _on_ocr_row_add(self) -> None:
+        search = self.ocr_edit_search.get().strip()
+        if not search:
+            messagebox.showwarning("入力不足", "検索文字列を入力してください。")
+            return
+        self._ocr_replace_rows.append(
+            {
+                "search": search,
+                "replace": self.ocr_edit_replace.get(),
+                "useRegex": self.ocr_regex_var.get(),
+            }
+        )
+        self._render_ocr_replace_tree()
+        self.ocr_edit_search.delete(0, tk.END)
+        self.ocr_edit_replace.delete(0, tk.END)
+        self.ocr_regex_var.set(False)
+
+    def _on_ocr_row_delete(self) -> None:
+        sel = self.ocr_replace_tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if 0 <= idx < len(self._ocr_replace_rows):
+            del self._ocr_replace_rows[idx]
+        self._render_ocr_replace_tree()
+
+    def _on_save_ocr_rules(self) -> None:
+        if not self._require_active_test():
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            return
+        try:
+            save_ocr_replacements(self.active_test_id, fid, self._ocr_replace_rows)
+            messagebox.showinfo("保存完了", "OCR置換ルールを保存しました。")
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+
+    def _on_apply_ocr_replacements(self) -> None:
+        if not self._require_active_test():
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            return
+        try:
+            res = apply_text_replacements_to_field(
+                self.active_test_id, fid, self._ocr_replace_rows
+            )
+            save_ocr_replacements(self.active_test_id, fid, self._ocr_replace_rows)
+            self._on_aggregate_criteria()
+            if hasattr(self, "_on_fetch_outliers"):
+                self._on_fetch_outliers()
+            messagebox.showinfo(
+                "適用完了",
+                f"{res.get('replacedCount', 0)} 件のテキストを置換しました。",
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+
+    def _on_save_deemed_draft(self) -> None:
+        if not self._require_active_test():
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            return
+        sources = self._get_deemed_sources_from_maps()
+        try:
+            save_deemed_scoring_draft(
+                self.active_test_id,
+                fid,
+                self.deemed_canonical_var.get(),
+                sources,
+            )
+            messagebox.showinfo("保存完了", "みなし採点の下書きを保存しました。")
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+
+    def _on_apply_deemed_scoring(self) -> None:
+        if not self._require_active_test():
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            return
+        sources = self._get_deemed_sources_from_maps()
+        try:
+            res = apply_deemed_scoring_to_field(
+                self.active_test_id,
+                fid,
+                self.deemed_canonical_var.get(),
+                sources,
+            )
+            self.deemed_canonical_var.set(res.get("canonical", ""))
+            applied = sources[:]
+            fid = self._selected_criteria_field_id()
+            if fid:
+                self._deemed_map(fid).clear()
+            self._on_aggregate_criteria()
+            self._purge_deemed_from_outlier_ui(applied)
+            self._on_fetch_outliers()
+            messagebox.showinfo(
+                "適用完了",
+                f"{res.get('updatedCount', 0)} 件を正答例に統一しました。",
+            )
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+
+    def _sync_deemed_from_draft(self) -> None:
+        self._sync_deemed_incorrect_to_criteria_rows()
+
+    def _on_criteria_double_click(self, event: tk.Event) -> None:
+        region = self.criteria_tree.identify("region", event.x, event.y)
+        column = self.criteria_tree.identify_column(event.x)
+        if region != "cell" or column not in ("#1", "#2"):
+            return
+        row_id = self.criteria_tree.identify_row(event.y)
+        if not row_id:
+            return
+        idx = int(row_id)
+        if idx >= len(self._criteria_rows):
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            return
+        ans = self._criteria_rows[idx]["answer_text"]
+        if column == "#1":
+            self._toggle_deemed_answer(fid, ans)
+        else:
+            self._toggle_incorrect_answer(fid, ans)
+        self.criteria_tree.selection_set(str(idx))
+
     def _reload_criteria_panel(self) -> None:
         if not self._require_active_test():
             return
@@ -612,7 +880,9 @@ class AutomatedSaitenApp(tk.Tk):
         self.criteria_field_combo["values"] = labels
         if labels and not self.criteria_field_var.get():
             self.criteria_field_combo.current(0)
+        self._deemed_sources: set[str] = set()
         if labels:
+            self._load_ocr_and_deemed_for_field()
             self._on_aggregate_criteria()
 
     def _selected_criteria_field_id(self) -> str | None:
@@ -624,19 +894,38 @@ class AutomatedSaitenApp(tk.Tk):
 
     def _render_criteria_tree(self) -> None:
         self.criteria_tree.delete(*self.criteria_tree.get_children())
+        fid = self._selected_criteria_field_id() or ""
+        canonical = self._get_deemed_canonical()
         for i, row in enumerate(self._criteria_rows):
+            ans = row.get("answer_text", "")
+            deemed = (
+                "—"
+                if canonical and ans == canonical
+                else ("☑" if self._is_deemed_checked(fid, ans) else "☐")
+            )
+            incorrect = "☑" if self._is_incorrect_checked(fid, ans) else "☐"
+            tags = ()
+            if row.get("deemed") or self._is_deemed_checked(fid, ans):
+                tags = ("deemed",)
+            elif row.get("incorrect") or self._is_incorrect_checked(fid, ans):
+                tags = ("incorrect",)
             self.criteria_tree.insert(
                 "",
                 tk.END,
                 iid=str(i),
+                tags=tags,
                 values=(
-                    row.get("answer_text", ""),
+                    deemed,
+                    incorrect,
+                    ans,
                     row.get("count", 0),
                     row.get("judgment", ""),
                     row.get("score", ""),
                     row.get("reason", ""),
                 ),
             )
+        self.criteria_tree.tag_configure("deemed", background="#eff6ff")
+        self.criteria_tree.tag_configure("incorrect", background="#fef2f2")
 
     def _on_aggregate_criteria(self) -> None:
         if not self._require_active_test():
@@ -646,6 +935,7 @@ class AutomatedSaitenApp(tk.Tk):
             messagebox.showwarning("記述欄未選択", "記述欄を選択してください。")
             return
         self._criteria_rows = merge_unique_with_criteria(self.active_test_id, fid)
+        self._sync_deemed_from_draft()
         self._render_criteria_tree()
 
     def _on_criteria_select(self, _event=None) -> None:

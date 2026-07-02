@@ -6,7 +6,7 @@ import json
 import re
 import uuid
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 from config import (
     ensure_data_dirs,
@@ -404,6 +404,50 @@ def get_all_results(test_id: str) -> list[dict[str, Any]]:
             }
         )
     return out
+
+
+def rewrite_field_texts(
+    test_id: str,
+    field_id: str,
+    should_rewrite: Callable[[str], bool],
+    new_text: str | Callable[[str], str],
+    *,
+    transform_mode: bool = False,
+) -> int:
+    """
+    採点結果の texts_json 内、指定 field_id のテキストを書き換える。
+    transform_mode=True のとき new_text は (old) -> new の関数。
+    """
+    canonical = ""
+    if not transform_mode:
+        canonical = str(new_text or "").strip() or "なし"
+
+    updated = 0
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, texts_json FROM results WHERE test_id = ?",
+            (test_id,),
+        ).fetchall()
+        for row in rows:
+            texts = json.loads(row["texts_json"] or "{}")
+            old_val = str(texts.get(field_id, "") or "").strip() or "なし"
+            if not should_rewrite(old_val):
+                continue
+            if transform_mode:
+                assert callable(new_text)
+                new_val = str(new_text(old_val)).strip() or "なし"
+            else:
+                new_val = canonical
+            if old_val == new_val:
+                continue
+            texts[field_id] = new_val
+            conn.execute(
+                "UPDATE results SET texts_json = ? WHERE id = ?",
+                (json.dumps(texts, ensure_ascii=False), row["id"]),
+            )
+            updated += 1
+        conn.commit()
+    return updated
 
 
 def export_results_to_excel(test_id: str, output_path: str) -> str:

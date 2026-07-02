@@ -120,6 +120,8 @@ def merge_unique_with_criteria(
                 "judgment": base.get("judgment", ""),
                 "score": base.get("score", ""),
                 "reason": base.get("reason", ""),
+                "deemed": False,
+                "incorrect": False,
             }
         )
     for answer, rule in saved.items():
@@ -131,6 +133,8 @@ def merge_unique_with_criteria(
                     "judgment": rule.get("judgment", ""),
                     "score": rule.get("score", ""),
                     "reason": rule.get("reason", ""),
+                    "deemed": False,
+                    "incorrect": False,
                 }
             )
     return merged
@@ -145,3 +149,69 @@ def build_rule_map(test_id: str) -> dict[str, dict[str, dict[str, Any]]]:
             "score": int(rule["score"]),
         }
     return rule_map
+
+
+def get_field_answer_details(test_id: str, field_id: str) -> list[dict[str, Any]]:
+    """記述欄ごとの生徒解答詳細（外れ値検出・画像表示用）。"""
+    init_db()
+    details: list[dict[str, Any]] = []
+    for row in get_all_results(test_id):
+        answer = str(row.get("textMapping", {}).get(field_id, "") or "").strip() or "なし"
+        details.append(
+            {
+                "rowIndex": row["id"],
+                "answer": answer,
+                "answer_text": answer,
+                "fileId": row.get("sourcePath") or row.get("warpedPath") or "",
+                "fileName": row["fileName"],
+                "studentId": row["studentId"],
+                "warpedPath": row.get("warpedPath") or "",
+            }
+        )
+    return details
+
+
+def get_outlier_answer_groups(
+    test_id: str,
+    field_id: str,
+    max_count: int = 2,
+) -> list[dict[str, Any]]:
+    max_count = max(1, int(max_count or 1))
+    count_map: dict[str, dict[str, Any]] = {}
+    for row in get_field_answer_details(test_id, field_id):
+        answer = row["answer"]
+        if answer not in count_map:
+            count_map[answer] = {"answer_text": answer, "count": 0, "rows": []}
+        count_map[answer]["count"] += 1
+        count_map[answer]["rows"].append(
+            {
+                "rowIndex": row["rowIndex"],
+                "studentId": row["studentId"],
+                "fileName": row["fileName"],
+                "fileId": row["fileId"],
+                "warpedPath": row["warpedPath"],
+            }
+        )
+    groups = [g for g in count_map.values() if g["count"] <= max_count]
+    groups.sort(key=lambda g: (g["count"], g["answer_text"]))
+    return groups
+
+
+def get_answer_rows_for_pattern(
+    test_id: str,
+    field_id: str,
+    answer_text: str,
+) -> list[dict[str, Any]]:
+    target = str(answer_text or "").strip() or "なし"
+    return [
+        {
+            "rowIndex": row["rowIndex"],
+            "studentId": row["studentId"],
+            "fileName": row["fileName"],
+            "fileId": row["fileId"],
+            "warpedPath": row["warpedPath"],
+            "answer_text": row["answer"],
+        }
+        for row in get_field_answer_details(test_id, field_id)
+        if row["answer"] == target
+    ]
