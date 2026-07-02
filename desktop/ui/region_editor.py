@@ -1,17 +1,24 @@
-"""模範解答画像上の記述欄矩形エディタ（GAS RegionEditor の Tkinter 版）。"""
+"""模範解答画像上の記述欄矩形エディタ（GAS RegionEditor の Tkinter 版）。
+
+役割分担:
+- 半透明の塗りは services.compositor（Pillow の alpha 合成）で作る。
+- Tkinter Canvas はマウス入力と、輪郭・ラベル・ハンドルのベクター描画のみ担当。
+これにより、将来入力層を Web/Qt に差し替えても合成結果（印刷・個票）は共通になる。
+"""
 
 from __future__ import annotations
 
 import copy
 from typing import Any, Callable
 
-import cv2
 import numpy as np
 import tkinter as tk
 from tkinter import ttk
 
-from PIL import Image, ImageTk
+from PIL import ImageTk
 
+from services import compositor
+from services.compositor import REGION_STROKE_NORMAL, REGION_STROKE_SELECTED
 from services.image_loader import load_image_bgr
 from ui.theme import COLORS, FONTS
 
@@ -36,7 +43,10 @@ class AnswerRegionEditor(tk.Frame):
         self.regions: list[dict[str, Any]] = []
         self.selected_idx = -1
         self._drag_state: dict[str, Any] | None = None
+        # 移動/リサイズ中は対象矩形の塗りを合成から外す（ドラッグ追従はベクター側）
+        self._drag_exclude: int | None = None
         self._image_bgr: np.ndarray | None = None
+        self._base_display: Any | None = None  # 表示サイズに縮小した RGBA 底画像（キャッシュ）
         self._photo: ImageTk.PhotoImage | None = None
         self._scale = 1.0
         self._image_w = 0
@@ -70,6 +80,8 @@ class AnswerRegionEditor(tk.Frame):
         self._canvas.configure(takefocus=True, width=self.MAX_DISPLAY_W, height=420)
         self.after_idle(self._draw_placeholder)
 
+    # --- 公開 API ---
+
     def has_image(self) -> bool:
         return self._image_bgr is not None
 
@@ -82,30 +94,12 @@ class AnswerRegionEditor(tk.Frame):
         scale_w = self.MAX_DISPLAY_W / max(1, self._image_w)
         scale_h = self.MAX_DISPLAY_H / max(1, self._image_h)
         self._scale = min(1.0, scale_w, scale_h)
-        self._refresh_photo()
+        disp_w = max(1, int(self._image_w * self._scale))
+        disp_h = max(1, int(self._image_h * self._scale))
+        self._base_display = compositor.prepare_display_base(self._image_bgr, (disp_w, disp_h))
+        self._canvas.configure(scrollregion=(0, 0, disp_w, disp_h))
         self.redraw()
         self._canvas.focus_set()
-
-    def _draw_placeholder(self) -> None:
-        if self._image_bgr is not None:
-            return
-        self._canvas.delete("all")
-        w = max(int(self._canvas.winfo_width()), 320)
-        h = max(int(self._canvas.winfo_height()), 240)
-        self._canvas.configure(scrollregion=(0, 0, w, h))
-        self._canvas.create_text(
-            w / 2,
-            h / 2,
-            text="PDF / JPG / PNG をドロップ\nまたは「画像を開く」",
-            fill=COLORS["text_muted"],
-            font=FONTS.get("body", ("Segoe UI", 10)),
-            justify="center",
-            tags="placeholder",
-        )
-
-    def _status(self, message: str) -> None:
-        if self._on_status:
-            self._on_status(message)
 
     def load_image_from_path(self, path: str) -> None:
         self.set_image(load_image_bgr(path))
@@ -164,6 +158,8 @@ class AnswerRegionEditor(tk.Frame):
             self.regions[index]["ocrLang"] = "ja" if lang == "ja" else "en"
             self._notify_change()
 
+    # --- 内部 ---
+
     def _renumber_orders(self) -> None:
         for i, r in enumerate(self.regions):
             r["order"] = i + 1
@@ -172,18 +168,99 @@ class AnswerRegionEditor(tk.Frame):
         if self._on_change:
             self._on_change()
 
-    def _refresh_photo(self) -> None:
-        if self._image_bgr is None:
+    def _status(self, message: str) -> None:
+        if self._on_status:
+            self._on_status(message)
+
+    def _draw_placeholder(self) -> None:
+        if self._image_bgr is not None:
             return
-        rgb = cv2.cvtColor(self._image_bgr, cv2.COLOR_BGR2RGB)
-        pil = Image.fromarray(rgb)
-        disp_w = max(1, int(self._image_w * self._scale))
-        disp_h = max(1, int(self._image_h * self._scale))
-        if disp_w != pil.width or disp_h != pil.height:
-            resample = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
-            pil = pil.resize((disp_w, disp_h), resample)
+        self._canvas.delete("all")
+        w = max(int(self._canvas.winfo_width()), 320)
+        h = max(int(self._canvas.winfo_height()), 240)
+        self._canvas.configure(scrollregion=(0, 0, w, h))
+        self._canvas.create_text(
+            w / 2,
+            h / 2,
+            text="PDF / JPG / PNG をドロップ\nまたは「画像を開く」",
+            fill=COLORS["text_muted"],
+            font=FONTS.get("body", ("Segoe UI", 10)),
+            justify="center",
+            tags="placeholder",
+        )
+
+    def _recomposite(self) -> None:
+        if self._base_display is None:
+            self._photo = None
+            return
+        pil = compositor.composite_over_base(
+            self._base_display,
+            regions=self.regions,
+            selected_idx=self.selected_idx,
+            scale=self._scale,
+            exclude_idx=self._drag_exclude,
+        )
         self._photo = ImageTk.PhotoImage(pil)
-        self._canvas.configure(scrollregion=(0, 0, disp_w, disp_h))
+
+    def redraw(self) -> None:
+        """フル再描画（半透明塗りを PIL で合成し直し、ベクター枠を載せる）。"""
+        self._canvas.delete("all")
+        if self._image_bgr is None:
+            self._draw_placeholder()
+            return
+        self._recomposite()
+        if self._photo:
+            self._canvas.create_image(0, 0, anchor="nw", image=self._photo, tags="bg")
+        self._draw_vectors()
+
+    def _draw_vectors(self) -> None:
+        """輪郭・ラベル・ハンドルだけを再描画（ドラッグ中の軽量パス）。"""
+        self._canvas.delete("vec")
+        for idx, r in enumerate(self.regions):
+            x = r["x"] * self._scale
+            y = r["y"] * self._scale
+            w = r["w"] * self._scale
+            h = r["h"] * self._scale
+            selected = idx == self.selected_idx
+            stroke = REGION_STROKE_SELECTED if selected else REGION_STROKE_NORMAL
+            self._canvas.create_rectangle(
+                x, y, x + w, y + h, outline=stroke, width=2, tags="vec"
+            )
+            label = r.get("displayName") or r["id"]
+            self._canvas.create_text(
+                x + 4,
+                y + 4,
+                anchor="nw",
+                text=label,
+                fill=stroke,
+                font=(FONTS["body"][0], 10, "bold"),
+                tags="vec",
+            )
+            if selected:
+                self._draw_handles(x, y, w, h)
+
+    def _draw_handles(self, x: float, y: float, w: float, h: float) -> None:
+        points = [
+            (x, y),
+            (x + w / 2, y),
+            (x + w, y),
+            (x + w, y + h / 2),
+            (x + w, y + h),
+            (x + w / 2, y + h),
+            (x, y + h),
+            (x, y + h / 2),
+        ]
+        hs = self.HANDLE
+        for px, py in points:
+            self._canvas.create_rectangle(
+                px - hs / 2,
+                py - hs / 2,
+                px + hs / 2,
+                py + hs / 2,
+                fill=COLORS["accent"],
+                outline="",
+                tags="vec",
+            )
 
     def _to_image_coords(self, event: tk.Event) -> tuple[float, float]:
         cx = self._canvas.canvasx(event.x)
@@ -238,6 +315,8 @@ class AnswerRegionEditor(tk.Frame):
                     "start_y": py,
                     "orig": copy.deepcopy(self.regions[self.selected_idx]),
                 }
+                self._drag_exclude = self.selected_idx
+                self.redraw()
                 return
         idx = self._hit_test_region(px, py)
         if idx >= 0:
@@ -250,6 +329,7 @@ class AnswerRegionEditor(tk.Frame):
                     "start_y": py,
                     "orig": copy.deepcopy(r),
                 }
+                self._drag_exclude = idx
             self.redraw()
             self._notify_change()
             return
@@ -262,17 +342,15 @@ class AnswerRegionEditor(tk.Frame):
             return
         px, py = self._to_image_coords(event)
         if self._drag_state["type"] == "create":
-            self.redraw()
+            self._canvas.delete("preview")
             x0 = self._drag_state["start_x"] * self._scale
             y0 = self._drag_state["start_y"] * self._scale
-            x1 = px * self._scale
-            y1 = py * self._scale
             self._canvas.create_rectangle(
                 x0,
                 y0,
-                x1,
-                y1,
-                outline="#9333ea",
+                px * self._scale,
+                py * self._scale,
+                outline=COLORS["accent"],
                 width=2,
                 dash=(6, 4),
                 tags="preview",
@@ -285,7 +363,7 @@ class AnswerRegionEditor(tk.Frame):
             r["y"] = orig["y"] + (py - self._drag_state["start_y"])
         elif self._drag_state["type"] == "resize":
             self._apply_resize(r, self._drag_state["orig"], self._drag_state["handle"], px, py)
-        self.redraw()
+        self._draw_vectors()
 
     def _apply_resize(
         self,
@@ -328,8 +406,11 @@ class AnswerRegionEditor(tk.Frame):
             else:
                 self.redraw()
         else:
+            self._drag_exclude = None
+            self.redraw()
             self._notify_change()
         self._drag_state = None
+        self._drag_exclude = None
 
     def _on_hover(self, event: tk.Event) -> None:
         if self._drag_state or self._image_bgr is None:
@@ -371,50 +452,3 @@ class AnswerRegionEditor(tk.Frame):
         self.selected_idx = len(self.regions) - 1
         self.redraw()
         self._notify_change()
-
-    def redraw(self) -> None:
-        self._canvas.delete("all")
-        if self._photo:
-            self._canvas.create_image(0, 0, anchor="nw", image=self._photo, tags="bg")
-        for idx, r in enumerate(self.regions):
-            x = r["x"] * self._scale
-            y = r["y"] * self._scale
-            w = r["w"] * self._scale
-            h = r["h"] * self._scale
-            selected = idx == self.selected_idx
-            stroke = "#2563eb" if selected else "#16a34a"
-            fill = "#2563eb22" if selected else "#16a34a22"
-            self._canvas.create_rectangle(x, y, x + w, y + h, outline=stroke, width=2, fill=fill)
-            label = r.get("displayName") or r["id"]
-            self._canvas.create_text(
-                x + 4,
-                y + 4,
-                anchor="nw",
-                text=label,
-                fill=COLORS["accent"],
-                font=(FONTS["body"][0], 10, "bold"),
-            )
-            if selected:
-                self._draw_handles(x, y, w, h)
-
-    def _draw_handles(self, x: float, y: float, w: float, h: float) -> None:
-        points = [
-            (x, y),
-            (x + w / 2, y),
-            (x + w, y),
-            (x + w, y + h / 2),
-            (x + w, y + h),
-            (x + w / 2, y + h),
-            (x, y + h),
-            (x, y + h / 2),
-        ]
-        hs = self.HANDLE
-        for px, py in points:
-            self._canvas.create_rectangle(
-                px - hs / 2,
-                py - hs / 2,
-                px + hs / 2,
-                py + hs / 2,
-                fill="#2563eb",
-                outline="",
-            )

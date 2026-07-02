@@ -30,6 +30,7 @@ COLORS = {
     "accent_soft": "#eff6ff",
     "accent_text": "#ffffff",
     "success": "#16a34a",
+    "success_soft": "#dcfce7",
     "danger": "#dc2626",
     "danger_soft": "#fef2f2",
     "canvas_bg": "#ffffff",
