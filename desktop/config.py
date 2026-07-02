@@ -35,6 +35,13 @@ def load_config() -> dict:
         return json.load(f)
 
 
+def save_config(cfg: dict) -> None:
+    ensure_data_dirs()
+    with CONFIG_PATH.open("w", encoding="utf-8") as f:
+        json.dump(cfg, f, ensure_ascii=False, indent=2)
+        f.write("\n")
+
+
 def test_dir(test_id: str) -> Path:
     return IMAGES_ROOT / test_id
 

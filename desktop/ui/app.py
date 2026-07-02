@@ -35,6 +35,7 @@ from services.gemini_rubric import generate_rubric_with_gemini
 from services.grading import execute_grading, get_summary_data
 from services.ocr import check_ocr_config
 from services.work_queue import build_ocr_work_queue
+from ui.settings_dialog import open_settings_dialog
 from ui.step4_outlier import Step4OutlierMixin
 
 
@@ -82,6 +83,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
             self.step_buttons[sid] = btn
 
         ttk.Separator(nav, orient="horizontal").pack(fill="x", pady=8)
+        ttk.Button(nav, text="詳細設定…", command=self._open_settings).pack(fill="x", pady=2)
         self.ocr_status_var = tk.StringVar(value="")
         ttk.Label(nav, textvariable=self.ocr_status_var, wraplength=200, font=("", 8)).pack(anchor="w")
 
@@ -124,6 +126,9 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     def _refresh_ocr_status(self) -> None:
         info = check_ocr_config()
         self.ocr_status_var.set(info.get("message", ""))
+
+    def _open_settings(self) -> None:
+        open_settings_dialog(self, on_saved=self._refresh_ocr_status)
 
     def _refresh_test_list(self) -> None:
         tests = list_tests()

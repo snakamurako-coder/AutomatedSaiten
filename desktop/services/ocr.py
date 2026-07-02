@@ -12,6 +12,17 @@ import requests
 from config import load_config
 from services.image_warp import crop_region
 
+_MIN_TEST_JPEG = base64.b64decode(
+    "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRof"
+    "Hh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwh"
+    "MjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAB"
+    "AAEDASIAAhEBAxEB/8QAFQABAQAAAAAAAAAAAAAAAAAAAAv/xAAUEAEAAAAAAAAAAAAAAAAAAAAA"
+    "/8QAFQEBAQAAAAAAAAAAAAAAAAAAAAX/xAAUEQEAAAAAAAAAAAAAAAAAAAAA/9oADAMBAAIQAxAA"
+    "AAGPB//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAQUCf//EABQRAQAAAAAAAAAAAAAAAAAA"
+    "AAD/2gAIAQMBAT8Bf//EABQRAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQIBAT8Bf//EABQQAQAAAAAA"
+    "AAAAAAAAAAAAAAD/2gAIAQEABj8Cf//EABQQAQAAAAAAAAAAAAAAAAAAAAD/2gAIAQEAAT8hf//Z"
+)
+
 
 def normalize_ocr_lang(lang: str | None) -> str:
     return "ja" if str(lang or "").lower() == "ja" else "en"
@@ -39,7 +50,9 @@ def call_vision_api(image_bytes: bytes, language_hints: list[str]) -> dict[str, 
     cfg = load_config()
     api_key = (cfg.get("vision_api_key") or "").strip()
     if not api_key:
-        raise ValueError("VISION_API_KEY が未設定です。desktop/config.json を編集してください。")
+        raise ValueError(
+            "VISION_API_KEY が未設定です。メニューの「詳細設定」から Vision API キーを登録してください。"
+        )
 
     url = f"https://vision.googleapis.com/v1/images:annotate?key={api_key}"
     payload = {
@@ -163,10 +176,35 @@ def check_ocr_config() -> dict[str, Any]:
         return {
             "configured": False,
             "engine": "vision",
-            "message": "Vision API キーが未設定です。config.json に vision_api_key を追加するか、ocr_engine を tesseract に変更してください。",
+            "message": "Vision API キーが未設定です。「詳細設定」で vision_api_key を登録するか、ocr_engine を tesseract に変更してください。",
         }
     return {
         "configured": True,
         "engine": "tesseract",
         "message": "Tesseract OCR を使用します（日本語は jpn 言語データが必要）。",
     }
+
+
+def test_vision_api_key(api_key: str) -> str:
+    key = (api_key or "").strip()
+    if not key:
+        raise ValueError("Vision API キーが空です。")
+    url = f"https://vision.googleapis.com/v1/images:annotate?key={key}"
+    payload = {
+        "requests": [
+            {
+                "image": {"content": base64.b64encode(_MIN_TEST_JPEG).decode("ascii")},
+                "features": [{"type": "DOCUMENT_TEXT_DETECTION"}],
+                "imageContext": {"languageHints": ["ja"]},
+            }
+        ]
+    }
+    resp = requests.post(url, json=payload, timeout=30)
+    data = resp.json()
+    if "error" in data:
+        err = data["error"]
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        raise ValueError(msg or str(err))
+    if not data.get("responses"):
+        raise ValueError("Vision API 応答が空です。")
+    return "Vision API に接続できました。"

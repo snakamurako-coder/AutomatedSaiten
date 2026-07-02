@@ -22,7 +22,7 @@ def generate_rubric_with_gemini(
     api_key = (cfg.get("gemini_api_key") or "").strip()
     if not api_key:
         raise ValueError(
-            "GEMINI_API_KEY が未設定です。desktop/config.json に gemini_api_key を追加してください。"
+            "GEMINI_API_KEY が未設定です。メニューの「詳細設定」から Gemini API キーを登録してください。"
         )
 
     with connect() as conn:
@@ -94,3 +94,26 @@ def generate_rubric_with_gemini(
 
     text = body["candidates"][0]["content"]["parts"][0]["text"]
     return json.loads(text)
+
+
+def test_gemini_api_key(api_key: str) -> str:
+    key = (api_key or "").strip()
+    if not key:
+        raise ValueError("Gemini API キーが空です。")
+    url = (
+        "https://generativelanguage.googleapis.com/v1beta/models/"
+        f"gemini-2.5-flash:generateContent?key={key}"
+    )
+    payload = {
+        "contents": [{"parts": [{"text": "接続確認。1文字でよいので応答してください。"}]}],
+        "generationConfig": {"maxOutputTokens": 8},
+    }
+    resp = requests.post(url, json=payload, timeout=30)
+    body = resp.json()
+    if "error" in body:
+        err = body["error"]
+        msg = err.get("message") if isinstance(err, dict) else str(err)
+        raise ValueError(msg or str(err))
+    if not body.get("candidates"):
+        raise ValueError("Gemini API 応答が空です。")
+    return "Gemini API に接続できました。"
