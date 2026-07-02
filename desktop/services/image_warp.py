@@ -10,6 +10,7 @@ import cv2
 import numpy as np
 
 from constants import CELL_PX
+from services.image_loader import load_image_bgr
 
 Orientation = Literal["landscape", "portrait"]
 
@@ -109,9 +110,7 @@ def warp_image_from_path(
     orientation: Orientation = "landscape",
     thresh_val: int = 128,
 ) -> np.ndarray:
-    image = cv2.imread(str(source_path))
-    if image is None:
-        raise ValueError(f"画像を読み込めません: {source_path}")
+    image = load_image_bgr(source_path)
     try:
         corners = detect_paper_corners(image, thresh_val)
     except ValueError:

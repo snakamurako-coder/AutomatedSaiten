@@ -12,6 +12,7 @@ from tkinter import ttk
 
 from PIL import Image, ImageTk
 
+from services.image_loader import load_image_bgr
 from ui.theme import COLORS, FONTS
 
 
@@ -80,10 +81,7 @@ class AnswerRegionEditor(tk.Frame):
         self.redraw()
 
     def load_image_from_path(self, path: str) -> None:
-        image = cv2.imread(path)
-        if image is None:
-            raise ValueError(f"画像を読み込めません: {path}")
-        self.set_image(image)
+        self.set_image(load_image_bgr(path))
 
     def set_regions(self, regions: list[dict[str, Any]]) -> None:
         self.regions = []

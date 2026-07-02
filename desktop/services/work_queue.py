@@ -8,10 +8,7 @@ from typing import Any
 
 from config import test_archive, test_inbox, test_warped
 from models.test_repo import get_processed_file_names, normalize_file_name
-
-
-IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".bmp", ".tif", ".tiff", ".webp"}
-PDF_EXTENSIONS = {".pdf"}
+from services.image_loader import ALL_INPUT_EXTENSIONS, PDF_EXTENSIONS
 
 
 def natural_compare(a: str, b: str) -> int:
@@ -36,7 +33,7 @@ def list_inbox_files(folder: Path) -> list[dict[str, Any]]:
         if not p.is_file():
             continue
         ext = p.suffix.lower()
-        if ext not in IMAGE_EXTENSIONS and ext not in PDF_EXTENSIONS:
+        if ext not in ALL_INPUT_EXTENSIONS:
             continue
         files.append(
             {

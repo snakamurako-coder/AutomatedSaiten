@@ -36,6 +36,7 @@ from services.batch_processor import run_batch_ocr
 from services.gemini_rubric import generate_rubric_with_gemini
 from services.grading import execute_grading, get_summary_data
 from services.image_warp import warp_image_from_path
+from services.image_loader import FILE_DIALOG_PATTERNS, is_supported_input_path
 from services.ocr import check_ocr_config
 from services.work_queue import build_ocr_work_queue
 from ui.region_editor import AnswerRegionEditor
@@ -257,7 +258,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         )
         ttk.Label(
             f,
-            text="画像をドロップするか「画像を開く」で模範解答を読み込み、Canvas 上をドラッグして記述欄を指定します。",
+            text="PDF / JPG / PNG をドロップするか「画像を開く」で模範解答を読み込み、Canvas 上をドラッグして記述欄を指定します。",
             style="Muted.TLabel",
             wraplength=900,
         ).grid(row=1, column=0, sticky="w", pady=(6, 12))
@@ -308,7 +309,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         side.grid_propagate(False)
         self.field_list_inner = ttk.Frame(side)
         self.field_list_inner.pack(fill="both", expand=True)
-        self.step1_status_var = tk.StringVar(value="画像をドロップするか「画像を開く」で開始")
+        self.step1_status_var = tk.StringVar(value="PDF / JPG / PNG をドロップするか「画像を開く」で開始")
         ttk.Label(f, textvariable=self.step1_status_var, style="Caption.TLabel").grid(
             row=4, column=0, sticky="w", pady=(8, 0)
         )
@@ -341,29 +342,24 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         return str(raw)
 
     @staticmethod
-    def _is_image_path(path: str) -> bool:
-        return Path(path).suffix.lower() in {
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".bmp",
-            ".webp",
-            ".tif",
-            ".tiff",
-        }
+    def _is_supported_file_path(path: str) -> bool:
+        return is_supported_input_path(path)
 
     def _on_drop_files(self, paths: list[str]) -> None:
-        images = [p for p in paths if self._is_image_path(p)]
-        if not images:
-            messagebox.showwarning("ドロップ", "画像ファイル（jpg/png 等）をドロップしてください。")
+        files = [p for p in paths if self._is_supported_file_path(p)]
+        if not files:
+            messagebox.showwarning("ドロップ", "PDF / JPG / PNG ファイルをドロップしてください。")
             return
-        self._load_model_from_path(images[0])
+        self._load_model_from_path(files[0])
 
     def _on_open_model_file(self) -> None:
         path = filedialog.askopenfilename(
-            title="模範解答画像を選択",
+            title="模範解答を選択（PDF / JPG / PNG）",
             filetypes=[
-                ("画像", "*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff"),
+                ("PDF / JPG / PNG", FILE_DIALOG_PATTERNS),
+                ("PDF", "*.pdf"),
+                ("JPEG", "*.jpg *.jpeg"),
+                ("PNG", "*.png"),
                 ("すべて", "*.*"),
             ],
         )
@@ -582,7 +578,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         ttk.Label(f, text="③ テキスト化（OCRバッチ）", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
-            text="生徒解答フォルダ内の画像を自動補正→OCR→SQLite に一括保存します。",
+            text="生徒解答フォルダ内の PDF / JPG / PNG を自動補正→OCR→SQLite に一括保存します。",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(6, 8))
 

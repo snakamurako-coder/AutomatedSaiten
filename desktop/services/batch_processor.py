@@ -47,8 +47,6 @@ def process_single_item(
 
     source_path = item.get("path") or item.get("id") or ""
     file_name = item["name"]
-    if item.get("isPdf"):
-        raise ValueError(f"PDF は未対応です（先に画像に変換してください）: {file_name}")
 
     warped_path = item.get("warpedPath") or ""
     if item.get("stage") == "warp_and_ocr" or not warped_path:
