@@ -139,6 +139,24 @@
         "type": "shell",
         "command": "git pull",
         "presentation": { "reveal": "always", "panel": "shared" }
+      },
+
+      // =====================================================================
+      // PC版（desktop/）
+      // =====================================================================
+      {
+        "label": "Desktop: Run Tkinter App",
+        "type": "shell",
+        "command": "python main.py",
+        "options": { "cwd": "${workspaceFolder}/desktop" },
+        "presentation": { "reveal": "always", "panel": "dedicated" }
+      },
+      {
+        "label": "Desktop: Install Dependencies",
+        "type": "shell",
+        "command": "python -m pip install -r requirements.txt",
+        "options": { "cwd": "${workspaceFolder}/desktop" },
+        "presentation": { "reveal": "always", "panel": "shared" }
       }
     ]
   }

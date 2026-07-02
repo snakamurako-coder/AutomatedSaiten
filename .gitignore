@@ -1,2 +1,11 @@
 # clasp: scriptId は環境ごとに異なるためリポジトリに含めない
 .clasp.json
+
+# PC版（desktop/）
+desktop/data/
+desktop/config.json
+desktop/__pycache__/
+desktop/**/__pycache__/
+desktop/.venv/
+desktop/venv/
+*.pyc

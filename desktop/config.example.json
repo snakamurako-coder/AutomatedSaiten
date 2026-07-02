@@ -1,0 +1,6 @@
+{
+  "vision_api_key": "",
+  "ocr_engine": "tesseract",
+  "default_orientation": "landscape",
+  "tesseract_cmd": ""
+}
