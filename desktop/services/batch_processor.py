@@ -6,10 +6,9 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
-import cv2
-
 from config import load_config, test_archive, test_warped
 from models.test_repo import flush_result_rows, get_answer_fields
+from services.image_loader import imread_bgr
 from services.image_warp import warp_image_file, warped_file_name
 from services.ocr import run_ocr_on_warped_image
 from services.work_queue import build_ocr_work_queue
@@ -19,7 +18,7 @@ ProgressCallback = Callable[[int, int, str], None]
 
 
 def _load_warped_bgr(path: str | Path):
-    image = cv2.imread(str(path))
+    image = imread_bgr(path)
     if image is None:
         raise ValueError(f"補正画像を読み込めません: {path}")
     return image

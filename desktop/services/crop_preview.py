@@ -8,6 +8,7 @@ from typing import Any
 import cv2
 from PIL import Image
 
+from services.image_loader import imread_bgr
 from services.image_warp import crop_region
 
 
@@ -23,7 +24,7 @@ def resolve_warped_path(row: dict[str, Any]) -> str:
 
 def crop_field_from_row(row: dict[str, Any], field: dict[str, Any]) -> Image.Image:
     warped_path = resolve_warped_path(row)
-    image = cv2.imread(warped_path)
+    image = imread_bgr(warped_path)
     if image is None:
         raise ValueError(f"画像を読み込めません: {warped_path}")
     cropped = crop_region(

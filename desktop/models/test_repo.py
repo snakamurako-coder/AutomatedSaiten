@@ -186,13 +186,13 @@ def save_student_folder(test_id: str, folder_path: str) -> None:
 
 def save_model_answer_image(test_id: str, warped_bgr: Any) -> str:
     """補正済み模範解答画像を保存し、基準サイズを DB に記録する。"""
-    import cv2
+    from services.image_loader import imwrite_bgr
 
     _ensure_test_dirs(test_id)
     model_dir = test_model(test_id)
     fname = f"模範解答_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
     path = model_dir / fname
-    cv2.imwrite(str(path), warped_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    imwrite_bgr(path, warped_bgr, quality=90)
     h, w = warped_bgr.shape[:2]
     resolved = str(path.resolve())
     with connect() as conn:

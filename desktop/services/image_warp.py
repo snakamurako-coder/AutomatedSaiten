@@ -10,7 +10,7 @@ import cv2
 import numpy as np
 
 from constants import CELL_PX
-from services.image_loader import load_image_bgr
+from services.image_loader import imwrite_bgr, load_image_bgr
 
 Orientation = Literal["landscape", "portrait"]
 
@@ -100,8 +100,7 @@ def warp_image_file(
 ) -> Path:
     warped = warp_image_from_path(source_path, orientation, thresh_val)
     out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), warped, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    imwrite_bgr(out, warped, quality=85)
     return out
 
 

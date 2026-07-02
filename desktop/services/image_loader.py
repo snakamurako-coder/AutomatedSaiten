@@ -1,4 +1,8 @@
-"""画像・PDF の読み込み（JPG / PNG / PDF 1ページ目）。"""
+"""画像・PDF の読み込み（JPG / PNG / PDF 1ページ目）。
+
+Windows では cv2.imread / imwrite が日本語パスを扱えないため、
+バイト読み書き + imdecode / imencode を使う。
+"""
 
 from __future__ import annotations
 
@@ -25,6 +29,38 @@ def is_pdf_path(path: str | Path) -> bool:
     return Path(path).suffix.lower() in PDF_EXTENSIONS
 
 
+def imread_bgr(path: str | Path) -> np.ndarray | None:
+    """Unicode パス対応の画像読み込み（BGR）。失敗時は None。"""
+    path = Path(path)
+    if not path.is_file():
+        return None
+    try:
+        data = np.fromfile(str(path), dtype=np.uint8)
+    except OSError:
+        return None
+    if data.size == 0:
+        return None
+    image = cv2.imdecode(data, cv2.IMREAD_COLOR)
+    return image
+
+
+def imwrite_bgr(path: str | Path, image_bgr: np.ndarray, *, quality: int = 90) -> None:
+    """Unicode パス対応の画像保存（BGR）。"""
+    path = Path(path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ext = path.suffix.lower() or ".jpg"
+    if ext in (".jpg", ".jpeg"):
+        params = [int(cv2.IMWRITE_JPEG_QUALITY), quality]
+        ok, buf = cv2.imencode(".jpg", image_bgr, params)
+    elif ext == ".png":
+        ok, buf = cv2.imencode(".png", image_bgr)
+    else:
+        ok, buf = cv2.imencode(ext, image_bgr)
+    if not ok:
+        raise ValueError(f"画像のエンコードに失敗しました: {path}")
+    buf.tofile(str(path))
+
+
 def load_image_bgr(path: str | Path, *, pdf_page: int = 0) -> np.ndarray:
     """ファイルを BGR の numpy 配列として読み込む。PDF は指定ページ（0始まり）。"""
     path = Path(path)
@@ -38,7 +74,7 @@ def load_image_bgr(path: str | Path, *, pdf_page: int = 0) -> np.ndarray:
     if ext in PDF_EXTENSIONS:
         return _load_pdf_page_bgr(path, pdf_page)
 
-    image = cv2.imread(str(path))
+    image = imread_bgr(path)
     if image is not None:
         return image
 
