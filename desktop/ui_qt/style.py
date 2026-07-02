@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtGui import QFont, QFontDatabase
+from PySide6.QtGui import QColor, QFont, QFontDatabase, QPalette
 from PySide6.QtWidgets import QApplication
 
 COLORS = {
@@ -258,6 +258,10 @@ QScrollArea {{
     border: none;
     background: transparent;
 }}
+/* ビューポートと中身をパレット色で塗らせない（黒背景対策） */
+QScrollArea > QWidget > QWidget {{
+    background: transparent;
+}}
 QCheckBox, QRadioButton {{
     font-size: 12px;
     spacing: 6px;
@@ -286,8 +290,43 @@ QStatusBar {{
 """
 
 
+def _build_light_palette() -> QPalette:
+    """OS がダークモードでも常にライト配色で表示するためのパレット。
+
+    QSS が背景を指定していないウィジェット（QScrollArea のビューポート等）は
+    パレット色で塗られるため、ここを固定しないとダークモード環境で
+    「黒背景 + 黒文字」になる。
+    """
+    p = QPalette()
+    text = QColor(COLORS["text"])
+    p.setColor(QPalette.Window, QColor(COLORS["bg"]))
+    p.setColor(QPalette.WindowText, text)
+    p.setColor(QPalette.Base, QColor(COLORS["surface"]))
+    p.setColor(QPalette.AlternateBase, QColor("#fafafa"))
+    p.setColor(QPalette.Text, text)
+    p.setColor(QPalette.Button, QColor(COLORS["surface"]))
+    p.setColor(QPalette.ButtonText, text)
+    p.setColor(QPalette.ToolTipBase, QColor(COLORS["surface"]))
+    p.setColor(QPalette.ToolTipText, text)
+    p.setColor(QPalette.PlaceholderText, QColor(COLORS["text_muted"]))
+    p.setColor(QPalette.Highlight, QColor(COLORS["accent"]))
+    p.setColor(QPalette.HighlightedText, QColor("#ffffff"))
+    p.setColor(QPalette.Link, QColor(COLORS["accent"]))
+    p.setColor(QPalette.Light, QColor("#ffffff"))
+    p.setColor(QPalette.Midlight, QColor(COLORS["border"]))
+    p.setColor(QPalette.Mid, QColor(COLORS["border_strong"]))
+    p.setColor(QPalette.Dark, QColor("#9ca3af"))
+    p.setColor(QPalette.Shadow, QColor("#6b7280"))
+    disabled = QColor(COLORS["text_muted"])
+    for role in (QPalette.WindowText, QPalette.Text, QPalette.ButtonText):
+        p.setColor(QPalette.Disabled, role, disabled)
+    p.setColor(QPalette.Disabled, QPalette.Base, QColor("#f9fafb"))
+    return p
+
+
 def apply_style(app: QApplication) -> None:
     app.setStyle("Fusion")
+    app.setPalette(_build_light_palette())
     families = set(QFontDatabase.families())
     for name in ("Yu Gothic UI", "Meiryo UI", "Segoe UI"):
         if name in families:
