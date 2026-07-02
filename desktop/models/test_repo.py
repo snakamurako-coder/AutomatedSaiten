@@ -423,6 +423,7 @@ def get_all_results(test_id: str) -> list[dict[str, Any]]:
                 "id": r["id"],
                 "fileName": r["file_name"],
                 "studentId": r["student_id"],
+                "name": r["name"] if "name" in r.keys() else "",
                 "textMapping": texts,
                 "judgments": judgments,
                 "scores": scores,

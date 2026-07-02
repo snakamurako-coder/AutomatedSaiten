@@ -25,6 +25,11 @@ from ui_qt.pages.step2 import Step2Page
 from ui_qt.pages.step3 import Step3Page
 from ui_qt.pages.step4 import Step4Page
 from ui_qt.pages.step5 import Step5Page
+from ui_qt.pages.step6 import Step6Page
+from ui_qt.pages.step7 import Step7Page
+from ui_qt.pages.step8 import Step8Page
+from ui_qt.pages.step9 import Step9Page
+from ui_qt.pages.step10 import Step10Page
 from ui_qt.settings_dialog import open_settings_dialog
 from ui_qt.style import set_variant
 
@@ -63,6 +68,11 @@ class MainWindow(QMainWindow):
             3: Step3Page,
             4: Step4Page,
             5: Step5Page,
+            6: Step6Page,
+            7: Step7Page,
+            8: Step8Page,
+            9: Step9Page,
+            10: Step10Page,
         }
         for step in STEPS:
             sid = step["id"]

@@ -139,6 +139,50 @@ CREATE TABLE IF NOT EXISTS deemed_scoring (
     applied_at TEXT NOT NULL,
     FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS domain_settings (
+    test_id TEXT NOT NULL,
+    field_id TEXT NOT NULL,
+    dai_mon TEXT DEFAULT '',
+    han_i TEXT DEFAULT '',
+    noryoku TEXT DEFAULT '',
+    PRIMARY KEY (test_id, field_id),
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS external_scores (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_id TEXT NOT NULL,
+    student_id TEXT NOT NULL,
+    score REAL DEFAULT 0,
+    source TEXT DEFAULT 'CSV取込',
+    imported_at TEXT NOT NULL,
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS identity_fields (
+    test_id TEXT NOT NULL,
+    field_type TEXT NOT NULL,
+    x INTEGER DEFAULT 0,
+    y INTEGER DEFAULT 0,
+    width INTEGER DEFAULT 0,
+    height INTEGER DEFAULT 0,
+    extra_json TEXT DEFAULT '{}',
+    PRIMARY KEY (test_id, field_type),
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS output_slots (
+    test_id TEXT NOT NULL,
+    slot_key TEXT NOT NULL,
+    x INTEGER DEFAULT 0,
+    y INTEGER DEFAULT 0,
+    width INTEGER DEFAULT 0,
+    height INTEGER DEFAULT 0,
+    extra_json TEXT DEFAULT '{}',
+    PRIMARY KEY (test_id, slot_key),
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
 """
 
 
@@ -148,6 +192,12 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE results ADD COLUMN judgments_json TEXT DEFAULT '{}'")
     if "scores_json" not in cols:
         conn.execute("ALTER TABLE results ADD COLUMN scores_json TEXT DEFAULT '{}'")
+    if "domain_scores_json" not in cols:
+        conn.execute("ALTER TABLE results ADD COLUMN domain_scores_json TEXT DEFAULT '{}'")
+    if "external_score" not in cols:
+        conn.execute("ALTER TABLE results ADD COLUMN external_score REAL DEFAULT 0")
+    if "total_score" not in cols:
+        conn.execute("ALTER TABLE results ADD COLUMN total_score REAL DEFAULT 0")
 
 
 def init_db() -> None:

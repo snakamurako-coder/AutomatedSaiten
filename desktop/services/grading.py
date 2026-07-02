@@ -57,6 +57,10 @@ def execute_grading(test_id: str) -> dict[str, Any]:
         conn.commit()
 
     touch_progress(test_id, 5, "採点完了")
+    # GAS 版と同じ連鎖: 採点 → 領域/外部得点/総計の再計算 → 総括
+    from models.domain_repo import calculate_domain_scores
+
+    calculate_domain_scores(test_id)
     build_summary(test_id, unregistered_count)
     return {"gradedCount": len(results), "unregisteredCount": unregistered_count}
 
@@ -131,6 +135,38 @@ def build_summary(test_id: str, unregistered_count: int = 0) -> int:
                         f"満点={max_pts}",
                     ),
                 ]
+            )
+
+        # 領域列の平均・得点率（⑥ 領域設定がある場合）
+        from models.domain_repo import get_domain_column_labels, get_domain_max_score
+
+        domain_rows = conn.execute(
+            "SELECT domain_scores_json, total_score FROM results WHERE test_id = ?",
+            (test_id,),
+        ).fetchall()
+        for col in get_domain_column_labels(test_id):
+            values = []
+            for r in domain_rows:
+                try:
+                    values.append(float(json.loads(r["domain_scores_json"] or "{}").get(col, 0) or 0))
+                except (json.JSONDecodeError, TypeError, ValueError):
+                    values.append(0.0)
+            denom = len(values) or 1
+            avg = round(sum(values) / denom * 100) / 100
+            max_score = get_domain_max_score(test_id, col)
+            rate = f"{round(sum(values) / (max_score * denom) * 1000) / 10}%" if max_score else "-"
+            rows_to_insert.append((test_id, "領域", f"{col}_平均", str(avg), f"満点={max_score}"))
+            rows_to_insert.append((test_id, "領域", f"{col}_得点率", rate, ""))
+        if domain_rows:
+            totals = [float(r["total_score"] or 0) for r in domain_rows]
+            rows_to_insert.append(
+                (
+                    test_id,
+                    "全体",
+                    "総計点_平均",
+                    str(round(sum(totals) / (len(totals) or 1) * 100) / 100),
+                    "外部得点含む",
+                )
             )
 
         conn.executemany(

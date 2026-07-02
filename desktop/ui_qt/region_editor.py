@@ -57,6 +57,10 @@ class _EditorCanvas(QWidget):
         self._image_bgr: np.ndarray | None = None
         self._pixmap: QPixmap | None = None
         self._scale = 1.0
+        # ラベル指定モード: 新規矩形の ID をこのラベルにし、同ラベルの既存矩形を置き換える
+        # （⑧本人欄=欄種別、⑩出力欄=slotKey で使用）
+        self.pending_label: str | None = None
+        self.replace_same_label = False
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
         self.setMinimumSize(480, 360)
@@ -303,8 +307,12 @@ class _EditorCanvas(QWidget):
         self.update()
 
     def _add_region(self, x: float, y: float, w: float, h: float) -> None:
-        num = len(self.regions) + 1
-        field_id = f"記述欄{num}"
+        if self.pending_label:
+            field_id = self.pending_label
+            if self.replace_same_label:
+                self.regions = [r for r in self.regions if r["id"] != field_id]
+        else:
+            field_id = f"記述欄{len(self.regions) + 1}"
         self.regions.append(
             {
                 "id": field_id,
@@ -313,10 +321,12 @@ class _EditorCanvas(QWidget):
                 "y": y,
                 "w": w,
                 "h": h,
-                "order": num,
+                "order": len(self.regions),
                 "ocrLang": "en",
             }
         )
+        for i, r in enumerate(self.regions):
+            r["order"] = i + 1
         self.selected_idx = len(self.regions) - 1
         self.changed.emit()
 
@@ -417,3 +427,14 @@ class AnswerRegionEditor(QScrollArea):
     def set_region_ocr_lang(self, index: int, lang: str) -> None:
         if 0 <= index < len(self._canvas.regions):
             self._canvas.regions[index]["ocrLang"] = "ja" if lang == "ja" else "en"
+
+    def set_pending_label(self, label: str | None, *, replace_same: bool = True) -> None:
+        """次にドラッグで作る矩形の ID を指定する（⑧欄種別 / ⑩slotKey 用）。"""
+        self._canvas.pending_label = label
+        self._canvas.replace_same_label = replace_same
+
+    def clear_all_regions(self) -> None:
+        self._canvas.regions = []
+        self._canvas.selected_idx = -1
+        self._canvas.update()
+        self._canvas.changed.emit()
