@@ -77,4 +77,4 @@ STEPS = [
     {"id": 10, "label": "⑩ 個票出力"},
 ]
 
-DESKTOP_READY_STEPS = {0, 1, 2, 3}
+DESKTOP_READY_STEPS = {0, 1, 2, 3, 4, 5}

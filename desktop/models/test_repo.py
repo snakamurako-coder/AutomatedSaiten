@@ -377,6 +377,10 @@ def flush_result_rows(test_id: str, rows: list[dict[str, Any]]) -> dict[str, Any
 
 
 def get_result_preview(test_id: str) -> list[dict[str, Any]]:
+    return get_all_results(test_id)
+
+
+def get_all_results(test_id: str) -> list[dict[str, Any]]:
     with connect() as conn:
         rows = conn.execute(
             "SELECT * FROM results WHERE test_id = ? ORDER BY file_name",
@@ -385,12 +389,18 @@ def get_result_preview(test_id: str) -> list[dict[str, Any]]:
     out = []
     for r in rows:
         texts = json.loads(r["texts_json"] or "{}")
+        judgments = json.loads(r["judgments_json"] or "{}") if "judgments_json" in r.keys() else {}
+        scores = json.loads(r["scores_json"] or "{}") if "scores_json" in r.keys() else {}
         out.append(
             {
+                "id": r["id"],
                 "fileName": r["file_name"],
                 "studentId": r["student_id"],
                 "textMapping": texts,
+                "judgments": judgments,
+                "scores": scores,
                 "warpedPath": r["warped_path"],
+                "sourcePath": r["source_path"],
             }
         )
     return out
@@ -401,7 +411,7 @@ def export_results_to_excel(test_id: str, output_path: str) -> str:
     import pandas as pd
 
     fields = get_answer_fields(test_id)
-    preview = get_result_preview(test_id)
+    preview = get_all_results(test_id)
     headers = ["生徒ID", "ファイル名", "ファイルID", "補正画像FileID", "氏名"]
     for f in fields:
         label = f["displayName"] or f["id"]
@@ -418,9 +428,10 @@ def export_results_to_excel(test_id: str, output_path: str) -> str:
         }
         for f in fields:
             label = f["displayName"] or f["id"]
-            row[f"{label}_テキスト"] = item["textMapping"].get(f["id"], "なし")
-            row[f"{label}_判定"] = ""
-            row[f"{label}_得点"] = ""
+            fid = f["id"]
+            row[f"{label}_テキスト"] = item["textMapping"].get(fid, "なし")
+            row[f"{label}_判定"] = item.get("judgments", {}).get(fid, "")
+            row[f"{label}_得点"] = item.get("scores", {}).get(fid, "")
         rows.append(row)
 
     df = pd.DataFrame(rows, columns=headers)

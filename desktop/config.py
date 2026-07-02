@@ -29,6 +29,7 @@ def load_config() -> dict:
             "ocr_engine": "tesseract",
             "default_orientation": "landscape",
             "tesseract_cmd": "",
+            "gemini_api_key": "",
         }
     with path.open(encoding="utf-8") as f:
         return json.load(f)

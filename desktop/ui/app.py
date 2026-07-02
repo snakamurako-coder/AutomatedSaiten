@@ -9,6 +9,7 @@ from typing import Any
 
 from constants import DESKTOP_READY_STEPS, STEPS
 from models.database import init_db
+from models.criteria_repo import merge_unique_with_criteria, save_grading_criteria
 from models.test_repo import (
     create_test,
     export_results_to_excel,
@@ -22,6 +23,8 @@ from models.test_repo import (
     set_active_test,
 )
 from services.batch_processor import run_batch_ocr
+from services.gemini_rubric import generate_rubric_with_gemini
+from services.grading import execute_grading, get_summary_data
 from services.ocr import check_ocr_config
 from services.work_queue import build_ocr_work_queue
 
@@ -37,6 +40,7 @@ class AutomatedSaitenApp(tk.Tk):
         self.active_test_id: str | None = None
         self.current_step = 0
         self._field_rows: list[dict[str, Any]] = []
+        self._criteria_rows: list[dict[str, Any]] = []
 
         self._build_layout()
         self._refresh_ocr_status()
@@ -91,6 +95,8 @@ class AutomatedSaitenApp(tk.Tk):
         self._build_step1()
         self._build_step2()
         self._build_step3()
+        self._build_step4()
+        self._build_step5()
 
     def _show_frame(self, step_id: int) -> None:
         self.frames[step_id].tkraise()
@@ -135,6 +141,10 @@ class AutomatedSaitenApp(tk.Tk):
             self._reload_points()
         elif step_id == 3:
             self._reload_ocr_panel()
+        elif step_id == 4:
+            self._reload_criteria_panel()
+        elif step_id == 5:
+            self._reload_summary_panel()
 
     # --- Step 0 ---
     def _build_step0(self) -> None:
@@ -541,3 +551,267 @@ class AutomatedSaitenApp(tk.Tk):
             messagebox.showinfo("エクスポート完了", f"保存しました:\n{path}")
         except Exception as e:
             messagebox.showerror("エラー", str(e))
+
+    # --- Step 4 ---
+    def _build_step4(self) -> None:
+        f = self.frames[4]
+        ttk.Label(f, text="④ 採点基準の設定", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(
+            f,
+            text="記述欄ごとに OCR 解答を集約し、判定（○△×）と得点を設定して保存します。",
+            font=("", 9),
+        ).pack(anchor="w", pady=4)
+
+        toolbar = ttk.Frame(f)
+        toolbar.pack(fill="x", pady=4)
+        ttk.Label(toolbar, text="記述欄").pack(side="left")
+        self.criteria_field_var = tk.StringVar()
+        self.criteria_field_combo = ttk.Combobox(
+            toolbar, textvariable=self.criteria_field_var, width=28, state="readonly"
+        )
+        self.criteria_field_combo.pack(side="left", padx=4)
+        ttk.Button(toolbar, text="解答を集約", command=self._on_aggregate_criteria).pack(
+            side="left", padx=2
+        )
+        ttk.Button(toolbar, text="AI原案", command=self._on_gemini_criteria).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="基準を保存", command=self._on_save_criteria).pack(side="left", padx=2)
+
+        cols = ("answer", "count", "judgment", "score", "reason")
+        self.criteria_tree = ttk.Treeview(f, columns=cols, show="headings", height=14)
+        for c, label, w in [
+            ("answer", "解答", 280),
+            ("count", "人数", 60),
+            ("judgment", "判定", 60),
+            ("score", "得点", 60),
+            ("reason", "備考", 320),
+        ]:
+            self.criteria_tree.heading(c, text=label)
+            self.criteria_tree.column(c, width=w)
+        self.criteria_tree.pack(fill="both", expand=True, pady=6)
+        self.criteria_tree.bind("<<TreeviewSelect>>", self._on_criteria_select)
+
+        edit = ttk.LabelFrame(f, text="選択行の編集", padding=8)
+        edit.pack(fill="x")
+        self.criteria_edit: dict[str, ttk.Entry] = {}
+        for i, (key, label) in enumerate(
+            [("judgment", "判定(○/△/×)"), ("score", "得点"), ("reason", "備考")]
+        ):
+            ttk.Label(edit, text=label).grid(row=0, column=i * 2, sticky="w", padx=2)
+            ent = ttk.Entry(edit, width=18 if key != "reason" else 40)
+            ent.grid(row=0, column=i * 2 + 1, padx=2)
+            self.criteria_edit[key] = ent
+        ttk.Button(edit, text="選択行に適用", command=self._on_apply_criteria_edit).grid(
+            row=0, column=6, padx=8
+        )
+
+    def _reload_criteria_panel(self) -> None:
+        if not self._require_active_test():
+            return
+        fields = get_answer_fields(self.active_test_id)
+        labels = [f"{f['displayName']} ({f['id']})" for f in fields]
+        self.criteria_field_combo["values"] = labels
+        if labels and not self.criteria_field_var.get():
+            self.criteria_field_combo.current(0)
+        if labels:
+            self._on_aggregate_criteria()
+
+    def _selected_criteria_field_id(self) -> str | None:
+        fields = get_answer_fields(self.active_test_id)
+        idx = self.criteria_field_combo.current()
+        if idx < 0 or idx >= len(fields):
+            return None
+        return fields[idx]["id"]
+
+    def _render_criteria_tree(self) -> None:
+        self.criteria_tree.delete(*self.criteria_tree.get_children())
+        for i, row in enumerate(self._criteria_rows):
+            self.criteria_tree.insert(
+                "",
+                tk.END,
+                iid=str(i),
+                values=(
+                    row.get("answer_text", ""),
+                    row.get("count", 0),
+                    row.get("judgment", ""),
+                    row.get("score", ""),
+                    row.get("reason", ""),
+                ),
+            )
+
+    def _on_aggregate_criteria(self) -> None:
+        if not self._require_active_test():
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            messagebox.showwarning("記述欄未選択", "記述欄を選択してください。")
+            return
+        self._criteria_rows = merge_unique_with_criteria(self.active_test_id, fid)
+        self._render_criteria_tree()
+
+    def _on_criteria_select(self, _event=None) -> None:
+        sel = self.criteria_tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx >= len(self._criteria_rows):
+            return
+        row = self._criteria_rows[idx]
+        for key in ("judgment", "score", "reason"):
+            ent = self.criteria_edit[key]
+            ent.delete(0, tk.END)
+            ent.insert(0, str(row.get(key, "") or ""))
+
+    def _on_apply_criteria_edit(self) -> None:
+        sel = self.criteria_tree.selection()
+        if not sel:
+            return
+        idx = int(sel[0])
+        if idx >= len(self._criteria_rows):
+            return
+        self._criteria_rows[idx]["judgment"] = self.criteria_edit["judgment"].get().strip()
+        try:
+            score_val = self.criteria_edit["score"].get().strip()
+            self._criteria_rows[idx]["score"] = int(score_val) if score_val else ""
+        except ValueError:
+            messagebox.showerror("入力エラー", "得点は整数で入力してください。")
+            return
+        self._criteria_rows[idx]["reason"] = self.criteria_edit["reason"].get().strip()
+        self._render_criteria_tree()
+        self.criteria_tree.selection_set(str(idx))
+
+    def _on_save_criteria(self) -> None:
+        if not self._require_active_test():
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            return
+        rules = []
+        for row in self._criteria_rows:
+            judgment = str(row.get("judgment") or "").strip()
+            if not judgment:
+                continue
+            try:
+                score = int(row.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            rules.append(
+                {
+                    "answer_text": row["answer_text"],
+                    "judgment": judgment,
+                    "score": score,
+                    "reason": row.get("reason") or "",
+                }
+            )
+        if not rules:
+            messagebox.showwarning("保存不可", "判定が入力された行がありません。")
+            return
+        try:
+            save_grading_criteria(self.active_test_id, fid, rules)
+            messagebox.showinfo("保存完了", f"採点基準を {len(rules)} 件保存しました。")
+        except Exception as e:
+            messagebox.showerror("エラー", str(e))
+
+    def _on_gemini_criteria(self) -> None:
+        if not self._require_active_test():
+            return
+        fid = self._selected_criteria_field_id()
+        if not fid:
+            return
+        if not self._criteria_rows:
+            self._on_aggregate_criteria()
+        unique = [{"answer_text": r["answer_text"], "count": r["count"]} for r in self._criteria_rows]
+
+        def worker() -> None:
+            try:
+                result = generate_rubric_with_gemini(self.active_test_id, fid, unique)
+                self.after(0, lambda: self._apply_gemini_result(result, None))
+            except Exception as e:
+                self.after(0, lambda: self._apply_gemini_result(None, e))
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _apply_gemini_result(self, result: dict[str, Any] | None, error: Exception | None) -> None:
+        if error:
+            messagebox.showerror("AI原案エラー", str(error))
+            return
+        assert result is not None
+        ai_map = {
+            str(item["answer_text"]): item for item in result.get("scrutinized_list", [])
+        }
+        for row in self._criteria_rows:
+            ai = ai_map.get(row["answer_text"])
+            if not ai:
+                continue
+            row["judgment"] = ai.get("judgment", "")
+            row["score"] = ai.get("recommended_score", "")
+            row["reason"] = ai.get("reason", "")
+        self._render_criteria_tree()
+        messagebox.showinfo(
+            "AI原案",
+            "Gemini の原案を表に反映しました。内容を確認して「基準を保存」してください。",
+        )
+
+    # --- Step 5 ---
+    def _build_step5(self) -> None:
+        f = self.frames[5]
+        ttk.Label(f, text="⑤ 採点の実施", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(
+            f,
+            text="保存済みの採点基準に従い、全受験者の判定・得点を一括反映し、考査総括を生成します。",
+            font=("", 9),
+        ).pack(anchor="w", pady=4)
+
+        ttk.Button(f, text="一括採点を実行", command=self._on_run_grading).pack(anchor="w", pady=8)
+
+        self.grading_status_var = tk.StringVar(value="")
+        ttk.Label(f, textvariable=self.grading_status_var, font=("", 9)).pack(anchor="w")
+
+        summary_frame = ttk.LabelFrame(f, text="考査総括", padding=8)
+        summary_frame.pack(fill="both", expand=True, pady=8)
+        self.summary_tree = ttk.Treeview(
+            summary_frame,
+            columns=("category", "item", "value", "note"),
+            show="headings",
+            height=18,
+        )
+        for c, label, w in [
+            ("category", "区分", 80),
+            ("item", "項目", 220),
+            ("value", "値", 100),
+            ("note", "備考", 280),
+        ]:
+            self.summary_tree.heading(c, text=label)
+            self.summary_tree.column(c, width=w)
+        self.summary_tree.pack(fill="both", expand=True)
+
+    def _reload_summary_panel(self) -> None:
+        if not self._require_active_test():
+            return
+        self._fill_summary_tree(get_summary_data(self.active_test_id))
+
+    def _fill_summary_tree(self, rows: list[dict[str, Any]]) -> None:
+        self.summary_tree.delete(*self.summary_tree.get_children())
+        for row in rows:
+            self.summary_tree.insert(
+                "",
+                tk.END,
+                values=(row["category"], row["item"], row["value"], row.get("note", "")),
+            )
+
+    def _on_run_grading(self) -> None:
+        if not self._require_active_test():
+            return
+        try:
+            res = execute_grading(self.active_test_id)
+            self.grading_status_var.set(
+                f"採点完了: {res['gradedCount']} 件 / "
+                f"未登録パターン照合: {res['unregisteredCount']} 件"
+            )
+            self._fill_summary_tree(get_summary_data(self.active_test_id))
+            messagebox.showinfo(
+                "採点完了",
+                f"{res['gradedCount']} 件を採点しました。\n"
+                f"採点基準に無い解答: {res['unregisteredCount']} 件（×・0点として処理）",
+            )
+        except Exception as e:
+            messagebox.showerror("採点エラー", str(e))

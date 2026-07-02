@@ -89,13 +89,43 @@ CREATE TABLE IF NOT EXISTS roster (
     attr3 TEXT DEFAULT '',
     UNIQUE (roster_name, student_id)
 );
+
+CREATE TABLE IF NOT EXISTS grading_criteria (
+    test_id TEXT NOT NULL,
+    field_id TEXT NOT NULL,
+    answer_text TEXT NOT NULL,
+    judgment TEXT DEFAULT '×',
+    score INTEGER DEFAULT 0,
+    reason TEXT DEFAULT '',
+    PRIMARY KEY (test_id, field_id, answer_text),
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
+
+CREATE TABLE IF NOT EXISTS summary_rows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    test_id TEXT NOT NULL,
+    category TEXT NOT NULL,
+    item TEXT NOT NULL,
+    value TEXT DEFAULT '',
+    note TEXT DEFAULT '',
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
 """
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    cols = {row[1] for row in conn.execute("PRAGMA table_info(results)").fetchall()}
+    if "judgments_json" not in cols:
+        conn.execute("ALTER TABLE results ADD COLUMN judgments_json TEXT DEFAULT '{}'")
+    if "scores_json" not in cols:
+        conn.execute("ALTER TABLE results ADD COLUMN scores_json TEXT DEFAULT '{}'")
 
 
 def init_db() -> None:
     ensure_data_dirs()
     with connect() as conn:
         conn.executescript(SCHEMA)
+        _migrate(conn)
         conn.commit()
 
 
