@@ -184,6 +184,33 @@ def save_student_folder(test_id: str, folder_path: str) -> None:
         conn.commit()
 
 
+def save_model_answer_image(test_id: str, warped_bgr: Any) -> str:
+    """補正済み模範解答画像を保存し、基準サイズを DB に記録する。"""
+    import cv2
+
+    _ensure_test_dirs(test_id)
+    model_dir = test_model(test_id)
+    fname = f"模範解答_{datetime.now().strftime('%Y%m%d_%H%M%S')}.jpg"
+    path = model_dir / fname
+    cv2.imwrite(str(path), warped_bgr, [int(cv2.IMWRITE_JPEG_QUALITY), 90])
+    h, w = warped_bgr.shape[:2]
+    resolved = str(path.resolve())
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE tests
+            SET model_answer_path = ?, ref_width = ?, ref_height = ?
+            WHERE id = ?
+            """,
+            (resolved, w, h, test_id),
+        )
+        _set_test_info(conn, test_id, "模範解答画像FileID", resolved)
+        _set_test_info(conn, test_id, "基準画像幅", str(w))
+        _set_test_info(conn, test_id, "基準画像高さ", str(h))
+        conn.commit()
+    return resolved
+
+
 def get_answer_fields_conn(conn, test_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         """

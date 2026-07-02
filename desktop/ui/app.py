@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
+from pathlib import Path
 from tkinter import filedialog, messagebox, ttk
 from typing import Any
 
@@ -26,6 +27,7 @@ from models.test_repo import (
     get_test_info,
     list_tests,
     save_answer_fields,
+    save_model_answer_image,
     save_points,
     save_student_folder,
     set_active_test,
@@ -33,18 +35,22 @@ from models.test_repo import (
 from services.batch_processor import run_batch_ocr
 from services.gemini_rubric import generate_rubric_with_gemini
 from services.grading import execute_grading, get_summary_data
+from services.image_warp import warp_image_from_path
 from services.ocr import check_ocr_config
 from services.work_queue import build_ocr_work_queue
+from ui.region_editor import AnswerRegionEditor
 from ui.settings_dialog import open_settings_dialog
 from ui.step4_outlier import Step4OutlierMixin
+from ui.theme import COLORS, apply_theme, style_listbox, style_text
 
 
 class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     def __init__(self) -> None:
         super().__init__()
         self.title("模範解答ベース自動採点システム（PC版）")
-        self.geometry("1100x720")
-        self.minsize(900, 600)
+        self.geometry("1200x780")
+        self.minsize(960, 640)
+        apply_theme(self)
 
         init_db()
         self.active_test_id: str | None = None
@@ -63,31 +69,42 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         self.columnconfigure(1, weight=1)
         self.rowconfigure(0, weight=1)
 
-        nav = ttk.Frame(self, padding=8, width=220)
-        nav.grid(row=0, column=0, sticky="ns")
-        nav.grid_propagate(False)
+        nav_wrap = tk.Frame(self, bg=COLORS["sidebar_border"], width=252)
+        nav_wrap.grid(row=0, column=0, sticky="ns")
+        nav_wrap.grid_propagate(False)
 
-        ttk.Label(nav, text="自動採点（PC版）", font=("", 11, "bold")).pack(anchor="w", pady=(0, 8))
+        nav = ttk.Frame(nav_wrap, style="Sidebar.TFrame", padding=(14, 18))
+        nav.pack(fill="both", expand=True, padx=(0, 1))
+
+        ttk.Label(nav, text="自動採点", style="SidebarTitle.TLabel").pack(anchor="w")
+        ttk.Label(nav, text="PC版", style="SidebarMuted.TLabel").pack(anchor="w", pady=(0, 14))
+
         self.step_buttons: dict[int, ttk.Button] = {}
         for step in STEPS:
             sid = step["id"]
             enabled = sid in DESKTOP_READY_STEPS
             label = step["label"] + ("" if enabled else " …準備中")
+            btn_style = "Nav.TButton" if enabled else "NavDisabled.TButton"
             btn = ttk.Button(
                 nav,
                 text=label,
+                style=btn_style,
                 command=lambda s=sid: self._load_step(s) if s in DESKTOP_READY_STEPS else None,
                 state="normal" if enabled else "disabled",
             )
-            btn.pack(fill="x", pady=2)
+            btn.pack(fill="x", pady=3)
             self.step_buttons[sid] = btn
 
-        ttk.Separator(nav, orient="horizontal").pack(fill="x", pady=8)
-        ttk.Button(nav, text="詳細設定…", command=self._open_settings).pack(fill="x", pady=2)
+        ttk.Separator(nav, orient="horizontal").pack(fill="x", pady=14)
+        ttk.Button(nav, text="詳細設定", style="Nav.TButton", command=self._open_settings).pack(
+            fill="x", pady=3
+        )
         self.ocr_status_var = tk.StringVar(value="")
-        ttk.Label(nav, textvariable=self.ocr_status_var, wraplength=200, font=("", 8)).pack(anchor="w")
+        ttk.Label(nav, textvariable=self.ocr_status_var, style="SidebarMuted.TLabel").pack(
+            anchor="w", pady=(12, 0)
+        )
 
-        self.content = ttk.Frame(self, padding=12)
+        self.content = ttk.Frame(self, style="Content.TFrame", padding=(20, 18))
         self.content.grid(row=0, column=1, sticky="nsew")
         self.content.columnconfigure(0, weight=1)
         self.content.rowconfigure(0, weight=1)
@@ -101,7 +118,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
                 ttk.Label(
                     frame,
                     text=f"{step['label']} — このステップは今後のバージョンで追加予定です。",
-                    font=("", 12),
+                    style="Muted.TLabel",
                 ).pack(anchor="w")
 
         self._build_step0()
@@ -114,7 +131,9 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     def _show_frame(self, step_id: int) -> None:
         self.frames[step_id].tkraise()
         for sid, btn in self.step_buttons.items():
-            btn.state(["!pressed"])
+            if sid not in DESKTOP_READY_STEPS:
+                continue
+            btn.configure(style="NavActive.TButton" if sid == step_id else "Nav.TButton")
         self.current_step = step_id
 
     def _require_active_test(self) -> bool:
@@ -165,9 +184,9 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     # --- Step 0 ---
     def _build_step0(self) -> None:
         f = self.frames[0]
-        ttk.Label(f, text="⓪ テスト作成", font=("", 14, "bold")).grid(row=0, column=0, columnspan=2, sticky="w")
+        ttk.Label(f, text="⓪ テスト作成", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
 
-        form = ttk.LabelFrame(f, text="新規テスト", padding=8)
+        form = ttk.LabelFrame(f, text="新規テスト", padding=12)
         form.grid(row=1, column=0, sticky="nw", pady=8)
 
         ttk.Label(form, text="テスト名").grid(row=0, column=0, sticky="w")
@@ -182,23 +201,24 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         self.new_test_datetime = ttk.Entry(form, width=32)
         self.new_test_datetime.grid(row=2, column=1, padx=4, pady=2)
 
-        ttk.Button(form, text="テストを作成", command=self._on_create_test).grid(
-            row=3, column=0, columnspan=2, pady=8
+        ttk.Button(form, text="テストを作成", style="Primary.TButton", command=self._on_create_test).grid(
+            row=3, column=0, columnspan=2, pady=(10, 0)
         )
 
-        list_frame = ttk.LabelFrame(f, text="テスト一覧", padding=8)
-        list_frame.grid(row=1, column=1, sticky="nsew", padx=(12, 0), pady=8)
+        list_frame = ttk.LabelFrame(f, text="テスト一覧", padding=12)
+        list_frame.grid(row=1, column=1, sticky="nsew", padx=(16, 0), pady=8)
         f.columnconfigure(1, weight=1)
         f.rowconfigure(1, weight=1)
 
         self.test_listbox = tk.Listbox(list_frame, height=14)
+        style_listbox(self.test_listbox)
         self.test_listbox.pack(fill="both", expand=True)
         btns = ttk.Frame(list_frame)
         btns.pack(fill="x", pady=4)
         ttk.Button(btns, text="選択", command=self._on_select_test).pack(side="left", padx=2)
         ttk.Button(btns, text="更新", command=self._refresh_test_list).pack(side="left", padx=2)
 
-        self.active_test_label = ttk.Label(f, text="選択中: （なし）")
+        self.active_test_label = ttk.Label(f, text="選択中: （なし）", style="Muted.TLabel")
         self.active_test_label.grid(row=2, column=0, columnspan=2, sticky="w")
 
     def _on_create_test(self) -> None:
@@ -230,163 +250,280 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     # --- Step 1 ---
     def _build_step1(self) -> None:
         f = self.frames[1]
-        ttk.Label(f, text="① 回答欄設定", font=("", 14, "bold")).pack(anchor="w")
+        f.columnconfigure(0, weight=1)
+
+        ttk.Label(f, text="① 回答欄設定（模範解答）", style="Title.TLabel").grid(
+            row=0, column=0, sticky="w"
+        )
         ttk.Label(
             f,
-            text="記述欄の矩形（x, y, width, height）と OCR 言語を設定します。",
-            font=("", 9),
-        ).pack(anchor="w", pady=4)
+            text="画像をドロップするか「画像を開く」で模範解答を読み込み、Canvas 上をドラッグして記述欄を指定します。",
+            style="Muted.TLabel",
+            wraplength=900,
+        ).grid(row=1, column=0, sticky="w", pady=(6, 12))
 
-        cols = ("id", "displayName", "x", "y", "width", "height", "order", "ocrLang")
-        self.fields_tree = ttk.Treeview(f, columns=cols, show="headings", height=12)
-        headers = {
-            "id": "記述欄ID",
-            "displayName": "表示名",
-            "x": "x",
-            "y": "y",
-            "width": "width",
-            "height": "height",
-            "order": "順",
-            "ocrLang": "OCR言語",
+        toolbar = ttk.Frame(f)
+        toolbar.grid(row=2, column=0, sticky="ew", pady=(0, 4))
+        ttk.Label(toolbar, text="用紙方向").pack(side="left")
+        self.step1_orientation_var = tk.StringVar(value="landscape")
+        ttk.Combobox(
+            toolbar,
+            textvariable=self.step1_orientation_var,
+            values=["landscape", "portrait"],
+            state="readonly",
+            width=10,
+        ).pack(side="left", padx=(4, 12))
+        ttk.Label(toolbar, text="二値化").pack(side="left")
+        self.step1_thresh_var = tk.IntVar(value=128)
+        ttk.Scale(
+            toolbar,
+            from_=0,
+            to=255,
+            variable=self.step1_thresh_var,
+            orient="horizontal",
+            length=120,
+        ).pack(side="left", padx=(4, 12))
+        ttk.Button(toolbar, text="画像を開く", command=self._on_open_model_file).pack(
+            side="left", padx=2
+        )
+        ttk.Button(toolbar, text="記述欄を保存", style="Primary.TButton", command=self._on_save_fields).pack(
+            side="left", padx=6
+        )
+        ttk.Button(toolbar, text="選択欄を削除", command=self._on_delete_selected_field).pack(
+            side="left", padx=2
+        )
+        ttk.Button(toolbar, text="再読込", command=self._reload_fields).pack(side="left", padx=2)
+
+        body = ttk.Frame(f)
+        body.grid(row=3, column=0, sticky="nsew")
+        body.columnconfigure(0, weight=1)
+        body.rowconfigure(0, weight=1)
+        f.rowconfigure(3, weight=1)
+
+        self.region_editor = AnswerRegionEditor(body, on_change=self._refresh_field_list_panel)
+        self.region_editor.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
+
+        side = ttk.LabelFrame(body, text="記述欄一覧", padding=6, width=220)
+        side.grid(row=0, column=1, sticky="ns")
+        side.grid_propagate(False)
+        self.field_list_inner = ttk.Frame(side)
+        self.field_list_inner.pack(fill="both", expand=True)
+        self.step1_status_var = tk.StringVar(value="画像をドロップするか「画像を開く」で開始")
+        ttk.Label(f, textvariable=self.step1_status_var, style="Caption.TLabel").grid(
+            row=4, column=0, sticky="w", pady=(8, 0)
+        )
+
+        self._hook_file_drop(f, self._on_drop_files)
+        self._hook_file_drop(self.region_editor, self._on_drop_files)
+        self._hook_file_drop(self.region_editor._canvas, self._on_drop_files)
+
+    def _hook_file_drop(self, widget: tk.Misc, callback) -> None:
+        try:
+            import windnd
+
+            def handler(files: list) -> None:
+                paths = [self._decode_drop_path(f) for f in files]
+                callback(paths)
+
+            windnd.hook_dropfiles(widget, func=handler)
+        except ImportError:
+            pass
+
+    @staticmethod
+    def _decode_drop_path(raw) -> str:
+        if isinstance(raw, bytes):
+            for enc in ("utf-8", "mbcs"):
+                try:
+                    return raw.decode(enc)
+                except UnicodeDecodeError:
+                    continue
+            return raw.decode("utf-8", errors="replace")
+        return str(raw)
+
+    @staticmethod
+    def _is_image_path(path: str) -> bool:
+        return Path(path).suffix.lower() in {
+            ".jpg",
+            ".jpeg",
+            ".png",
+            ".bmp",
+            ".webp",
+            ".tif",
+            ".tiff",
         }
-        for c in cols:
-            self.fields_tree.heading(c, text=headers[c])
-            self.fields_tree.column(c, width=90 if c != "displayName" else 120)
-        self.fields_tree.pack(fill="both", expand=True, pady=8)
 
-        edit = ttk.LabelFrame(f, text="行の追加 / 更新", padding=8)
-        edit.pack(fill="x")
-        self.field_entries: dict[str, ttk.Entry] = {}
-        grid_specs = [
-            ("id", "記述欄ID"),
-            ("displayName", "表示名"),
-            ("x", "x"),
-            ("y", "y"),
-            ("width", "width"),
-            ("height", "height"),
-            ("order", "順"),
-            ("ocrLang", "OCR言語(ja/en)"),
-        ]
-        for i, (key, label) in enumerate(grid_specs):
-            ttk.Label(edit, text=label).grid(row=i // 4, column=(i % 4) * 2, sticky="w", padx=2)
-            ent = ttk.Entry(edit, width=12)
-            ent.grid(row=i // 4, column=(i % 4) * 2 + 1, padx=2, pady=2)
-            self.field_entries[key] = ent
+    def _on_drop_files(self, paths: list[str]) -> None:
+        images = [p for p in paths if self._is_image_path(p)]
+        if not images:
+            messagebox.showwarning("ドロップ", "画像ファイル（jpg/png 等）をドロップしてください。")
+            return
+        self._load_model_from_path(images[0])
 
-        btns = ttk.Frame(edit)
-        btns.grid(row=2, column=0, columnspan=8, pady=6)
-        ttk.Button(btns, text="追加/更新", command=self._on_field_upsert).pack(side="left", padx=4)
-        ttk.Button(btns, text="削除", command=self._on_field_delete).pack(side="left", padx=4)
-        ttk.Button(btns, text="保存", command=self._on_save_fields).pack(side="left", padx=4)
-        ttk.Button(btns, text="再読込", command=self._reload_fields).pack(side="left", padx=4)
+    def _on_open_model_file(self) -> None:
+        path = filedialog.askopenfilename(
+            title="模範解答画像を選択",
+            filetypes=[
+                ("画像", "*.jpg *.jpeg *.png *.bmp *.webp *.tif *.tiff"),
+                ("すべて", "*.*"),
+            ],
+        )
+        if path:
+            self._load_model_from_path(path)
 
-        self.fields_tree.bind("<<TreeviewSelect>>", self._on_field_select)
+    def _load_model_from_path(self, path: str) -> None:
+        if not self._require_active_test():
+            return
+        self.step1_status_var.set("読込・補正中…")
+
+        orientation = self.step1_orientation_var.get() or "landscape"
+        thresh = int(self.step1_thresh_var.get() or 128)
+        test_id = self.active_test_id
+        existing_fields = list(self._field_rows)
+        ref_w = ref_h = 0
+        try:
+            info = get_test_info(test_id)
+            ref_w = int(info.get("refWidth") or 0)
+            ref_h = int(info.get("refHeight") or 0)
+        except Exception:
+            pass
+
+        def task() -> None:
+            try:
+                warped = warp_image_from_path(path, orientation, thresh)  # type: ignore[arg-type]
+                h, w = warped.shape[:2]
+                keep_fields = (
+                    existing_fields if ref_w == w and ref_h == h and existing_fields else []
+                )
+                save_model_answer_image(test_id, warped)
+                self.after(
+                    0, lambda w=warped, ef=keep_fields: self._apply_warped_model(w, ef, None)
+                )
+            except Exception as e:
+                self.after(
+                    0, lambda err=e, ef=existing_fields: self._apply_warped_model(None, ef, err)
+                )
+
+        threading.Thread(target=task, daemon=True).start()
+
+    def _apply_warped_model(
+        self,
+        warped,
+        existing_fields: list[dict[str, Any]],
+        error: Exception | None,
+    ) -> None:
+        if error:
+            self.step1_status_var.set("")
+            messagebox.showerror("読込エラー", str(error))
+            return
+        self.region_editor.set_image(warped)
+        if existing_fields:
+            self.region_editor.set_regions(existing_fields)
+            self._field_rows = self.region_editor.get_regions()
+        else:
+            self._field_rows = []
+        h, w = warped.shape[:2]
+        self.step1_status_var.set(f"模範解答を読み込みました（{w}×{h}）")
+        self._refresh_field_list_panel()
 
     def _reload_fields(self) -> None:
         if not self._require_active_test():
             return
         self._field_rows = get_answer_fields(self.active_test_id)
-        self.fields_tree.delete(*self.fields_tree.get_children())
-        for row in self._field_rows:
-            self.fields_tree.insert(
-                "",
-                tk.END,
-                values=(
-                    row["id"],
-                    row["displayName"],
-                    row["x"],
-                    row["y"],
-                    row["width"],
-                    row["height"],
-                    row["order"],
-                    row["ocrLang"],
-                ),
+        info = get_test_info(self.active_test_id)
+        model_path = info.get("modelAnswerPath") or ""
+        if model_path and Path(model_path).exists():
+            try:
+                self.region_editor.load_image_from_path(model_path)
+                self.region_editor.set_regions(self._field_rows)
+                self._field_rows = self.region_editor.get_regions()
+                self.step1_status_var.set(f"保存済み模範解答を表示（{info.get('refWidth')}×{info.get('refHeight')}）")
+            except Exception as e:
+                self.step1_status_var.set(f"模範解答の表示に失敗: {e}")
+        else:
+            self.step1_status_var.set("模範解答未登録 — 画像をドロップまたは開いてください")
+        self._refresh_field_list_panel()
+
+    def _refresh_field_list_panel(self) -> None:
+        for child in self.field_list_inner.winfo_children():
+            child.destroy()
+        self._field_rows = self.region_editor.get_regions()
+        if not self._field_rows:
+            ttk.Label(
+                self.field_list_inner,
+                text="Canvas 上をドラッグして\n記述欄を追加",
+                style="Muted.TLabel",
+                justify="center",
+            ).pack(pady=16)
+            return
+        for idx, row in enumerate(self._field_rows):
+            item = ttk.Frame(self.field_list_inner, padding=4)
+            item.pack(fill="x", pady=2)
+            ttk.Label(
+                item,
+                text=f"{row['displayName']}\n{row['width']}×{row['height']}",
+                style="Body.TLabel",
+            ).pack(anchor="w")
+            lang_row = ttk.Frame(item)
+            lang_row.pack(anchor="w", pady=(4, 0))
+            ttk.Label(lang_row, text="OCR", style="Caption.TLabel").pack(side="left")
+            lang_var = tk.StringVar(value=row.get("ocrLang") or "en")
+
+            def make_lang_handler(i: int, var: tk.StringVar):
+                def _on_change(_event=None) -> None:
+                    self.region_editor.set_region_ocr_lang(i, var.get())
+                    self._field_rows = self.region_editor.get_regions()
+
+                return _on_change
+
+            combo = ttk.Combobox(
+                lang_row,
+                textvariable=lang_var,
+                values=["ja", "en"],
+                state="readonly",
+                width=6,
             )
+            combo.pack(side="left", padx=4)
+            combo.bind("<<ComboboxSelected>>", make_lang_handler(idx, lang_var))
+            ttk.Button(
+                item,
+                text="選択",
+                width=6,
+                command=lambda i=idx: self._select_field_from_list(i),
+            ).pack(anchor="e", pady=(2, 0))
 
-    def _on_field_select(self, _event=None) -> None:
-        sel = self.fields_tree.selection()
-        if not sel:
-            return
-        vals = self.fields_tree.item(sel[0], "values")
-        keys = ["id", "displayName", "x", "y", "width", "height", "order", "ocrLang"]
-        for key, val in zip(keys, vals):
-            ent = self.field_entries[key]
-            ent.delete(0, tk.END)
-            ent.insert(0, val)
+    def _select_field_from_list(self, index: int) -> None:
+        self.region_editor.select_region(index)
+        self._refresh_field_list_panel()
 
-    def _on_field_upsert(self) -> None:
-        data = {k: e.get().strip() for k, e in self.field_entries.items()}
-        if not data["id"]:
-            messagebox.showerror("入力エラー", "記述欄IDが必要です。")
-            return
-        try:
-            row = {
-                "id": data["id"],
-                "displayName": data["displayName"] or data["id"],
-                "x": int(data["x"] or 0),
-                "y": int(data["y"] or 0),
-                "width": int(data["width"] or 0),
-                "height": int(data["height"] or 0),
-                "order": int(data["order"] or len(self._field_rows) + 1),
-                "ocrLang": data["ocrLang"] or "en",
-            }
-        except ValueError:
-            messagebox.showerror("入力エラー", "数値項目（x, y, width, height, 順）を確認してください。")
-            return
-
-        replaced = False
-        for i, existing in enumerate(self._field_rows):
-            if existing["id"] == row["id"]:
-                self._field_rows[i] = row
-                replaced = True
-                break
-        if not replaced:
-            self._field_rows.append(row)
-        self._field_rows.sort(key=lambda r: r["order"])
-        self._reload_fields_from_memory()
-
-    def _reload_fields_from_memory(self) -> None:
-        self.fields_tree.delete(*self.fields_tree.get_children())
-        for row in self._field_rows:
-            self.fields_tree.insert(
-                "",
-                tk.END,
-                values=(
-                    row["id"],
-                    row["displayName"],
-                    row["x"],
-                    row["y"],
-                    row["width"],
-                    row["height"],
-                    row["order"],
-                    row["ocrLang"],
-                ),
-            )
-
-    def _on_field_delete(self) -> None:
-        sel = self.fields_tree.selection()
-        if not sel:
-            return
-        fid = self.fields_tree.item(sel[0], "values")[0]
-        self._field_rows = [r for r in self._field_rows if r["id"] != fid]
-        self._reload_fields_from_memory()
+    def _on_delete_selected_field(self) -> None:
+        self.region_editor.delete_selected()
+        self._field_rows = self.region_editor.get_regions()
+        self._refresh_field_list_panel()
 
     def _on_save_fields(self) -> None:
         if not self._require_active_test():
             return
+        self._field_rows = self.region_editor.get_regions()
         if not self._field_rows:
-            messagebox.showerror("保存エラー", "記述欄がありません。")
+            messagebox.showerror("保存エラー", "記述欄がありません。Canvas 上で矩形を指定してください。")
+            return
+        if not self.region_editor.has_image():
+            messagebox.showerror("保存エラー", "模範解答画像が読み込まれていません。")
             return
         try:
+            warped = self.region_editor.get_image_bgr()
+            if warped is not None:
+                save_model_answer_image(self.active_test_id, warped)
             save_answer_fields(self.active_test_id, self._field_rows)
-            messagebox.showinfo("保存完了", "記述欄を保存しました。")
+            messagebox.showinfo("保存完了", "模範解答と記述欄を保存しました。")
+            self.step1_status_var.set("記述欄を保存しました")
         except Exception as e:
             messagebox.showerror("エラー", str(e))
 
     # --- Step 2 ---
     def _build_step2(self) -> None:
         f = self.frames[2]
-        ttk.Label(f, text="② 配点決定", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(f, text="② 配点決定", style="Title.TLabel").pack(anchor="w")
         self.points_tree = ttk.Treeview(f, columns=("fieldId", "displayName", "points"), show="headings", height=12)
         for c, label in [("fieldId", "記述欄ID"), ("displayName", "表示名"), ("points", "配点")]:
             self.points_tree.heading(c, text=label)
@@ -442,12 +579,12 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     # --- Step 3 ---
     def _build_step3(self) -> None:
         f = self.frames[3]
-        ttk.Label(f, text="③ テキスト化（OCRバッチ）", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(f, text="③ テキスト化（OCRバッチ）", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
             text="生徒解答フォルダ内の画像を自動補正→OCR→SQLite に一括保存します。",
-            font=("", 9),
-        ).pack(anchor="w", pady=4)
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(6, 8))
 
         folder_row = ttk.Frame(f)
         folder_row.pack(fill="x", pady=4)
@@ -457,7 +594,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         ttk.Button(folder_row, text="参照…", command=self._pick_inbox).pack(side="left")
 
         self.queue_stats_var = tk.StringVar(value="")
-        ttk.Label(f, textvariable=self.queue_stats_var, font=("", 9)).pack(anchor="w", pady=4)
+        ttk.Label(f, textvariable=self.queue_stats_var, style="Muted.TLabel").pack(anchor="w", pady=4)
 
         prog = ttk.Frame(f)
         prog.pack(fill="x", pady=4)
@@ -468,12 +605,13 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
         btns = ttk.Frame(f)
         btns.pack(fill="x", pady=4)
-        self.ocr_run_btn = ttk.Button(btns, text="未処理のみ OCR", command=self._on_run_ocr)
+        self.ocr_run_btn = ttk.Button(btns, text="未処理のみ OCR", style="Primary.TButton", command=self._on_run_ocr)
         self.ocr_run_btn.pack(side="left", padx=2)
         ttk.Button(btns, text="キュー更新", command=self._reload_ocr_panel).pack(side="left", padx=2)
         ttk.Button(btns, text="Excel エクスポート", command=self._on_export_excel).pack(side="left", padx=2)
 
         self.ocr_log = tk.Text(f, height=16, wrap="word")
+        style_text(self.ocr_log)
         self.ocr_log.pack(fill="both", expand=True, pady=8)
 
     def _pick_inbox(self) -> None:
@@ -591,12 +729,12 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
 
-        ttk.Label(scroll, text="④ 採点基準の設定", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(scroll, text="④ 採点基準の設定", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             scroll,
             text="OCR置換・みなし採点で解答を整えてから、判定・得点の基準を設定します。",
-            font=("", 9),
-        ).pack(anchor="w", pady=(0, 4))
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(6, 8))
 
         toolbar = ttk.Frame(scroll)
         toolbar.pack(fill="x", pady=4)
@@ -611,14 +749,16 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
             side="left", padx=2
         )
         ttk.Button(toolbar, text="AI原案", command=self._on_gemini_criteria).pack(side="left", padx=2)
-        ttk.Button(toolbar, text="基準を保存", command=self._on_save_criteria).pack(side="left", padx=2)
+        ttk.Button(toolbar, text="基準を保存", style="Primary.TButton", command=self._on_save_criteria).pack(
+            side="left", padx=6
+        )
 
         ocr_frame = ttk.LabelFrame(scroll, text="OCRテキスト置換", padding=8)
         ocr_frame.pack(fill="x", pady=6)
         ttk.Label(
             ocr_frame,
             text="置換ルール保存はルールのみ。「置換を適用して再集約」で採点結果のテキスト列を書き換えます。",
-            font=("", 8),
+            style="Caption.TLabel",
             wraplength=900,
         ).pack(anchor="w")
 
@@ -651,7 +791,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         ttk.Label(
             deemed_frame,
             text="正答例を指定し、表の「みなし」「不正解」列をダブルクリックで選択 → 適用で正答例に統一します。",
-            font=("", 8),
+            style="Caption.TLabel",
             wraplength=900,
         ).pack(anchor="w")
         deemed_row = ttk.Frame(deemed_frame)
@@ -1049,17 +1189,19 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     # --- Step 5 ---
     def _build_step5(self) -> None:
         f = self.frames[5]
-        ttk.Label(f, text="⑤ 採点の実施", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(f, text="⑤ 採点の実施", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
             text="保存済みの採点基準に従い、全受験者の判定・得点を一括反映し、考査総括を生成します。",
-            font=("", 9),
-        ).pack(anchor="w", pady=4)
+            style="Muted.TLabel",
+        ).pack(anchor="w", pady=(6, 8))
 
-        ttk.Button(f, text="一括採点を実行", command=self._on_run_grading).pack(anchor="w", pady=8)
+        ttk.Button(f, text="一括採点を実行", style="Primary.TButton", command=self._on_run_grading).pack(
+            anchor="w", pady=8
+        )
 
         self.grading_status_var = tk.StringVar(value="")
-        ttk.Label(f, textvariable=self.grading_status_var, font=("", 9)).pack(anchor="w")
+        ttk.Label(f, textvariable=self.grading_status_var, style="Muted.TLabel").pack(anchor="w")
 
         summary_frame = ttk.LabelFrame(f, text="考査総括", padding=8)
         summary_frame.pack(fill="both", expand=True, pady=8)

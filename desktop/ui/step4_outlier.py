@@ -10,6 +10,7 @@ from typing import Any
 from models.criteria_repo import get_answer_rows_for_pattern, get_outlier_answer_groups
 from models.test_repo import get_answer_fields
 from services.crop_preview import load_crops_for_rows
+from ui.theme import COLORS, FONTS
 
 
 class Step4OutlierMixin:
@@ -122,7 +123,7 @@ class Step4OutlierMixin:
         ttk.Label(
             outlier_frame,
             text="「みなし」「不正解」列はダブルクリックで切替。画像タイルクリックでもみなしを切替えられます。",
-            font=("", 8),
+            style="Caption.TLabel",
             wraplength=900,
         ).pack(anchor="w")
 
@@ -189,7 +190,10 @@ class Step4OutlierMixin:
 
         crop_outer = ttk.Frame(outlier_frame)
         crop_outer.pack(fill="both", expand=True, pady=4)
-        self.crop_canvas = tk.Canvas(crop_outer, height=280, bg="#f3f4f6", highlightthickness=1)
+        self.crop_canvas = tk.Canvas(
+            crop_outer, height=280, bg=COLORS["sidebar"], highlightthickness=1,
+            highlightbackground=COLORS["border"], bd=0,
+        )
         crop_scroll_y = ttk.Scrollbar(crop_outer, orient="vertical", command=self.crop_canvas.yview)
         crop_scroll_x = ttk.Scrollbar(crop_outer, orient="horizontal", command=self.crop_canvas.xview)
         self.crop_inner = ttk.Frame(self.crop_canvas)
@@ -341,7 +345,7 @@ class Step4OutlierMixin:
 
         for widget in self.crop_inner.winfo_children():
             widget.destroy()
-        ttk.Label(self.crop_inner, text=f"画像を読み込み中…（{len(rows)}枚）").pack(pady=8)
+        ttk.Label(self.crop_inner, text=f"画像を読み込み中…（{len(rows)}枚）", style="Muted.TLabel").pack(pady=8)
 
         def worker() -> None:
             results = load_crops_for_rows(rows, field)
@@ -364,7 +368,7 @@ class Step4OutlierMixin:
             ttk.Label(
                 self.crop_inner,
                 text="「選択を画像表示」または外れ値一覧の「1枚」で回答欄画像を表示します",
-                font=("", 9),
+                style="Muted.TLabel",
             ).grid(row=0, column=0, padx=8, pady=8)
             return
 
@@ -379,12 +383,13 @@ class Step4OutlierMixin:
         for idx, item in enumerate(self._crop_grid_results):
             r, c = divmod(idx, cols)
             if not item.get("ok"):
-                err_frame = tk.Frame(self.crop_inner, bd=1, relief="solid", bg="#fef2f2")
+                err_frame = tk.Frame(self.crop_inner, bd=1, relief="solid", bg=COLORS["danger_soft"])
                 tk.Label(
                     err_frame,
                     text=f"{item['row'].get('fileName', '—')}\n{item.get('error', '読込失敗')}",
-                    bg="#fef2f2",
-                    font=("", 8),
+                    bg=COLORS["danger_soft"],
+                    fg=COLORS["danger"],
+                    font=FONTS["small"],
                     wraplength=int(base_w * zoom),
                 ).pack(padx=4, pady=4)
                 err_frame.grid(row=r, column=c, padx=4, pady=4, sticky="nw")
@@ -401,8 +406,8 @@ class Step4OutlierMixin:
             self._crop_photo_refs.append(photo)
 
             deemed = self._is_deemed_checked(fid, ans)
-            bg = "#eff6ff" if deemed else "#ffffff"
-            border = "#2563eb" if deemed else "#d1d5db"
+            bg = COLORS["accent_soft"] if deemed else COLORS["surface"]
+            border = COLORS["accent"] if deemed else COLORS["border"]
             tile = tk.Frame(
                 self.crop_inner,
                 bd=2,
@@ -421,21 +426,23 @@ class Step4OutlierMixin:
             tk.Label(
                 tile,
                 text=f"ID: {row.get('studentId') or '-'}",
-                font=("", 8, "bold"),
+                font=(FONTS["body"][0], 8, "bold"),
                 bg=bg,
+                fg=COLORS["text"],
             ).pack(anchor="w", padx=2)
             tk.Label(
                 tile,
                 text=str(row.get("fileName") or "")[:28],
-                font=("", 7),
+                font=FONTS["caption"],
                 bg=bg,
+                fg=COLORS["text_secondary"],
                 wraplength=w,
             ).pack(anchor="w", padx=2)
             tk.Label(
                 tile,
                 text=ans[:40],
-                font=("Consolas", 7),
-                fg="#6b21a8",
+                font=FONTS["mono"],
+                fg=COLORS["accent"],
                 bg=bg,
                 wraplength=w,
             ).pack(anchor="w", padx=2, pady=(0, 2))

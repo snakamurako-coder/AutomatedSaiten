@@ -10,14 +10,16 @@ from typing import Callable
 from config import CONFIG_PATH, load_config, save_config
 from services.gemini_rubric import test_gemini_api_key
 from services.ocr import test_vision_api_key
+from ui.theme import apply_theme
 
 
 class SettingsDialog(tk.Toplevel):
     def __init__(self, parent: tk.Misc, on_saved: Callable[[], None] | None = None) -> None:
         super().__init__(parent)
         self.title("詳細設定")
-        self.geometry("560x520")
-        self.minsize(480, 420)
+        self.geometry("580x540")
+        self.minsize(500, 440)
+        apply_theme(self)
         self.transient(parent)
         self.grab_set()
 
@@ -52,13 +54,13 @@ class SettingsDialog(tk.Toplevel):
         canvas.grid(row=0, column=0, sticky="nsew")
         scroll.grid(row=0, column=1, sticky="ns")
 
-        ttk.Label(body, text="詳細設定", font=("", 14, "bold")).pack(anchor="w")
+        ttk.Label(body, text="詳細設定", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             body,
             text="API キーは desktop/config.json に保存されます（Git には含めないでください）。",
-            font=("", 9),
+            style="Muted.TLabel",
             wraplength=500,
-        ).pack(anchor="w", pady=(4, 12))
+        ).pack(anchor="w", pady=(6, 14))
 
         ocr_frame = ttk.LabelFrame(body, text="OCR", padding=8)
         ocr_frame.pack(fill="x", pady=(0, 8))
@@ -89,7 +91,7 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(
             ocr_frame,
             text="未指定の場合は PATH 上の tesseract を使用します。",
-            font=("", 8),
+            style="Caption.TLabel",
         ).grid(row=2, column=1, sticky="w")
 
         api_frame = ttk.LabelFrame(body, text="API キー", padding=8)
@@ -115,7 +117,7 @@ class SettingsDialog(tk.Toplevel):
         ttk.Label(
             api_frame,
             text="Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。",
-            font=("", 8),
+            style="Caption.TLabel",
         ).grid(row=2, column=1, sticky="w")
 
         misc_frame = ttk.LabelFrame(body, text="その他", padding=8)
@@ -129,13 +131,15 @@ class SettingsDialog(tk.Toplevel):
             width=16,
         ).grid(row=0, column=1, sticky="w", pady=4)
 
-        ttk.Label(body, textvariable=self.status_var, font=("", 8), wraplength=500).pack(
-            anchor="w", pady=(4, 8)
+        ttk.Label(body, textvariable=self.status_var, style="Caption.TLabel", wraplength=500).pack(
+            anchor="w", pady=(6, 8)
         )
 
         btn_row = ttk.Frame(body)
-        btn_row.pack(fill="x", pady=(8, 0))
-        ttk.Button(btn_row, text="保存", command=self._on_save).pack(side="right", padx=4)
+        btn_row.pack(fill="x", pady=(10, 0))
+        ttk.Button(btn_row, text="保存", style="Primary.TButton", command=self._on_save).pack(
+            side="right", padx=4
+        )
         ttk.Button(btn_row, text="キャンセル", command=self._on_cancel).pack(side="right")
 
     def _browse_tesseract(self) -> None:

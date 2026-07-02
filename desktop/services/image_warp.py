@@ -97,6 +97,18 @@ def warp_image_file(
     orientation: Orientation = "landscape",
     thresh_val: int = 128,
 ) -> Path:
+    warped = warp_image_from_path(source_path, orientation, thresh_val)
+    out = Path(output_path)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(out), warped, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
+    return out
+
+
+def warp_image_from_path(
+    source_path: str | Path,
+    orientation: Orientation = "landscape",
+    thresh_val: int = 128,
+) -> np.ndarray:
     image = cv2.imread(str(source_path))
     if image is None:
         raise ValueError(f"画像を読み込めません: {source_path}")
@@ -105,11 +117,20 @@ def warp_image_file(
     except ValueError:
         h, w = image.shape[:2]
         corners = default_paper_corners(w, h)
-    warped = warp_from_corners(image, corners, orientation)
-    out = Path(output_path)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    cv2.imwrite(str(out), warped, [int(cv2.IMWRITE_JPEG_QUALITY), 85])
-    return out
+    return warp_from_corners(image, corners, orientation)
+
+
+def warp_image_from_array(
+    image_bgr: np.ndarray,
+    orientation: Orientation = "landscape",
+    thresh_val: int = 128,
+) -> np.ndarray:
+    try:
+        corners = detect_paper_corners(image_bgr, thresh_val)
+    except ValueError:
+        h, w = image_bgr.shape[:2]
+        corners = default_paper_corners(w, h)
+    return warp_from_corners(image_bgr, corners, orientation)
 
 
 def crop_region(image_bgr: np.ndarray, x: int, y: int, w: int, h: int) -> np.ndarray:
