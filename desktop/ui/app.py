@@ -301,7 +301,11 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         body.rowconfigure(0, weight=1)
         f.rowconfigure(3, weight=1)
 
-        self.region_editor = AnswerRegionEditor(body, on_change=self._refresh_field_list_panel)
+        self.region_editor = AnswerRegionEditor(
+            body,
+            on_change=self._refresh_field_list_panel,
+            on_status=lambda msg: self.step1_status_var.set(msg),
+        )
         self.region_editor.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
 
         side = ttk.LabelFrame(body, text="記述欄一覧", padding=6, width=220)
@@ -315,8 +319,6 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         )
 
         self._hook_file_drop(f, self._on_drop_files)
-        self._hook_file_drop(self.region_editor, self._on_drop_files)
-        self._hook_file_drop(self.region_editor._canvas, self._on_drop_files)
 
     def _hook_file_drop(self, widget: tk.Misc, callback) -> None:
         try:
@@ -418,7 +420,8 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         else:
             self._field_rows = []
         h, w = warped.shape[:2]
-        self.step1_status_var.set(f"模範解答を読み込みました（{w}×{h}）")
+        self.step1_status_var.set(f"模範解答を読み込みました（{w}×{h}）— Canvas 上をドラッグして記述欄を追加")
+        self.region_editor._canvas.focus_set()
         self._refresh_field_list_panel()
 
     def _reload_fields(self) -> None:

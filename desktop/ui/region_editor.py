@@ -26,11 +26,13 @@ class AnswerRegionEditor(tk.Frame):
         self,
         parent: tk.Misc,
         on_change: Callable[[], None] | None = None,
+        on_status: Callable[[str], None] | None = None,
         **kwargs: Any,
     ) -> None:
         super().__init__(parent, **kwargs)
         self.configure(bg=COLORS["bg"])
         self._on_change = on_change
+        self._on_status = on_status
         self.regions: list[dict[str, Any]] = []
         self.selected_idx = -1
         self._drag_state: dict[str, Any] | None = None
@@ -64,6 +66,9 @@ class AnswerRegionEditor(tk.Frame):
         self._canvas.bind("<B1-Motion>", self._on_mouse_move)
         self._canvas.bind("<ButtonRelease-1>", self._on_mouse_up)
         self._canvas.bind("<Motion>", self._on_hover)
+        self._canvas.bind("<Enter>", lambda _e: self._canvas.focus_set())
+        self._canvas.configure(takefocus=True, width=self.MAX_DISPLAY_W, height=420)
+        self.after_idle(self._draw_placeholder)
 
     def has_image(self) -> bool:
         return self._image_bgr is not None
@@ -79,6 +84,28 @@ class AnswerRegionEditor(tk.Frame):
         self._scale = min(1.0, scale_w, scale_h)
         self._refresh_photo()
         self.redraw()
+        self._canvas.focus_set()
+
+    def _draw_placeholder(self) -> None:
+        if self._image_bgr is not None:
+            return
+        self._canvas.delete("all")
+        w = max(int(self._canvas.winfo_width()), 320)
+        h = max(int(self._canvas.winfo_height()), 240)
+        self._canvas.configure(scrollregion=(0, 0, w, h))
+        self._canvas.create_text(
+            w / 2,
+            h / 2,
+            text="PDF / JPG / PNG をドロップ\nまたは「画像を開く」",
+            fill=COLORS["text_muted"],
+            font=FONTS.get("body", ("Segoe UI", 10)),
+            justify="center",
+            tags="placeholder",
+        )
+
+    def _status(self, message: str) -> None:
+        if self._on_status:
+            self._on_status(message)
 
     def load_image_from_path(self, path: str) -> None:
         self.set_image(load_image_bgr(path))
@@ -198,6 +225,7 @@ class AnswerRegionEditor(tk.Frame):
 
     def _on_mouse_down(self, event: tk.Event) -> None:
         if self._image_bgr is None:
+            self._status("先に PDF / JPG / PNG の模範解答を読み込んでください")
             return
         px, py = self._to_image_coords(event)
         if self.selected_idx >= 0:
