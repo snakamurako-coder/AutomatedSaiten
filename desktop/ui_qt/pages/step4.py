@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
