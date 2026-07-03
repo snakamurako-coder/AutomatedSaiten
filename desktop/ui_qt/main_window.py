@@ -46,23 +46,24 @@ class MainWindow(QMainWindow):
 
         central = QWidget()
         self.setCentralWidget(central)
-        root = QHBoxLayout(central)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
+        outer = QVBoxLayout(central)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        from ui_qt.hover_sidebar import HoverSidebar
-
-        sidebar_inner = self._build_sidebar_inner()
-        self.sidebar = HoverSidebar(sidebar_inner)
-        root.addWidget(self.sidebar)
+        from ui_qt.hover_sidebar import HoverSidebar, OverlayCentral
 
         content_wrap = QFrame()
         content_wrap.setObjectName("ContentArea")
         content_layout = QVBoxLayout(content_wrap)
-        content_layout.setContentsMargins(20, 18, 20, 14)
+        # 左端グラバー分の余白（GAS の main-workspace padding-left 相当）
+        content_layout.setContentsMargins(36, 18, 20, 14)
         self.stack = QStackedWidget()
         content_layout.addWidget(self.stack)
-        root.addWidget(content_wrap, 1)
+
+        sidebar_inner = self._build_sidebar_inner()
+        self.sidebar = HoverSidebar(sidebar_inner)
+        shell = OverlayCentral(content_wrap, self.sidebar)
+        outer.addWidget(shell)
 
         self.pages: dict[int, QWidget] = {}
         page_classes = {
