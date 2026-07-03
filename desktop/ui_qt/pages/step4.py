@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QTableWidget,
@@ -43,6 +44,7 @@ from services.crop_preview import load_crops_for_rows
 from services.gemini_rubric import generate_rubric_with_gemini
 from ui_qt import helpers as h
 from ui_qt.helpers import pil_to_qpixmap
+from ui_qt.layout_helpers import CollapsibleSection, main_table_frame, make_expanding
 from ui_qt.style import COLORS
 
 _CHECK = "☑"
@@ -62,15 +64,9 @@ class Step4Page(QWidget):
         self._outlier_flat_rows: list[dict[str, Any]] = []
         self._crop_grid_results: list[dict[str, Any]] = []
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        outer.addWidget(scroll)
-        body = QWidget()
-        scroll.setWidget(body)
-        root = QVBoxLayout(body)
-        root.setContentsMargins(0, 0, 8, 0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
         root.addWidget(h.title_label("④ 採点基準の設定"))
@@ -90,20 +86,22 @@ class Step4Page(QWidget):
         toolbar.addStretch()
         root.addLayout(toolbar)
 
-        root.addWidget(self._build_ocr_replace_box())
+        root.addWidget(self._build_ocr_replace_section())
         root.addWidget(self._build_deemed_box())
-        root.addWidget(self._build_criteria_table())
+        root.addWidget(main_table_frame("", self._build_criteria_table()), 1)
         root.addWidget(self._build_edit_box())
-        root.addWidget(self._build_outlier_box())
+        root.addWidget(self._build_outlier_box(), 2)
 
     # ==================== UI 構築 ====================
 
-    def _build_ocr_replace_box(self) -> QGroupBox:
-        box = QGroupBox("OCRテキスト置換")
-        lay = QVBoxLayout(box)
+    def _build_ocr_replace_section(self) -> CollapsibleSection:
+        body = QFrame()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
         lay.addWidget(
             h.caption_label(
-                "置換ルール保存はルールのみ。「置換を適用して再集約」で採点結果のテキスト列を書き換えます。"
+                "「置換ルールを保存」はルールのみ。「置換を適用して再集約」で採点結果のテキスト列を書き換えます。"
             )
         )
         self.ocr_table = QTableWidget(0, 3)
@@ -112,7 +110,7 @@ class Step4Page(QWidget):
         self.ocr_table.setColumnWidth(1, 240)
         self.ocr_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.ocr_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.ocr_table.setFixedHeight(140)
+        self.ocr_table.setMaximumHeight(160)
         lay.addWidget(self.ocr_table)
 
         edit_row = QHBoxLayout()
@@ -130,10 +128,18 @@ class Step4Page(QWidget):
         edit_row.addWidget(h.button("置換を適用して再集約", self._on_apply_ocr, variant="success"))
         edit_row.addStretch()
         lay.addLayout(edit_row)
-        return box
+        return CollapsibleSection(
+            "OCRテキスト置換",
+            body,
+            collapsed=True,
+            tint="#fffbeb",
+        )
 
     def _build_deemed_box(self) -> QGroupBox:
         box = QGroupBox("みなし採点")
+        box.setStyleSheet(
+            f"QGroupBox {{ background: #eef2ff; border: 1px solid {COLORS['border']}; border-radius: 8px; }}"
+        )
         lay = QVBoxLayout(box)
         lay.addWidget(
             h.caption_label(
@@ -160,7 +166,7 @@ class Step4Page(QWidget):
         self.criteria_table.horizontalHeader().setStretchLastSection(True)
         self.criteria_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.criteria_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.criteria_table.setMinimumHeight(240)
+        make_expanding(self.criteria_table)
         self.criteria_table.currentCellChanged.connect(lambda *_: self._on_criteria_select())
         self.criteria_table.cellDoubleClicked.connect(self._on_criteria_double_click)
         return self.criteria_table
@@ -184,6 +190,9 @@ class Step4Page(QWidget):
 
     def _build_outlier_box(self) -> QGroupBox:
         box = QGroupBox("外れ値・少数派解答の確認（回答欄画像）")
+        box.setStyleSheet(
+            f"QGroupBox {{ background: #f8fafc; border: 1px solid {COLORS['border']}; border-radius: 8px; }}"
+        )
         lay = QVBoxLayout(box)
         lay.addWidget(
             h.caption_label(
@@ -229,13 +238,13 @@ class Step4Page(QWidget):
             self.outlier_table.setColumnWidth(i, w)
         self.outlier_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.outlier_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.outlier_table.setFixedHeight(190)
+        self.outlier_table.setMaximumHeight(144)
         self.outlier_table.cellDoubleClicked.connect(self._on_outlier_double_click)
         lay.addWidget(self.outlier_table)
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
-        self.crop_scroll.setMinimumHeight(320)
+        make_expanding(self.crop_scroll)
         self.crop_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['sidebar']}; }}"
@@ -246,7 +255,8 @@ class Step4Page(QWidget):
         self.crop_grid.setContentsMargins(8, 8, 8, 8)
         self.crop_grid.setSpacing(8)
         self.crop_scroll.setWidget(self.crop_panel)
-        lay.addWidget(self.crop_scroll)
+        lay.addWidget(self.crop_scroll, 1)
+        make_expanding(box)
         return box
 
     # ==================== 状態ヘルパー ====================

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QVBoxLayout,
     QWidget,
@@ -23,6 +24,7 @@ from models.roster_repo import update_student_identity
 from services.crop_preview import load_crops_for_rows
 from ui_qt import helpers as h
 from ui_qt.helpers import pil_to_qpixmap
+from ui_qt.layout_helpers import make_expanding
 from ui_qt.style import COLORS
 
 
@@ -33,6 +35,7 @@ class Step9Page(QWidget):
         self._crop_results: list[dict[str, Any]] = []
         self._edits: dict[int, QLineEdit] = {}
 
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
@@ -68,6 +71,7 @@ class Step9Page(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        make_expanding(scroll)
         scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['sidebar']}; }}"

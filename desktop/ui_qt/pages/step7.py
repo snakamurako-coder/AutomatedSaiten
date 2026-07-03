@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPlainTextEdit,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -38,6 +39,7 @@ from models.roster_repo import (
     save_selected_roster_name,
 )
 from ui_qt import helpers as h
+from ui_qt.layout_helpers import make_expanding
 
 
 class RosterImportDialog(QDialog):
@@ -128,14 +130,14 @@ class Step7Page(QWidget):
         self._roster_rows: list[dict[str, Any]] = []
         self._absent_keys: set[str] = set()
 
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
         root.addWidget(h.title_label("⑦ 合計・外部得点"))
 
-        root.addWidget(self._build_roster_box())
-        root.addWidget(self._build_score_box())
-        root.addStretch()
+        root.addWidget(self._build_roster_box(), 2)
+        root.addWidget(self._build_score_box(), 1)
 
     # ---------- 名簿割当 ----------
 
@@ -167,10 +169,11 @@ class Step7Page(QWidget):
         for i, w in enumerate([56, 60, 60, 110, 200]):
             self.roster_table.setColumnWidth(i, w)
         self.roster_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.roster_table.setFixedHeight(220)
+        make_expanding(self.roster_table)
         self.roster_table.cellClicked.connect(self._on_roster_cell_clicked)
         self.roster_table.setVisible(False)
-        lay.addWidget(self.roster_table)
+        lay.addWidget(self.roster_table, 1)
+        make_expanding(box)
         return box
 
     def _build_score_box(self) -> QGroupBox:

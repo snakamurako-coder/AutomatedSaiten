@@ -89,6 +89,9 @@ QPushButton[variant="nav"]:disabled {{
 #ContentArea {{
     background: {COLORS["surface"]};
 }}
+#MainTableFrame {{
+    background: transparent;
+}}
 QLabel[role="title"] {{
     font-size: 18px;
     font-weight: 700;

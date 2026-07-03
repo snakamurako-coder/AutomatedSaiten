@@ -12,7 +12,7 @@ from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
     QFileDialog,
-    QGroupBox,
+    QFrame,
     QHBoxLayout,
     QHeaderView,
     QLabel,
@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
-    QSplitter,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -44,6 +44,7 @@ from services.batch_processor import STAGE_LABELS, run_batch_ocr
 from services.work_queue import build_file_inventory
 from ui_qt import helpers as h
 from ui_qt.helpers import ProgressBridge
+from ui_qt.layout_helpers import CollapsibleSection, main_table_frame, make_expanding
 from ui_qt.style import COLORS
 
 _COL_CHECK = 0
@@ -68,6 +69,7 @@ class Step3Page(QWidget):
         self._checkboxes: list[QCheckBox | None] = []
         self._loaded_test_id: str | None = None
         self._scanned = False
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -133,10 +135,6 @@ class Step3Page(QWidget):
         btns.addStretch()
         root.addLayout(btns)
 
-        splitter = QSplitter(Qt.Vertical)
-
-        table_box = QGroupBox("ファイル別の処理状況")
-        table_lay = QVBoxLayout(table_box)
         self.table = QTableWidget()
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -151,13 +149,15 @@ class Step3Page(QWidget):
         hdr.setSectionResizeMode(_COL_FAIL, QHeaderView.ResizeToContents)
         self.table.setColumnWidth(_COL_CHECK, 52)
         self.table.verticalHeader().setDefaultSectionSize(30)
-        table_lay.addWidget(self.table)
-        splitter.addWidget(table_box)
+        root.addWidget(main_table_frame("ファイル別の処理状況", self.table), 1)
 
-        tsv_box = QGroupBox("採点結果 TSV（スプレッドシートに貼り付け可能）")
-        tsv_lay = QVBoxLayout(tsv_box)
+        tsv_body = QFrame()
+        tsv_lay = QVBoxLayout(tsv_body)
+        tsv_lay.setContentsMargins(0, 0, 0, 0)
+        tsv_lay.setSpacing(6)
         tsv_btns = QHBoxLayout()
         tsv_btns.addWidget(h.button("TSVをコピー", self._copy_tsv, variant="success"))
+        tsv_btns.addWidget(h.button("TSV再生成", self._refresh_tsv))
         tsv_btns.addStretch()
         tsv_lay.addLayout(tsv_btns)
         self.tsv_view = QPlainTextEdit()
@@ -167,19 +167,23 @@ class Step3Page(QWidget):
             f"font-family: Consolas, 'Courier New', monospace; font-size: 11px;"
             f"background: {COLORS['surface']};"
         )
-        self.tsv_view.setMinimumHeight(120)
+        self.tsv_view.setMinimumHeight(100)
+        self.tsv_view.setMaximumHeight(180)
         tsv_lay.addWidget(self.tsv_view)
-        splitter.addWidget(tsv_box)
+        root.addWidget(
+            CollapsibleSection(
+                "採点結果 TSV（スプレッドシートに貼り付け可能）",
+                tsv_body,
+                collapsed=True,
+                tint="#fffbeb",
+            )
+        )
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
-        self.log.setMaximumHeight(100)
+        self.log.setMaximumHeight(72)
         self.log.setPlaceholderText("サマリログ")
-        splitter.addWidget(self.log)
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setStretchFactor(2, 0)
-        root.addWidget(splitter, 1)
+        root.addWidget(self.log)
 
     # --- タブ表示時（自動スキャン・OCR はしない）---
 

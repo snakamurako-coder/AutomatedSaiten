@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QSlider,
     QSpinBox,
     QVBoxLayout,
@@ -38,6 +39,7 @@ from services.feedback_renderer import (
 )
 from ui_qt import helpers as h
 from ui_qt.helpers import ProgressBridge, pil_to_qpixmap
+from ui_qt.layout_helpers import CollapsibleSection, make_expanding
 from ui_qt.region_editor import AnswerRegionEditor
 from ui_qt.style import COLORS, set_variant
 
@@ -49,16 +51,11 @@ class Step10Page(QWidget):
         self._slot_print_modes: dict[str, str] = {}
         self._rows: list[dict[str, Any]] = []
         self._preview_image = None
+        self._preview_scroll: QScrollArea | None = None
 
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        outer.addWidget(scroll)
-        body = QWidget()
-        scroll.setWidget(body)
-        root = QVBoxLayout(body)
-        root.setContentsMargins(0, 0, 8, 0)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
         root.addWidget(h.title_label("⑩ 個票出力"))
@@ -67,9 +64,9 @@ class Step10Page(QWidget):
                 "補正済み解答画像に判定マーク（○/△/×）・小問得点・合計欄を合成した個票を生成します。"
             )
         )
-        root.addWidget(self._build_slots_box())
-        root.addWidget(self._build_style_box())
-        root.addWidget(self._build_preview_box())
+        root.addWidget(self._build_slots_box(), 2)
+        root.addWidget(self._build_style_section())
+        root.addWidget(self._build_preview_box(), 3)
         root.addWidget(self._build_batch_box())
 
     # ---------- 合計欄の配置 ----------
@@ -104,16 +101,28 @@ class Step10Page(QWidget):
         lay.addWidget(self.slot_hint)
 
         self.slot_editor = AnswerRegionEditor(on_change=self._on_slots_changed)
-        self.slot_editor.setMinimumHeight(340)
-        lay.addWidget(self.slot_editor)
+        self.slot_editor.setMinimumHeight(220)
+        make_expanding(self.slot_editor)
+        lay.addWidget(self.slot_editor, 1)
+        make_expanding(box)
 
         self.slot_status = h.caption_label("")
         lay.addWidget(self.slot_status)
         return box
 
-    def _build_style_box(self) -> QGroupBox:
-        box = QGroupBox("出力書式設定（全テスト共通）")
-        lay = QVBoxLayout(box)
+    def _build_style_section(self) -> CollapsibleSection:
+        return CollapsibleSection(
+            "出力書式設定（全テスト共通）",
+            self._build_style_body(),
+            collapsed=True,
+            tint="#f8fafc",
+        )
+
+    def _build_style_body(self) -> QWidget:
+        body = QWidget()
+        lay = QVBoxLayout(body)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
 
         row1 = QHBoxLayout()
         row1.addWidget(QLabel("マーク余白率"))
@@ -168,7 +177,7 @@ class Step10Page(QWidget):
         row2.addWidget(h.button("デフォルトに戻す", self._on_reset_style))
         row2.addStretch()
         lay.addLayout(row2)
-        return box
+        return body
 
     def _build_preview_box(self) -> QGroupBox:
         box = QGroupBox("プレビュー")
@@ -190,7 +199,8 @@ class Step10Page(QWidget):
 
         preview_scroll = QScrollArea()
         preview_scroll.setWidgetResizable(True)
-        preview_scroll.setMinimumHeight(380)
+        make_expanding(preview_scroll)
+        self._preview_scroll = preview_scroll
         preview_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['sidebar']}; }}"
@@ -199,7 +209,8 @@ class Step10Page(QWidget):
         self.preview_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.preview_label.setStyleSheet("background: transparent; padding: 8px;")
         preview_scroll.setWidget(self.preview_label)
-        lay.addWidget(preview_scroll)
+        lay.addWidget(preview_scroll, 1)
+        make_expanding(box)
         return box
 
     def _build_batch_box(self) -> QGroupBox:

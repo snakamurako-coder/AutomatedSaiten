@@ -10,6 +10,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QMainWindow,
     QPushButton,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -58,7 +59,8 @@ class MainWindow(QMainWindow):
         # 左端グラバー分の余白（GAS の main-workspace padding-left 相当）
         content_layout.setContentsMargins(36, 18, 20, 14)
         self.stack = QStackedWidget()
-        content_layout.addWidget(self.stack)
+        self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        content_layout.addWidget(self.stack, 1)
 
         sidebar_inner = self._build_sidebar_inner()
         self.sidebar = HoverSidebar(sidebar_inner)

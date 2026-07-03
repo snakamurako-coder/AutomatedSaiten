@@ -7,6 +7,7 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -19,6 +20,7 @@ from models.domain_repo import (
     save_domain_settings,
 )
 from ui_qt import helpers as h
+from ui_qt.layout_helpers import make_expanding
 
 
 class Step6Page(QWidget):
@@ -27,6 +29,7 @@ class Step6Page(QWidget):
         self.app = app
         self._rows: list[dict[str, Any]] = []
 
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
@@ -45,6 +48,7 @@ class Step6Page(QWidget):
         for c in (1, 2, 3):
             self.table.setColumnWidth(c, 140)
         self.table.horizontalHeader().setStretchLastSection(True)
+        make_expanding(self.table)
         root.addWidget(self.table, 1)
 
         btns = QHBoxLayout()

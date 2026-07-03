@@ -7,6 +7,7 @@ from typing import Any
 from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
+    QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from services.grading import execute_grading, get_summary_data
 from ui_qt import helpers as h
+from ui_qt.layout_helpers import make_expanding
 
 
 class Step5Page(QWidget):
@@ -22,6 +24,7 @@ class Step5Page(QWidget):
         super().__init__()
         self.app = app
 
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
@@ -48,7 +51,9 @@ class Step5Page(QWidget):
             self.summary_table.setColumnWidth(i, w)
         self.summary_table.horizontalHeader().setStretchLastSection(True)
         self.summary_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        box_layout.addWidget(self.summary_table)
+        make_expanding(self.summary_table)
+        box_layout.addWidget(self.summary_table, 1)
+        make_expanding(box)
         root.addWidget(box, 1)
 
     def refresh(self) -> None:
