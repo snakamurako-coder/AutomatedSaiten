@@ -90,4 +90,28 @@ def wire_toggle_columns(
 def start_cell_edit(table: QTableWidget, row: int, col: int) -> None:
     item = table.item(row, col)
     if item and item.flags() & Qt.ItemFlag.ItemIsEditable:
+        table.setCurrentCell(row, col)
         table.editItem(item)
+
+
+def wire_excel_edit_columns(
+    table: QTableWidget,
+    columns: tuple[int, ...],
+    *,
+    on_changed: Callable[[int, int, str], None] | None = None,
+) -> None:
+    """指定列をクリックで即編集（Excel 風）。"""
+
+    def _clicked(row: int, col: int) -> None:
+        if col not in columns:
+            return
+        start_cell_edit(table, row, col)
+
+    table.cellClicked.connect(_clicked)
+
+    if on_changed is not None:
+        def _changed(item: QTableWidgetItem) -> None:
+            if item.column() in columns:
+                on_changed(item.row(), item.column(), item.text().strip())
+
+        table.itemChanged.connect(_changed)

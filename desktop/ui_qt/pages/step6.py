@@ -21,6 +21,7 @@ from models.domain_repo import (
 )
 from ui_qt import helpers as h
 from ui_qt.layout_helpers import make_expanding
+from ui_qt.table_cells import make_editable_item, wire_excel_edit_columns
 
 
 class Step6Page(QWidget):
@@ -48,6 +49,11 @@ class Step6Page(QWidget):
         for c in (1, 2, 3):
             self.table.setColumnWidth(c, 140)
         self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectItems)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.verticalHeader().setVisible(False)
+        wire_excel_edit_columns(self.table, (1, 2, 3))
         make_expanding(self.table)
         root.addWidget(self.table, 1)
 
@@ -71,9 +77,9 @@ class Step6Page(QWidget):
             name_item = QTableWidgetItem(row["displayName"])
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(i, 0, name_item)
-            self.table.setItem(i, 1, QTableWidgetItem(row["daiMon"]))
-            self.table.setItem(i, 2, QTableWidgetItem(row["hanI"]))
-            self.table.setItem(i, 3, QTableWidgetItem(row["noryoku"]))
+            self.table.setItem(i, 1, make_editable_item(row["daiMon"]))
+            self.table.setItem(i, 2, make_editable_item(row["hanI"]))
+            self.table.setItem(i, 3, make_editable_item(row["noryoku"]))
         if not self._rows:
             self.status_label.setText("記述欄がありません。先に ① 回答欄設定を完了してください。")
         else:

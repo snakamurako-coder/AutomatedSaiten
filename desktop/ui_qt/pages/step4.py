@@ -17,8 +17,6 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QScrollArea,
     QSizePolicy,
-    QSlider,
-    QSpinBox,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -45,7 +43,16 @@ from services.crop_preview import load_crops_for_rows
 from services.gemini_rubric import generate_rubric_with_gemini
 from ui_qt import helpers as h
 from ui_qt.helpers import pil_to_qpixmap
-from ui_qt.criteria_widgets import ScoreStepWidget, make_judgment_combo, wrap_table_cell
+from ui_qt.criteria_widgets import (
+    ScoreStepWidget,
+    find_judgment_combo,
+    find_score_widget,
+    focus_score_widget,
+    make_judgment_combo,
+    open_judgment_combo,
+    wrap_table_cell,
+)
+from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.layout_helpers import (
     CollapsibleSection,
     main_table_frame,
@@ -57,6 +64,7 @@ from ui_qt.table_cells import (
     make_editable_item,
     make_readonly_item,
     make_toggle_item,
+    set_toggle_checked,
     start_cell_edit,
     wire_toggle_columns,
 )
@@ -197,16 +205,18 @@ class Step4Page(QWidget):
         return box
 
     def _build_criteria_table(self) -> QTableWidget:
-        self.criteria_table = QTableWidget(0, 7)
+        self.criteria_table = QTableWidget(0, 8)
         self.criteria_table.setHorizontalHeaderLabels(
-            ["みなし", "不正解", "解答", "人数", "判定", "得点", "備考"]
+            ["みなし", "不正解", "解答", "人数", "判定", "得点", "備考", "操作"]
         )
-        widths = [52, 52, 280, 52, 72, 108, 260]
+        widths = [52, 52, 280, 52, 72, 108, 220, 60]
         for i, w in enumerate(widths):
             self.criteria_table.setColumnWidth(i, w)
         self.criteria_table.horizontalHeader().setStretchLastSection(True)
         self.criteria_table.setSelectionBehavior(QTableWidget.SelectItems)
         self.criteria_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.criteria_table.verticalHeader().setDefaultSectionSize(36)
+        self.criteria_table.verticalHeader().setVisible(False)
         make_expanding(self.criteria_table)
         wire_toggle_columns(
             self.criteria_table,
@@ -236,12 +246,22 @@ class Step4Page(QWidget):
                 self._incorrect_map(fid)[ans] = True
             else:
                 self._incorrect_map(fid).pop(ans, None)
-        self._render_criteria_table()
+        self._sync_checks_to_rows()
+        self._apply_criteria_table_styles()
         self.criteria_table.setCurrentCell(row, col)
 
     def _on_criteria_cell_clicked(self, row: int, col: int) -> None:
-        if col == 6:
+        if col == 4:
+            open_judgment_combo(self.criteria_table, row, col)
+        elif col == 5:
+            focus_score_widget(self.criteria_table, row, col)
+        elif col == 6:
             start_cell_edit(self.criteria_table, row, col)
+        elif col == 7:
+            if row < len(self._criteria_rows):
+                ans = self._criteria_rows[row]["answer_text"]
+                if not self._should_skip_crop(ans):
+                    self._show_answer_pattern_crops(ans)
 
     def _on_criteria_item_changed(self, item: QTableWidgetItem) -> None:
         row, col = item.row(), item.column()
@@ -314,15 +334,10 @@ class Step4Page(QWidget):
         lay.addLayout(ctrl)
 
         zoom_row = QHBoxLayout()
-        zoom_row.addWidget(QLabel("表示倍率"))
-        self.zoom_slider = QSlider(Qt.Horizontal)
-        self.zoom_slider.setRange(30, 400)
-        self.zoom_slider.setValue(100)
-        self.zoom_slider.valueChanged.connect(lambda _v: self._render_crop_grid())
-        zoom_row.addWidget(self.zoom_slider, 1)
-        self.zoom_label = QLabel("100")
-        self.zoom_slider.valueChanged.connect(lambda v: self.zoom_label.setText(str(v)))
-        zoom_row.addWidget(self.zoom_label)
+        self.crop_controls = CropDisplayControls()
+        self.crop_controls.connect_zoom_changed(self._render_crop_grid)
+        self.crop_controls.connect_meta_changed(self._render_crop_grid)
+        zoom_row.addWidget(self.crop_controls, 1)
         lay.addLayout(zoom_row)
 
         self.outlier_table = QTableWidget(0, 8)
@@ -413,9 +428,59 @@ class Step4Page(QWidget):
             row["incorrect"] = self._is_incorrect(fid, ans)
 
     def _refresh_check_views(self) -> None:
-        self._render_criteria_table()
+        self._apply_criteria_table_styles()
         self._render_outlier_table()
         self._render_crop_grid()
+
+    def _sync_criteria_from_widgets(self) -> None:
+        t = self.criteria_table
+        for i in range(min(t.rowCount(), len(self._criteria_rows))):
+            combo = find_judgment_combo(t, i)
+            if combo is not None:
+                self._criteria_rows[i]["judgment"] = combo.currentText()
+            score_w = find_score_widget(t, i)
+            if score_w is not None:
+                self._criteria_rows[i]["score"] = score_w.value()
+            reason_item = t.item(i, 6)
+            if reason_item is not None:
+                self._criteria_rows[i]["reason"] = reason_item.text().strip()
+
+    def _apply_criteria_table_styles(self) -> None:
+        fid = self._selected_field_id() or ""
+        canonical = self._canonical()
+        t = self.criteria_table
+        from PySide6.QtGui import QColor
+
+        t.blockSignals(True)
+        for i, row in enumerate(self._criteria_rows):
+            ans = row.get("answer_text", "")
+            if canonical and ans == canonical:
+                deemed_item = t.item(i, 0)
+                if deemed_item is not None:
+                    deemed_item.setText("—")
+            else:
+                deemed_item = t.item(i, 0)
+                if deemed_item is not None:
+                    set_toggle_checked(deemed_item, self._is_deemed(fid, ans))
+            incorrect_item = t.item(i, 1)
+            if incorrect_item is not None:
+                set_toggle_checked(incorrect_item, self._is_incorrect(fid, ans))
+
+            bg = None
+            if row.get("deemed") or self._is_deemed(fid, ans):
+                bg = COLORS["accent_soft"]
+            elif row.get("incorrect") or self._is_incorrect(fid, ans):
+                bg = COLORS["danger_soft"]
+            color = QColor(bg) if bg else QColor()
+            for c in (0, 1, 2, 3, 6, 7):
+                item = t.item(i, c)
+                if item is None:
+                    continue
+                if bg:
+                    item.setBackground(color)
+                else:
+                    item.setData(Qt.ItemDataRole.BackgroundRole, None)
+        t.blockSignals(False)
 
     def _should_skip_crop(self, ans: str) -> bool:
         if not self.hide_incorrect_check.isChecked():
@@ -583,10 +648,12 @@ class Step4Page(QWidget):
         self._aggregate()
 
     def _render_criteria_table(self) -> None:
+        self._sync_criteria_from_widgets()
         fid = self._selected_field_id() or ""
         canonical = self._canonical()
         t = self.criteria_table
         t.blockSignals(True)
+        t.clearContents()
         t.setRowCount(len(self._criteria_rows))
         max_score = self._field_max_score()
         for i, row in enumerate(self._criteria_rows):
@@ -620,23 +687,18 @@ class Step4Page(QWidget):
             t.setItem(i, 2, answer_item)
             t.setItem(i, 3, count_item)
             t.setCellWidget(i, 4, wrap_table_cell(j_combo))
-            t.setCellWidget(i, 5, score_widget)
+            t.setCellWidget(i, 5, wrap_table_cell(score_widget))
             t.setItem(i, 6, reason_item)
 
-            bg = None
-            if row.get("deemed") or self._is_deemed(fid, ans):
-                bg = COLORS["accent_soft"]
-            elif row.get("incorrect") or self._is_incorrect(fid, ans):
-                bg = COLORS["danger_soft"]
-            if bg:
-                from PySide6.QtGui import QColor
+            if self._should_skip_crop(ans):
+                action_item = make_readonly_item("除外", center=True)
+            else:
+                action_item = make_readonly_item("表示", center=True)
 
-                color = QColor(bg)
-                for c in (0, 1, 2, 3, 6):
-                    item = t.item(i, c)
-                    if item:
-                        item.setBackground(color)
+            t.setItem(i, 7, action_item)
+            t.setRowHeight(i, 36)
         t.blockSignals(False)
+        self._apply_criteria_table_styles()
 
     def _on_outlier_toggle(self, row: int, col: int, checked: bool) -> None:
         if row >= len(self._outlier_flat_rows):
@@ -651,13 +713,15 @@ class Step4Page(QWidget):
                 self._deemed_map(fid)[ans] = True
             else:
                 self._deemed_map(fid).pop(ans, None)
-            self._render_criteria_table()
+            self._sync_checks_to_rows()
+            self._apply_criteria_table_styles()
         elif col == 1:
             if checked:
                 self._incorrect_map(fid)[ans] = True
             else:
                 self._incorrect_map(fid).pop(ans, None)
-            self._render_criteria_table()
+            self._sync_checks_to_rows()
+            self._apply_criteria_table_styles()
         elif col == 4:
             if flat.get("skip_img"):
                 return
@@ -669,13 +733,32 @@ class Step4Page(QWidget):
         if col != 7 or row >= len(self._outlier_flat_rows):
             return
         flat = self._outlier_flat_rows[row]
-        if not flat.get("skip_img"):
-            self._load_crops_async([flat], allow_incorrect=True)
+        if flat.get("skip_img"):
+            return
+        self._show_answer_pattern_crops(flat["answer_text"])
+
+    def _show_answer_pattern_crops(self, answer_text: str) -> None:
+        fid = self._selected_field_id()
+        if not self.app.require_active_test() or not fid:
+            return
+        if self._should_skip_crop(answer_text):
+            h.warn(
+                self,
+                "除外",
+                f"不正解対象のため「{answer_text}」の画像は表示しません。",
+            )
+            return
+        rows = get_answer_rows_for_pattern(self.app.active_test_id, fid, answer_text)
+        if not rows:
+            h.info(self, "該当なし", "該当する回答がありません。")
+            return
+        self._load_crops_async(rows, allow_incorrect=False)
 
     def _on_save_criteria(self) -> None:
         fid = self._selected_field_id()
         if not self.app.require_active_test() or not fid:
             return
+        self._sync_criteria_from_widgets()
         rules = []
         for row in self._criteria_rows:
             judgment = str(row.get("judgment") or "").strip()
@@ -863,7 +946,7 @@ class Step4Page(QWidget):
             return
 
         fid = self._selected_field_id() or ""
-        zoom = max(30, min(400, self.zoom_slider.value())) / 100.0
+        zoom = max(30, min(400, self.crop_controls.zoom_value())) / 100.0
         cols = 4
         for idx, item in enumerate(self._crop_grid_results):
             r, c = divmod(idx, cols)
@@ -883,7 +966,13 @@ class Step4Page(QWidget):
                 f"QFrame {{ background: {COLORS['danger_soft']}; border: 1px solid #fca5a5;"
                 f" border-radius: 6px; }}"
             )
-            err = QLabel(f"{item['row'].get('fileName', '—')}\n{item.get('error', '読込失敗')}")
+            err_parts = []
+            if self.crop_controls.show_file_name():
+                err_parts.append(str(item["row"].get("fileName") or "—"))
+            if self.crop_controls.show_id():
+                err_parts.append(f"ID: {item['row'].get('studentId') or '-'}")
+            err_parts.append(str(item.get("error") or "読込失敗"))
+            err = QLabel("\n".join(err_parts))
             err.setStyleSheet(f"color: {COLORS['danger']}; border: none; font-size: 10px;")
             err.setWordWrap(True)
             lay.addWidget(err)
@@ -907,20 +996,24 @@ class Step4Page(QWidget):
         img.setStyleSheet("border: none;")
         lay.addWidget(img)
 
-        id_label = QLabel(f"ID: {row.get('studentId') or '-'}")
-        id_label.setStyleSheet("border: none; font-size: 10px; font-weight: 700;")
-        lay.addWidget(id_label)
-        file_label = QLabel(str(row.get("fileName") or "")[:28])
-        file_label.setStyleSheet(
-            f"border: none; font-size: 9px; color: {COLORS['text_secondary']};"
-        )
-        lay.addWidget(file_label)
-        ans_label = QLabel(ans[:40])
-        ans_label.setStyleSheet(
-            f"border: none; font-size: 10px; color: {COLORS['accent']}; font-family: Consolas;"
-        )
-        ans_label.setWordWrap(True)
-        lay.addWidget(ans_label)
+        if self.crop_controls.show_id():
+            id_label = QLabel(f"ID: {row.get('studentId') or '-'}")
+            id_label.setStyleSheet("border: none; font-size: 10px; font-weight: 700;")
+            lay.addWidget(id_label)
+        if self.crop_controls.show_file_name():
+            file_label = QLabel(str(row.get("fileName") or ""))
+            file_label.setStyleSheet(
+                f"border: none; font-size: 9px; color: {COLORS['text_secondary']};"
+            )
+            file_label.setWordWrap(True)
+            lay.addWidget(file_label)
+        if self.crop_controls.show_ocr_text():
+            ans_label = QLabel(ans)
+            ans_label.setStyleSheet(
+                f"border: none; font-size: 10px; color: {COLORS['accent']}; font-family: Consolas;"
+            )
+            ans_label.setWordWrap(True)
+            lay.addWidget(ans_label)
 
         def click_handler(_event, a=ans):
             f = self._selected_field_id()
