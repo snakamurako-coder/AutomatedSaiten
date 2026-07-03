@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QFocusEvent, QIntValidator
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QIntValidator
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -37,7 +37,7 @@ def make_judgment_combo(
 
 
 class ScoreStepWidget(QWidget):
-    """得点: ▼ 直接入力 ▲（±1）。"""
+    """得点: － 直接入力 ＋（±1）。"""
 
     def __init__(
         self,
@@ -49,26 +49,36 @@ class ScoreStepWidget(QWidget):
         super().__init__(parent)
         self._max_score = max(0, int(max_score))
         self._on_change = on_change
-        self._block = False
+        self._value = 0
         self.setFixedHeight(28)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(1)
+        lay.setSpacing(2)
 
-        self._down = QPushButton("▼")
-        self._down.setFixedSize(22, 22)
+        btn_font = self.font()
+        btn_font.setPointSize(13)
+        btn_font.setBold(True)
+
+        self._down = QPushButton("－")
+        self._down.setFixedSize(26, 26)
         self._down.setToolTip("1点減点")
+        self._down.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._down.setFont(btn_font)
+
         self._edit = QLineEdit()
         self._edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._edit.setFixedWidth(40)
-        self._edit.setFixedHeight(22)
+        self._edit.setFixedHeight(24)
         self._edit.setToolTip("得点（クリックで直接入力）")
         self._edit.setValidator(QIntValidator(0, self._max_score, self))
-        self._up = QPushButton("▲")
-        self._up.setFixedSize(22, 22)
+
+        self._up = QPushButton("＋")
+        self._up.setFixedSize(26, 26)
         self._up.setToolTip("1点加点")
+        self._up.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self._up.setFont(btn_font)
 
         lay.addStretch()
         lay.addWidget(self._down)
@@ -76,10 +86,11 @@ class ScoreStepWidget(QWidget):
         lay.addWidget(self._up)
         lay.addStretch()
 
-        self._down.clicked.connect(lambda: self._bump(-1))
-        self._up.clicked.connect(lambda: self._bump(1))
+        self._down.clicked.connect(self._decrement)
+        self._up.clicked.connect(self._increment)
         self._edit.editingFinished.connect(self._commit_edit)
         self._edit.returnPressed.connect(self._commit_edit)
+        self._edit.installEventFilter(self)
         self.set_value(value)
 
     def focus_editor(self) -> None:
@@ -87,39 +98,45 @@ class ScoreStepWidget(QWidget):
         self._edit.selectAll()
 
     def set_value(self, value: int) -> None:
-        self._block = True
-        v = max(0, min(self._max_score, int(value)))
-        self._edit.setText(str(v))
-        self._block = False
+        self._value = max(0, min(self._max_score, int(value)))
+        self._edit.blockSignals(True)
+        self._edit.setText(str(self._value))
+        self._edit.blockSignals(False)
 
     def value(self) -> int:
-        raw = self._edit.text().strip()
-        if not raw:
-            return 0
-        try:
-            return max(0, min(self._max_score, int(raw)))
-        except ValueError:
-            return 0
+        return self._value
 
-    def _bump(self, delta: int) -> None:
-        self.set_value(self.value() + delta)
-        self._emit()
+    def _increment(self) -> None:
+        self._apply_value(self._value + 1)
+
+    def _decrement(self) -> None:
+        self._apply_value(self._value - 1)
 
     def _commit_edit(self) -> None:
-        self.set_value(self.value())
-        self._emit()
+        raw = self._edit.text().strip()
+        if not raw:
+            parsed = 0
+        else:
+            try:
+                parsed = int(raw)
+            except ValueError:
+                parsed = self._value
+        self._apply_value(parsed)
 
-    def _emit(self) -> None:
-        if not self._block:
-            self._on_change(self.value())
+    def _apply_value(self, value: int) -> None:
+        clamped = max(0, min(self._max_score, int(value)))
+        if clamped == self._value and self._edit.text() == str(clamped):
+            return
+        self._value = clamped
+        self._edit.blockSignals(True)
+        self._edit.setText(str(self._value))
+        self._edit.blockSignals(False)
+        self._on_change(self._value)
 
-    def focusInEvent(self, event: QFocusEvent) -> None:  # noqa: N802
-        super().focusInEvent(event)
-        self.focus_editor()
-
-    def mousePressEvent(self, event) -> None:  # noqa: ANN001, N802
-        self.focus_editor()
-        super().mousePressEvent(event)
+    def eventFilter(self, watched, event: QEvent) -> bool:  # noqa: ANN001, N802
+        if watched is self._edit and event.type() == QEvent.Type.FocusIn:
+            self._edit.selectAll()
+        return super().eventFilter(watched, event)
 
 
 def wrap_table_cell(widget: QWidget) -> QWidget:

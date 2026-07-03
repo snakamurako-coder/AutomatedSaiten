@@ -63,6 +63,7 @@ class CropDisplayControls(QWidget):
         self.zoom_spin.setValue(100)
         self.zoom_spin.setSuffix(" %")
         self.zoom_spin.setFixedWidth(72)
+        self.zoom_spin.setKeyboardTracking(True)
         zoom_row.addWidget(self.zoom_spin)
         root.addLayout(zoom_row)
 
@@ -96,6 +97,7 @@ class CropDisplayControls(QWidget):
 
     def connect_zoom_changed(self, callback: Callable[[], None]) -> None:
         self.zoom_slider.valueChanged.connect(lambda _v: callback())
+        self.zoom_spin.valueChanged.connect(lambda _v: callback())
 
     def connect_meta_changed(self, callback: Callable[[], None]) -> None:
         self.show_id_check.toggled.connect(lambda _c: callback())
