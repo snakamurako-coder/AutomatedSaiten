@@ -7,7 +7,9 @@ from typing import Any
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QApplication,
+    QCheckBox,
     QFileDialog,
     QGroupBox,
     QHBoxLayout,
@@ -133,11 +135,16 @@ class Step3Page(QWidget):
         self.table = QTableWidget()
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setSelectionMode(QAbstractItemView.NoSelection)
+        self.table.setFocusPolicy(Qt.NoFocus)
         self.table.verticalHeader().setVisible(False)
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(_COL_FILE, QHeaderView.Stretch)
+        hdr = self.table.horizontalHeader()
+        hdr.setStretchLastSection(False)
+        hdr.setSectionResizeMode(_COL_CHECK, QHeaderView.Fixed)
+        hdr.setSectionResizeMode(_COL_FILE, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(_COL_STATUS, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(_COL_FAIL, QHeaderView.ResizeToContents)
+        self.table.setColumnWidth(_COL_CHECK, 44)
         table_lay.addWidget(self.table)
         splitter.addWidget(table_box)
 
@@ -231,7 +238,7 @@ class Step3Page(QWidget):
 
     def _rebuild_table(self, rows_data: list[dict[str, Any]]) -> None:
         fields = self._fields
-        headers = ["選択", "状態", "失敗理由", "ファイル名", "生徒ID"]
+        headers = ["☑", "状態", "失敗理由", "ファイル名", "生徒ID"]
         headers.extend(f.get("displayName") or f["id"] for f in fields)
         headers.append("DB")
 
@@ -246,16 +253,35 @@ class Step3Page(QWidget):
             default_check = rd.get("status") in _DEFAULT_CHECK
             self._set_row(i, rd, checked=default_check)
 
+    def _row_checkbox(self, row_idx: int) -> QCheckBox | None:
+        w = self.table.cellWidget(row_idx, _COL_CHECK)
+        if w is None:
+            return None
+        return w.findChild(QCheckBox)
+
+    def _set_row_checkbox(self, row_idx: int, checked: bool) -> None:
+        existing = self._row_checkbox(row_idx)
+        if existing is not None:
+            existing.setChecked(checked)
+            return
+        cb = QCheckBox()
+        cb.setChecked(checked)
+        cb.setToolTip("OCR 対象に含める")
+        wrap = QWidget()
+        lay = QHBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.addStretch()
+        lay.addWidget(cb)
+        lay.addStretch()
+        self.table.setCellWidget(row_idx, _COL_CHECK, wrap)
+
     def _set_row(self, row_idx: int, data: dict[str, Any], *, checked: bool = False) -> None:
+        self._set_row_checkbox(row_idx, checked)
+
         status = data.get("status") or "未処理"
         fail = data.get("fail") or ""
         file_name = str(data.get("fileName") or "")
         hint = data.get("hint") or ""
-
-        check_item = QTableWidgetItem()
-        check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
-        check_item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
-        self.table.setItem(row_idx, _COL_CHECK, check_item)
 
         self._set_cell(row_idx, _COL_STATUS, status, self._status_color(status))
         if fail:
@@ -307,6 +333,7 @@ class Step3Page(QWidget):
 
     def _select_by_status(self, mode: str) -> None:
         if self.table.rowCount() == 0:
+            h.warn(self, "一覧なし", "先に「フォルダを再認識」でファイル一覧を表示してください。")
             return
         for i, rd in enumerate(self._inventory_rows):
             status = rd.get("status") or ""
@@ -323,16 +350,18 @@ class Step3Page(QWidget):
                 check = status == "反映済"
             elif mode == "failed":
                 check = status == "失敗"
-            item = self.table.item(i, _COL_CHECK)
-            if item:
-                item.setCheckState(Qt.Checked if check else Qt.Unchecked)
+            cb = self._row_checkbox(i)
+            if cb is not None:
+                cb.setChecked(check)
+        n = sum(1 for i in range(self.table.rowCount()) if (c := self._row_checkbox(i)) and c.isChecked())
+        self.status_label.setText(f"{n} 件を選択中")
 
     def _get_checked_queue_items(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         skipped_processed: list[str] = []
         for i, rd in enumerate(self._inventory_rows):
-            check_item = self.table.item(i, _COL_CHECK)
-            if not check_item or check_item.checkState() != Qt.Checked:
+            cb = self._row_checkbox(i)
+            if cb is None or not cb.isChecked():
                 continue
             if rd.get("status") == "反映済":
                 skipped_processed.append(rd["fileName"])

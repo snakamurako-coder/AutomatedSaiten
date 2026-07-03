@@ -50,7 +50,11 @@ class MainWindow(QMainWindow):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_sidebar())
+        from ui_qt.hover_sidebar import HoverSidebar
+
+        sidebar_inner = self._build_sidebar_inner()
+        self.sidebar = HoverSidebar(sidebar_inner)
+        root.addWidget(self.sidebar)
 
         content_wrap = QFrame()
         content_wrap.setObjectName("ContentArea")
@@ -94,12 +98,10 @@ class MainWindow(QMainWindow):
 
     # --- サイドバー ---
 
-    def _build_sidebar(self) -> QFrame:
-        sidebar = QFrame()
-        sidebar.setObjectName("Sidebar")
-        sidebar.setFixedWidth(232)
+    def _build_sidebar_inner(self) -> QWidget:
+        sidebar = QWidget()
         lay = QVBoxLayout(sidebar)
-        lay.setContentsMargins(14, 16, 14, 12)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(3)
 
         title = QLabel("自動採点")

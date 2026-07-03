@@ -68,6 +68,23 @@ QPushButton[variant="nav"]:disabled {{
     color: {COLORS["text_muted"]};
 }}
 
+/* --- ホバーサイドバー グラバー --- */
+#NavGrabber {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #fef08a, stop:1 #fde047);
+    border: 1px solid #eab308;
+    border-left: none;
+    border-top-right-radius: 8px;
+    border-bottom-right-radius: 8px;
+    color: #713f12;
+    font-size: 10px;
+    font-weight: 700;
+}}
+#NavGrabber:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1,
+        stop:0 #fef9c3, stop:1 #facc15);
+}}
+
 /* --- コンテンツ --- */
 #ContentArea {{
     background: {COLORS["surface"]};
