@@ -1,4 +1,4 @@
-"""③ テキスト化（OCRバッチ）ページ。"""
+"""③ テキスト化（OCRバッチ）ページ — 手動確認・選択実行型。"""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QHeaderView,
     QLabel,
     QLineEdit,
+    QMessageBox,
     QPlainTextEdit,
     QProgressBar,
     QSplitter,
@@ -27,24 +28,30 @@ from config import test_warped
 from models.test_repo import (
     build_pending_rows_tsv,
     build_results_tsv,
+    clear_step3_failed_entry,
     export_results_to_excel,
     get_answer_fields,
-    get_result_preview,
     get_test_info,
     normalize_file_name,
+    reset_step3_data,
     save_student_folder,
+    set_step3_failed_entry,
 )
 from services.batch_processor import STAGE_LABELS, run_batch_ocr
-from services.work_queue import build_ocr_work_queue
+from services.work_queue import build_file_inventory
 from ui_qt import helpers as h
 from ui_qt.helpers import ProgressBridge
 from ui_qt.style import COLORS
 
-_COL_STATUS = 0
-_COL_FAIL = 1
-_COL_FILE = 2
-_COL_STUDENT = 3
-_COL_FIELD_START = 4
+_COL_CHECK = 0
+_COL_STATUS = 1
+_COL_FAIL = 2
+_COL_FILE = 3
+_COL_STUDENT = 4
+_COL_FIELD_START = 5
+
+# 再認識時に既定でチェックするステータス
+_DEFAULT_CHECK = frozenset({"未処理", "補正済", "失敗"})
 
 
 class Step3Page(QWidget):
@@ -53,7 +60,10 @@ class Step3Page(QWidget):
         self.app = app
         self._fields: list[dict[str, Any]] = []
         self._row_by_name: dict[str, int] = {}
+        self._inventory_rows: list[dict[str, Any]] = []
         self._last_pending_rows: list[dict[str, Any]] = []
+        self._loaded_test_id: str | None = None
+        self._scanned = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -61,8 +71,8 @@ class Step3Page(QWidget):
         root.addWidget(h.title_label("③ テキスト化（OCRバッチ）"))
         root.addWidget(
             h.muted_label(
-                "各ファイルを「原画像読込 → 枠検出・補正 → OCR → DB保存 → 原本退避」の順で処理します。"
-                "補正画像は warped/ フォルダに保存されます。"
+                "自動処理は行いません。「フォルダを再認識」で一覧を表示し、"
+                "チェックしたファイルだけ OCR を実行してください。"
             )
         )
 
@@ -71,9 +81,10 @@ class Step3Page(QWidget):
         self.inbox_edit = QLineEdit()
         folder_row.addWidget(self.inbox_edit, 1)
         folder_row.addWidget(h.button("参照…", self._pick_inbox))
+        folder_row.addWidget(h.button("フォルダを再認識", self._scan_folder, variant="primary"))
         root.addLayout(folder_row)
 
-        self.queue_stats = h.muted_label("")
+        self.queue_stats = h.muted_label("一覧未表示 — 「フォルダを再認識」を押してください。")
         root.addWidget(self.queue_stats)
 
         self.status_label = QLabel("待機中")
@@ -91,10 +102,26 @@ class Step3Page(QWidget):
         prog_row.addWidget(self.progress_label)
         root.addLayout(prog_row)
 
+        # --- 選択・実行 ---
+        sel_row = QHBoxLayout()
+        sel_row.addWidget(QLabel("選択:"))
+        for label, mode in [
+            ("全て", "all"),
+            ("全解除", "none"),
+            ("未処理", "unprocessed"),
+            ("補正済", "warped"),
+            ("反映済", "processed"),
+            ("失敗", "failed"),
+        ]:
+            sel_row.addWidget(h.button(label, lambda m=mode: self._select_by_status(m)))
+        sel_row.addStretch()
+        root.addLayout(sel_row)
+
         btns = QHBoxLayout()
-        self.run_btn = h.button("未処理のみ OCR", self._on_run_ocr, variant="primary")
+        self.run_btn = h.button("チェックしたファイルを OCR", self._on_run_ocr, variant="primary")
         btns.addWidget(self.run_btn)
-        btns.addWidget(h.button("キュー更新", self.refresh))
+        btns.addWidget(h.button("③をリセット", self._on_reset, variant="danger-soft"))
+        btns.addWidget(h.button("TSV再生成", self._refresh_tsv))
         btns.addWidget(h.button("Excel エクスポート", self._on_export_excel))
         btns.addStretch()
         root.addLayout(btns)
@@ -110,6 +137,7 @@ class Step3Page(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(_COL_FILE, QHeaderView.Stretch)
         table_lay.addWidget(self.table)
         splitter.addWidget(table_box)
 
@@ -117,12 +145,11 @@ class Step3Page(QWidget):
         tsv_lay = QVBoxLayout(tsv_box)
         tsv_btns = QHBoxLayout()
         tsv_btns.addWidget(h.button("TSVをコピー", self._copy_tsv, variant="success"))
-        tsv_btns.addWidget(h.button("TSV再生成", self._refresh_tsv))
         tsv_btns.addStretch()
         tsv_lay.addLayout(tsv_btns)
         self.tsv_view = QPlainTextEdit()
         self.tsv_view.setReadOnly(True)
-        self.tsv_view.setPlaceholderText("OCR 完了後、または「TSV再生成」でここに表示されます。")
+        self.tsv_view.setPlaceholderText("「TSV再生成」で DB の採点結果を表示します。")
         self.tsv_view.setStyleSheet(
             f"font-family: Consolas, 'Courier New', monospace; font-size: 11px;"
             f"background: {COLORS['surface']};"
@@ -141,110 +168,103 @@ class Step3Page(QWidget):
         splitter.setStretchFactor(2, 0)
         root.addWidget(splitter, 1)
 
-    def _pick_inbox(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "生徒解答フォルダを選択")
-        if path and self.app.require_active_test():
-            self.inbox_edit.setText(path)
-            save_student_folder(self.app.active_test_id, path)
-            self.refresh()
+    # --- タブ表示時（自動スキャン・OCR はしない）---
 
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
         test_id = self.app.active_test_id
         info = get_test_info(test_id)
-        folder = info.get("folderPath") or ""
-        self.inbox_edit.setText(folder)
+        self.inbox_edit.setText(info.get("folderPath") or "")
         self._fields = get_answer_fields(test_id)
 
-        queue = build_ocr_work_queue(test_id, folder)
-        st = queue["stats"]
-        self.queue_stats.setText(
-            f"未処理: {st['pending']} 件（補正+OCR: {st['warpAndOcr']} / OCRのみ: {st['ocrOnly']}）"
-            f" / 反映済: {st['inSheet']} 件 / フォルダ内: {st['inInbox']} 件"
-        )
+        if test_id != self._loaded_test_id:
+            self._loaded_test_id = test_id
+            self._scanned = False
+            self._clear_view()
 
-        processed_names = {
-            normalize_file_name(r["fileName"]) for r in get_result_preview(test_id)
-        }
-        self._rebuild_table(queue["items"], processed_names)
-        self._refresh_tsv()
-        self.status_label.setText("待機中 — 「キュー更新」で件数を確認してから OCR を実行してください。")
+        if not self._scanned:
+            self.status_label.setText(
+                "「フォルダを再認識」で解答画像の一覧を表示してから、処理するファイルを選んでください。"
+            )
+
+    def _clear_view(self) -> None:
+        self.table.setRowCount(0)
+        self._row_by_name = {}
+        self._inventory_rows = []
+        self.queue_stats.setText("一覧未表示 — 「フォルダを再認識」を押してください。")
         self.progress.setValue(0)
         self.progress_label.setText("")
+        self.tsv_view.clear()
 
-    def _rebuild_table(
-        self, queue_items: list[dict[str, Any]], processed_names: set[str]
-    ) -> None:
+    def _pick_inbox(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "生徒解答フォルダを選択")
+        if path and self.app.require_active_test():
+            self.inbox_edit.setText(path)
+            save_student_folder(self.app.active_test_id, path)
+            self._scanned = False
+            self.status_label.setText("フォルダを変更しました。「フォルダを再認識」で一覧を更新してください。")
+
+    def _scan_folder(self) -> None:
+        if not self.app.require_active_test():
+            return
+        folder = self.inbox_edit.text().strip()
+        if not folder:
+            h.error(self, "エラー", "解答フォルダを指定してください。")
+            return
+
+        test_id = self.app.active_test_id
+        self._fields = get_answer_fields(test_id)
+        inv = build_file_inventory(test_id, folder)
+        st = inv["stats"]
+        self.queue_stats.setText(
+            f"合計 {st['total']} 件 — 未処理 {st['unprocessed']} / 補正済 {st['warped']} / "
+            f"反映済 {st['processed']} / 失敗 {st['failed']} / フォルダ内 {st['inInbox']} 件"
+        )
+        self._inventory_rows = inv["rows"]
+        self._rebuild_table(self._inventory_rows)
+        self._scanned = True
+        self.status_label.setText(
+            f"{st['total']} 件を認識しました。チェックを確認して「チェックしたファイルを OCR」を押してください。"
+        )
+        self.log.appendPlainText(f"--- フォルダ再認識: {st['total']} 件 ---")
+
+    def _rebuild_table(self, rows_data: list[dict[str, Any]]) -> None:
         fields = self._fields
-        headers = ["状態", "失敗理由", "ファイル名", "生徒ID"]
+        headers = ["選択", "状態", "失敗理由", "ファイル名", "生徒ID"]
         headers.extend(f.get("displayName") or f["id"] for f in fields)
         headers.append("DB")
 
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self._row_by_name = {}
-
-        rows_data: list[dict[str, Any]] = []
-        seen: set[str] = set()
-
-        for item in queue_items:
-            key = normalize_file_name(item["name"])
-            if key in seen:
-                continue
-            seen.add(key)
-            stage_hint = "（補正済）" if item.get("stage") == "ocr_only" else ""
-            rows_data.append(
-                {
-                    "fileName": item["name"],
-                    "status": "待機",
-                    "fail": "",
-                    "studentId": "",
-                    "texts": {},
-                    "db": "—",
-                    "hint": stage_hint,
-                }
-            )
-
-        for row in get_result_preview(self.app.active_test_id):
-            key = normalize_file_name(row["fileName"])
-            if key in seen:
-                for rd in rows_data:
-                    if normalize_file_name(rd["fileName"]) == key:
-                        rd["status"] = "反映済"
-                        rd["studentId"] = row.get("studentId") or ""
-                        rd["texts"] = row.get("textMapping") or {}
-                        rd["db"] = "済"
-                        rd["fail"] = ""
-                continue
-            seen.add(key)
-            rows_data.append(
-                {
-                    "fileName": row["fileName"],
-                    "status": "反映済",
-                    "fail": "",
-                    "studentId": row.get("studentId") or "",
-                    "texts": row.get("textMapping") or {},
-                    "db": "済",
-                    "hint": "",
-                }
-            )
-
-        rows_data.sort(key=lambda r: r["fileName"])
         self.table.setRowCount(len(rows_data))
+
         for i, rd in enumerate(rows_data):
             key = normalize_file_name(rd["fileName"])
             self._row_by_name[key] = i
-            self._set_row(i, rd)
+            default_check = rd.get("status") in _DEFAULT_CHECK
+            self._set_row(i, rd, checked=default_check)
 
-    def _set_row(self, row_idx: int, data: dict[str, Any]) -> None:
-        status = data.get("status") or "待機"
+    def _set_row(self, row_idx: int, data: dict[str, Any], *, checked: bool = False) -> None:
+        status = data.get("status") or "未処理"
         fail = data.get("fail") or ""
         file_name = str(data.get("fileName") or "")
         hint = data.get("hint") or ""
 
+        check_item = QTableWidgetItem()
+        check_item.setFlags(Qt.ItemIsUserCheckable | Qt.ItemIsEnabled)
+        check_item.setCheckState(Qt.Checked if checked else Qt.Unchecked)
+        self.table.setItem(row_idx, _COL_CHECK, check_item)
+
         self._set_cell(row_idx, _COL_STATUS, status, self._status_color(status))
-        self._set_cell(row_idx, _COL_FAIL, fail, QColor(COLORS["danger"]) if fail else None)
+        if fail:
+            fail_item = QTableWidgetItem(self._truncate(fail, 48))
+            fail_item.setToolTip(fail)
+            fail_item.setForeground(QColor(COLORS["danger"]))
+            self.table.setItem(row_idx, _COL_FAIL, fail_item)
+        else:
+            self._set_cell(row_idx, _COL_FAIL, "")
         self._set_cell(row_idx, _COL_FILE, file_name + hint)
         self._set_cell(row_idx, _COL_STUDENT, data.get("studentId") or "—")
 
@@ -272,8 +292,10 @@ class Step3Page(QWidget):
             return QColor(COLORS["success"])
         if status == "失敗":
             return QColor(COLORS["danger"])
-        if status == "処理中":
+        if status in ("処理中", "原画像読込", "枠検出・補正", "OCRテキスト化"):
             return QColor(COLORS["accent"])
+        if status == "補正済":
+            return QColor("#7c3aed")
         return None
 
     @staticmethod
@@ -283,25 +305,45 @@ class Step3Page(QWidget):
     def _stage_label(self, stage: str) -> str:
         return STAGE_LABELS.get(stage, stage or STAGE_LABELS["unknown"])
 
-    def _ensure_table_row(self, file_name: str) -> int:
-        key = normalize_file_name(file_name)
-        if key in self._row_by_name:
-            return self._row_by_name[key]
-        row_idx = self.table.rowCount()
-        self.table.insertRow(row_idx)
-        self._row_by_name[key] = row_idx
-        self._set_row(
-            row_idx,
-            {
-                "fileName": file_name,
-                "status": "待機",
-                "fail": "",
-                "studentId": "",
-                "texts": {},
-                "db": "—",
-            },
-        )
-        return row_idx
+    def _select_by_status(self, mode: str) -> None:
+        if self.table.rowCount() == 0:
+            return
+        for i, rd in enumerate(self._inventory_rows):
+            status = rd.get("status") or ""
+            check = False
+            if mode == "all":
+                check = True
+            elif mode == "none":
+                check = False
+            elif mode == "unprocessed":
+                check = status == "未処理"
+            elif mode == "warped":
+                check = status == "補正済"
+            elif mode == "processed":
+                check = status == "反映済"
+            elif mode == "failed":
+                check = status == "失敗"
+            item = self.table.item(i, _COL_CHECK)
+            if item:
+                item.setCheckState(Qt.Checked if check else Qt.Unchecked)
+
+    def _get_checked_queue_items(self) -> list[dict[str, Any]]:
+        items: list[dict[str, Any]] = []
+        skipped_processed: list[str] = []
+        for i, rd in enumerate(self._inventory_rows):
+            check_item = self.table.item(i, _COL_CHECK)
+            if not check_item or check_item.checkState() != Qt.Checked:
+                continue
+            if rd.get("status") == "反映済":
+                skipped_processed.append(rd["fileName"])
+                continue
+            q = rd.get("queueItem")
+            if q:
+                items.append(q)
+        return items, skipped_processed
+
+    def _row_index(self, file_name: str) -> int | None:
+        return self._row_by_name.get(normalize_file_name(file_name))
 
     def _on_detail_progress(self, ev: dict[str, Any]) -> None:
         file_name = str(ev.get("fileName") or "")
@@ -317,11 +359,12 @@ class Step3Page(QWidget):
             elif status == "done" and stage == "save":
                 self.status_label.setText("DB保存完了 — 原本を退避中…")
             return
-
         if not file_name:
             return
 
-        row_idx = self._ensure_table_row(file_name)
+        row_idx = self._row_index(file_name)
+        if row_idx is None:
+            return
         stage_label = self._stage_label(stage)
 
         if status == "processing":
@@ -337,6 +380,8 @@ class Step3Page(QWidget):
             fail_item.setToolTip(detail)
             fail_item.setForeground(QColor(COLORS["danger"]))
             self.table.setItem(row_idx, _COL_FAIL, fail_item)
+            if self.app.active_test_id:
+                set_step3_failed_entry(self.app.active_test_id, file_name, err, stage)
         elif status == "done" and stage == "done":
             result = ev.get("result") or {}
             texts = result.get("textMapping") or {}
@@ -351,12 +396,17 @@ class Step3Page(QWidget):
                     "db": "未反映",
                     "hint": "",
                 },
+                checked=False,
             )
             self.status_label.setText(f"{index}/{total}  完了: {file_name}")
 
     def _on_run_ocr(self) -> None:
         if not self.app.require_active_test():
             return
+        if not self._scanned:
+            h.warn(self, "一覧未表示", "先に「フォルダを再認識」でファイル一覧を表示してください。")
+            return
+
         folder = self.inbox_edit.text().strip()
         if not folder:
             h.error(self, "エラー", "解答フォルダを指定してください。")
@@ -371,38 +421,43 @@ class Step3Page(QWidget):
             )
             return
 
-        queue = build_ocr_work_queue(test_id, folder)
-        pending = queue["stats"]["pending"]
-        if pending == 0:
+        items, skipped_processed = self._get_checked_queue_items()
+        if skipped_processed:
             h.warn(
                 self,
-                "処理対象なし",
-                "未処理の画像がありません。\n\n"
-                f"解答フォルダ: {folder}\n"
-                f"反映済み: {queue['stats']['inSheet']} 件\n\n"
-                "PDF / JPG / PNG をこのフォルダに置き、「キュー更新」で件数を確認してから実行してください。",
+                "反映済みはスキップ",
+                "反映済みのファイルは再 OCR しません（③リセット後に再実行できます）:\n"
+                + "\n".join(skipped_processed[:8])
+                + (" …" if len(skipped_processed) > 8 else ""),
             )
+        if not items:
+            h.warn(self, "選択なし", "OCR するファイルにチェックを入れてください。")
             return
 
+        total = len(items)
         self.run_btn.setEnabled(False)
         self.progress.setValue(0)
-        self.progress_label.setText(f"0/{pending}")
-        self.status_label.setText(f"OCR バッチ開始（{pending} 件）…")
-        self.log.appendPlainText(f"--- OCR 開始（{pending} 件）---")
+        self.progress_label.setText(f"0/{total}")
+        self.status_label.setText(f"OCR 開始（チェック {total} 件）…")
+        self.log.appendPlainText(f"--- OCR 開始（チェック {total} 件）---")
 
         bridge = ProgressBridge(self)
         bridge.updated.connect(self._update_progress)
         bridge.detailed.connect(self._on_detail_progress)
 
         def task():
-            def on_progress(current: int, total: int, name: str) -> None:
-                bridge.updated.emit(current, total, name)
+            def on_progress(current: int, t: int, name: str) -> None:
+                bridge.updated.emit(current, t, name)
 
             def on_detail(ev: dict[str, Any]) -> None:
                 bridge.detailed.emit(ev)
 
             return run_batch_ocr(
-                test_id, folder, on_progress=on_progress, on_detail=on_detail
+                test_id,
+                folder,
+                on_progress=on_progress,
+                on_detail=on_detail,
+                items=items,
             )
 
         h.run_in_thread(self, task, self._on_ocr_done)
@@ -414,6 +469,7 @@ class Step3Page(QWidget):
 
     def _on_ocr_done(self, result: dict[str, Any] | None, err: Exception | None) -> None:
         self.run_btn.setEnabled(True)
+        test_id = self.app.active_test_id
         if err:
             h.error(self, "OCR エラー", str(err))
             self.log.appendPlainText(f"致命的エラー: {err}")
@@ -424,9 +480,11 @@ class Step3Page(QWidget):
         processed = int(result.get("processed", 0))
         written = int(flush.get("written", 0))
         err_count = len(result.get("errors", []))
-        warped_dir = test_warped(self.app.active_test_id)
+        warped_dir = test_warped(test_id)
         self._last_pending_rows = [
-            log["row"] for log in result.get("itemLogs", []) if log.get("status") == "done" and log.get("row")
+            log["row"]
+            for log in result.get("itemLogs", [])
+            if log.get("status") == "done" and log.get("row")
         ]
 
         summary = (
@@ -439,44 +497,67 @@ class Step3Page(QWidget):
 
         for e in result.get("errors", []):
             stage = self._stage_label(str(e.get("stage") or "unknown"))
-            msg = f"  × {e.get('fileName')}: [{stage}] {e.get('error')}"
+            fname = str(e.get("fileName") or "")
+            msg = f"  × {fname}: [{stage}] {e.get('error')}"
             self.log.appendPlainText(msg)
+            if test_id and fname:
+                set_step3_failed_entry(test_id, fname, str(e.get("error") or ""), str(e.get("stage") or ""))
 
         for log in result.get("itemLogs", []):
-            if log.get("status") == "done" and log.get("row"):
-                key = normalize_file_name(log["fileName"])
-                if key in self._row_by_name:
-                    row_idx = self._row_by_name[key]
-                    self._set_cell(
-                        row_idx, _COL_FIELD_START + len(self._fields), "済"
-                    )
-                    self._set_cell(
-                        row_idx, _COL_STATUS, "反映済", QColor(COLORS["success"])
-                    )
+            if log.get("status") == "done" and test_id:
+                clear_step3_failed_entry(test_id, log["fileName"])
 
-        self._refresh_tsv()
-        self.refresh()
+        self._scan_folder()
 
         if processed == 0 and err_count == 0:
             self.status_label.setText("処理対象なし")
-            h.warn(self, "処理なし", "処理されたファイルは 0 件でした。")
         elif err_count:
-            failed_names = ", ".join(e.get("fileName", "") for e in result.get("errors", []))
-            self.status_label.setText(
-                f"完了（失敗 {err_count} 件）— 失敗: {self._truncate(failed_names, 60)}"
-            )
+            self.status_label.setText(f"完了（失敗 {err_count} 件）— 一覧を更新しました")
             h.warn(
                 self,
                 "一部エラー",
                 f"書込 {written} 件 / 失敗 {err_count} 件\n\n"
-                "下の表の「失敗理由」列で、どの工程で止まったか確認できます。",
+                "「失敗」選択ボタンで失敗分を再チェックできます。",
             )
         else:
             self.status_label.setText(f"全件完了 — DB書込 {written} 件")
             h.info(self, "OCR 完了", f"書込 {written} 件\n補正画像: {warped_dir}")
 
+    def _on_reset(self) -> None:
+        if not self.app.require_active_test():
+            return
+        ans = QMessageBox.question(
+            self,
+            "③をリセット",
+            "採点結果（OCRテキスト）・補正画像・失敗記録をすべて消去し、\n"
+            "「元画像」フォルダの原本を解答フォルダへ戻します。\n\n"
+            "この操作は取り消せません。続行しますか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ans != QMessageBox.Yes:
+            return
+        try:
+            res = reset_step3_data(self.app.active_test_id)
+            self._scanned = False
+            self._clear_view()
+            self.status_label.setText("リセット完了 — 「フォルダを再認識」からやり直してください。")
+            self.log.appendPlainText(
+                f"リセット: 結果削除 {res['deletedResults']} / "
+                f"補正削除 {res['deletedWarped']} / 原本復元 {res['restored']}"
+            )
+            h.info(
+                self,
+                "リセット完了",
+                f"採点結果 {res['deletedResults']} 件削除\n"
+                f"補正画像 {res['deletedWarped']} 件削除\n"
+                f"原本 {res['restored']} 件を解答フォルダへ復元",
+            )
+        except Exception as e:
+            h.error(self, "リセット失敗", str(e))
+
     def _refresh_tsv(self) -> None:
-        if not self.app.active_test_id:
+        if not self.app.require_active_test():
             self.tsv_view.setPlainText("")
             return
         tsv = build_results_tsv(self.app.active_test_id)
@@ -490,10 +571,10 @@ class Step3Page(QWidget):
     def _copy_tsv(self) -> None:
         text = self.tsv_view.toPlainText().strip()
         if not text:
-            h.warn(self, "コピー不可", "TSV データがありません。先に OCR を実行するか「TSV再生成」を押してください。")
+            h.warn(self, "コピー不可", "TSV データがありません。「TSV再生成」を押してください。")
             return
         QApplication.clipboard().setText(text)
-        h.info(self, "コピー完了", "TSV をクリップボードにコピーしました。スプレッドシートに貼り付けできます。")
+        h.info(self, "コピー完了", "TSV をクリップボードにコピーしました。")
 
     def _on_export_excel(self) -> None:
         if not self.app.require_active_test():

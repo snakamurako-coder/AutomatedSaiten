@@ -121,3 +121,104 @@ def build_ocr_work_queue(test_id: str, inbox_path: str) -> dict[str, Any]:
             "inSheet": len(processed),
         },
     }
+
+
+def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
+    """フォルダ・DB・失敗記録を統合したファイル一覧（③ UI 用）。"""
+    from models.test_repo import get_result_preview, get_step3_failed
+
+    inbox = Path(inbox_path) if inbox_path else test_inbox(test_id)
+    archive = test_archive(test_id)
+    results = {normalize_file_name(r["fileName"]): r for r in get_result_preview(test_id)}
+    failed_map = get_step3_failed(test_id)
+
+    files_meta: dict[str, dict[str, Any]] = {}
+
+    def add_file(meta: dict[str, Any], in_archive: bool) -> None:
+        key = normalize_file_name(meta["name"])
+        if not key:
+            return
+        cur = files_meta.get(key, {})
+        cur.update(
+            {
+                "name": meta["name"],
+                "path": meta.get("path") or meta.get("id") or "",
+                "id": meta.get("id") or meta.get("path") or "",
+                "isPdf": bool(meta.get("isPdf")),
+                "inArchive": in_archive or cur.get("inArchive", False),
+            }
+        )
+        files_meta[key] = cur
+
+    for f in list_inbox_files(inbox):
+        add_file(f, False)
+    if archive.exists():
+        for f in list_inbox_files(archive):
+            add_file(f, True)
+
+    all_keys = set(files_meta.keys()) | set(results.keys()) | set(failed_map.keys())
+    rows: list[dict[str, Any]] = []
+
+    for key in sorted(all_keys, key=lambda k: files_meta.get(k, {}).get("name", k)):
+        fmeta = files_meta.get(key, {})
+        result = results.get(key)
+        fail = failed_map.get(key)
+        name = (
+            fmeta.get("name")
+            or (result or {}).get("fileName")
+            or (fail or {}).get("fileName")
+            or key
+        )
+        warped = find_warped_for_original(test_id, name)
+        in_db = key in results
+
+        if in_db:
+            status = "反映済"
+        elif key in failed_map:
+            status = "失敗"
+        elif warped and fmeta:
+            status = "補正済"
+        elif fmeta:
+            status = "未処理"
+        elif key in failed_map:
+            status = "失敗"
+        else:
+            status = "反映済" if in_db else "不明"
+
+        queue_item: dict[str, Any] | None = None
+        if not in_db and fmeta.get("path"):
+            queue_item = {
+                "id": fmeta.get("id") or fmeta.get("path") or "",
+                "name": name,
+                "path": fmeta.get("path") or "",
+                "mimeType": "application/pdf" if fmeta.get("isPdf") else "image/jpeg",
+                "isPdf": bool(fmeta.get("isPdf")),
+                "stage": "ocr_only" if warped else "warp_and_ocr",
+                "warpedPath": warped or "",
+                "inArchive": bool(fmeta.get("inArchive")),
+            }
+
+        rows.append(
+            {
+                "fileName": name,
+                "status": status,
+                "fail": (fail or {}).get("error", "") if status == "失敗" else "",
+                "failStage": (fail or {}).get("stage", "") if status == "失敗" else "",
+                "studentId": (result or {}).get("studentId") or "",
+                "texts": (result or {}).get("textMapping") or {},
+                "db": "済" if in_db else "—",
+                "hint": "（補正済）" if status == "補正済" else "",
+                "inArchive": bool(fmeta.get("inArchive")),
+                "queueItem": queue_item,
+            }
+        )
+
+    stats = {
+        "total": len(rows),
+        "unprocessed": sum(1 for r in rows if r["status"] == "未処理"),
+        "warped": sum(1 for r in rows if r["status"] == "補正済"),
+        "processed": sum(1 for r in rows if r["status"] == "反映済"),
+        "failed": sum(1 for r in rows if r["status"] == "失敗"),
+        "inInbox": sum(1 for r in rows if not r.get("inArchive") and r["status"] != "反映済"),
+    }
+    return {"rows": rows, "stats": stats}

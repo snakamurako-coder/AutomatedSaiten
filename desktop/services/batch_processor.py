@@ -175,13 +175,16 @@ def run_batch_ocr(
     on_progress: ProgressCallback | None = None,
     on_detail: DetailProgressCallback | None = None,
     mode: str = "unprocessed",
+    items: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     cfg = load_config()
     orientation = cfg.get("default_orientation", "landscape")
-    queue = build_ocr_work_queue(test_id, inbox_path)
-    items = queue["items"]
-    if mode == "retry":
-        pass
+    if items is None:
+        queue = build_ocr_work_queue(test_id, inbox_path)
+        items = queue["items"]
+        queue_stats = queue["stats"]
+    else:
+        queue_stats = {}
 
     total = len(items)
     pending_rows: list[dict[str, Any]] = []
@@ -260,6 +263,6 @@ def run_batch_ocr(
         "processed": len(pending_rows),
         "errors": errors,
         "flush": flush_result,
-        "queueStats": queue["stats"],
+        "queueStats": queue_stats,
         "itemLogs": item_logs,
     }

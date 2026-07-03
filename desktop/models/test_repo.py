@@ -562,3 +562,108 @@ def build_pending_rows_tsv(test_id: str, pending_rows: list[dict[str, Any]]) -> 
             row[f"{label}_得点"] = ""
         lines.append("\t".join(escape_tsv_cell(row.get(h, "")) for h in headers))
     return "\n".join(lines)
+
+
+# --- ③ テキスト化: 失敗記録・リセット ---
+
+def _step3_failed_key(test_id: str) -> str:
+    return f"step3_failed_{test_id}"
+
+
+def get_step3_failed(test_id: str) -> dict[str, dict[str, str]]:
+    """normalize_file_name → {fileName, error, stage}"""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (_step3_failed_key(test_id),)
+        ).fetchone()
+    if not row or not row["value"]:
+        return {}
+    try:
+        raw = json.loads(row["value"])
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, dict[str, str]] = {}
+    for item in raw if isinstance(raw, list) else []:
+        name = str(item.get("fileName") or "")
+        key = normalize_file_name(name)
+        if key:
+            out[key] = {
+                "fileName": name,
+                "error": str(item.get("error") or ""),
+                "stage": str(item.get("stage") or ""),
+            }
+    return out
+
+
+def save_step3_failed(test_id: str, failed: dict[str, dict[str, str]]) -> None:
+    rows = list(failed.values())
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO app_state(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_step3_failed_key(test_id), json.dumps(rows, ensure_ascii=False)),
+        )
+        conn.commit()
+
+
+def set_step3_failed_entry(
+    test_id: str, file_name: str, error: str, stage: str = ""
+) -> None:
+    failed = get_step3_failed(test_id)
+    key = normalize_file_name(file_name)
+    failed[key] = {"fileName": file_name, "error": error, "stage": stage}
+    save_step3_failed(test_id, failed)
+
+
+def clear_step3_failed_entry(test_id: str, file_name: str) -> None:
+    failed = get_step3_failed(test_id)
+    failed.pop(normalize_file_name(file_name), None)
+    save_step3_failed(test_id, failed)
+
+
+def clear_step3_failed(test_id: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM app_state WHERE key = ?", (_step3_failed_key(test_id),))
+        conn.commit()
+
+
+def reset_step3_data(test_id: str) -> dict[str, int]:
+    """③ の処理結果を初期化（DB・補正画像・失敗記録を消し、原本をフォルダへ戻す）。"""
+    import shutil
+    from pathlib import Path
+
+    info = get_test_info(test_id)
+    folder = Path(info.get("folderPath") or test_inbox(test_id))
+    folder.mkdir(parents=True, exist_ok=True)
+    archive = test_archive(test_id)
+    warped = test_warped(test_id)
+
+    restored = 0
+    if archive.exists():
+        for p in archive.iterdir():
+            if not p.is_file():
+                continue
+            dest = folder / p.name
+            if not dest.exists():
+                shutil.move(str(p), str(dest))
+                restored += 1
+
+    deleted_warped = 0
+    if warped.exists():
+        for p in warped.iterdir():
+            if p.is_file():
+                p.unlink()
+                deleted_warped += 1
+
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM results WHERE test_id = ?", (test_id,))
+        deleted_results = cur.rowcount
+        conn.execute("DELETE FROM app_state WHERE key = ?", (_step3_failed_key(test_id),))
+        touch_progress_conn(conn, test_id, 2, "リセット済み")
+        conn.commit()
+
+    return {
+        "restored": restored,
+        "deletedWarped": deleted_warped,
+        "deletedResults": deleted_results,
+    }
