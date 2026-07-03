@@ -34,6 +34,7 @@ from models.test_repo import (
     export_results_to_excel,
     get_answer_fields,
     get_test_info,
+    import_results_from_excel,
     normalize_file_name,
     reset_step3_data,
     save_student_folder,
@@ -134,8 +135,6 @@ class Step3Page(QWidget):
         self.run_btn = h.button("チェックしたファイルを OCR", self._on_run_ocr, variant="primary")
         btns.addWidget(self.run_btn)
         btns.addWidget(h.button("③をリセット", self._on_reset, variant="danger-soft"))
-        btns.addWidget(h.button("TSV再生成", self._refresh_tsv))
-        btns.addWidget(h.button("Excel エクスポート", self._on_export_excel))
         btns.addStretch()
         root.addLayout(btns)
 
@@ -163,8 +162,16 @@ class Step3Page(QWidget):
         tsv_btns = QHBoxLayout()
         tsv_btns.addWidget(h.button("TSVをコピー", self._copy_tsv, variant="success"))
         tsv_btns.addWidget(h.button("TSV再生成", self._refresh_tsv))
+        tsv_btns.addWidget(h.button("Excel エクスポート", self._on_export_excel))
+        tsv_btns.addWidget(h.button("Excel インポート", self._on_import_excel))
         tsv_btns.addStretch()
         tsv_lay.addLayout(tsv_btns)
+        tsv_lay.addWidget(
+            h.caption_label(
+                "Excel エクスポート／インポートで「ファイル別の処理状況」の一覧を保存・復元できます。"
+                "インポート後は一覧を自動更新します。"
+            )
+        )
         self.tsv_view = QPlainTextEdit()
         self.tsv_view.setReadOnly(True)
         self.tsv_view.setPlaceholderText("「TSV再生成」で DB の採点結果を表示します。")
@@ -177,7 +184,7 @@ class Step3Page(QWidget):
         tsv_lay.addWidget(self.tsv_view)
         root.addWidget(
             CollapsibleSection(
-                "採点結果 TSV（スプレッドシートに貼り付け可能）",
+                "採点結果TSV・Excel",
                 tsv_body,
                 collapsed=True,
                 tint="#fffbeb",
@@ -642,3 +649,53 @@ class Step3Page(QWidget):
             h.info(self, "エクスポート完了", f"保存しました:\n{path}")
         except Exception as e:
             h.error(self, "エラー", str(e))
+
+    def _on_import_excel(self) -> None:
+        if not self.app.require_active_test():
+            return
+        path, _ = QFileDialog.getOpenFileName(
+            self, "採点結果 Excel をインポート", "", "Excel (*.xlsx)"
+        )
+        if not path:
+            return
+        test_id = self.app.active_test_id
+        try:
+            res = import_results_from_excel(test_id, path)
+        except Exception as e:
+            h.error(self, "インポート失敗", str(e))
+            return
+        if res["total"] == 0:
+            h.warn(self, "インポート", "取り込める行がありませんでした。")
+            return
+        folder = self.inbox_edit.text().strip()
+        if not folder:
+            info = get_test_info(test_id)
+            folder = (info.get("folderPath") or "").strip()
+            if folder:
+                self.inbox_edit.setText(folder)
+        if folder:
+            self._scan_folder()
+        else:
+            inv = build_file_inventory(test_id, "")
+            self._fields = get_answer_fields(test_id)
+            self._inventory_rows = inv["rows"]
+            st = inv["stats"]
+            self.queue_stats.setText(
+                f"Excel 取込 {res['total']} 件 — 合計 {st['total']} 件 "
+                f"（新規 {res['inserted']} / 更新 {res['updated']}）"
+            )
+            self._rebuild_table(self._inventory_rows)
+            self._scanned = True
+            n = sum(1 for i in range(self.table.rowCount()) if self._row_checked(i))
+            self.status_label.setText(f"Excel から {res['total']} 件を復元しました（{n} 件を選択中）。")
+        self.log.appendPlainText(
+            f"--- Excel インポート: 新規 {res['inserted']} / 更新 {res['updated']} "
+            f"/ スキップ {res['skipped']} ---"
+        )
+        self._refresh_tsv()
+        h.info(
+            self,
+            "インポート完了",
+            f"新規 {res['inserted']} 件 / 更新 {res['updated']} 件を取り込みました。\n"
+            "「ファイル別の処理状況」を更新しました。",
+        )

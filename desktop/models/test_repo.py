@@ -478,6 +478,158 @@ def rewrite_field_texts(
     return updated
 
 
+def upsert_result_row(
+    test_id: str,
+    file_name: str,
+    *,
+    source_path: str = "",
+    warped_path: str = "",
+    student_id: str = "",
+    name: str = "",
+    text_mapping: dict[str, str] | None = None,
+    judgments: dict[str, str] | None = None,
+    scores: dict[str, Any] | None = None,
+) -> str:
+    """採点結果を INSERT または UPDATE。戻り値: inserted / updated。"""
+    file_name = str(file_name or "").strip()
+    if not file_name:
+        raise ValueError("ファイル名が空です。")
+    texts_json = json.dumps(text_mapping or {}, ensure_ascii=False)
+    judgments_json = json.dumps(judgments or {}, ensure_ascii=False)
+    scores_json = json.dumps(scores or {}, ensure_ascii=False)
+    now = _now()
+
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT id FROM results WHERE test_id = ? AND file_name = ?",
+            (test_id, file_name),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE results SET
+                    student_id = ?, source_path = ?, warped_path = ?, name = ?,
+                    texts_json = ?, judgments_json = ?, scores_json = ?
+                WHERE id = ?
+                """,
+                (
+                    student_id or "",
+                    source_path or "",
+                    warped_path or "",
+                    name or "",
+                    texts_json,
+                    judgments_json,
+                    scores_json,
+                    existing["id"],
+                ),
+            )
+            touch_progress_conn(conn, test_id, 3, "テキスト化中")
+            conn.commit()
+            return "updated"
+        conn.execute(
+            """
+            INSERT INTO results(
+                test_id, student_id, file_name, source_path, warped_path, name,
+                texts_json, judgments_json, scores_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                test_id,
+                student_id or "",
+                file_name,
+                source_path or "",
+                warped_path or "",
+                name or "",
+                texts_json,
+                judgments_json,
+                scores_json,
+                now,
+            ),
+        )
+        touch_progress_conn(conn, test_id, 3, "テキスト化中")
+        conn.commit()
+        return "inserted"
+
+
+def _excel_cell_str(value: Any) -> str:
+    if value is None:
+        return ""
+    try:
+        import pandas as pd
+
+        if pd.isna(value):
+            return ""
+    except Exception:
+        pass
+    s = str(value).strip()
+    return "" if s.lower() == "nan" else s
+
+
+def import_results_from_excel(test_id: str, path: str) -> dict[str, Any]:
+    """エクスポート済み Excel から採点結果を取り込み、③ 一覧の再現用に DB を更新する。"""
+    import pandas as pd
+
+    df = pd.read_excel(path, sheet_name=0)
+    if df.empty:
+        raise ValueError("Excel にデータ行がありません。")
+    if "ファイル名" not in df.columns:
+        raise ValueError("「ファイル名」列が見つかりません。③ でエクスポートした Excel を選んでください。")
+
+    fields = get_answer_fields(test_id)
+    inserted = 0
+    updated = 0
+    skipped = 0
+
+    for _, row in df.iterrows():
+        file_name = _excel_cell_str(row.get("ファイル名"))
+        if not file_name:
+            skipped += 1
+            continue
+
+        texts: dict[str, str] = {}
+        judgments: dict[str, str] = {}
+        scores: dict[str, Any] = {}
+        for f in fields:
+            label = f["displayName"] or f["id"]
+            fid = f["id"]
+            tcol, jcol, scol = f"{label}_テキスト", f"{label}_判定", f"{label}_得点"
+            if tcol in df.columns:
+                t = _excel_cell_str(row.get(tcol))
+                texts[fid] = t or "なし"
+            if jcol in df.columns:
+                judgments[fid] = _excel_cell_str(row.get(jcol))
+            if scol in df.columns:
+                raw = _excel_cell_str(row.get(scol))
+                if raw:
+                    try:
+                        scores[fid] = int(float(raw))
+                    except ValueError:
+                        scores[fid] = raw
+
+        action = upsert_result_row(
+            test_id,
+            file_name,
+            source_path=_excel_cell_str(row.get("ファイルID")),
+            warped_path=_excel_cell_str(row.get("補正画像FileID")),
+            student_id=_excel_cell_str(row.get("生徒ID")),
+            name=_excel_cell_str(row.get("氏名")),
+            text_mapping=texts,
+            judgments=judgments,
+            scores=scores,
+        )
+        if action == "inserted":
+            inserted += 1
+        else:
+            updated += 1
+
+    return {
+        "inserted": inserted,
+        "updated": updated,
+        "skipped": skipped,
+        "total": inserted + updated,
+    }
+
+
 def export_results_to_excel(test_id: str, output_path: str) -> str:
     """採点結果を GAS 互換のワイド形式 Excel にエクスポート。"""
     import pandas as pd

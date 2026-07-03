@@ -73,6 +73,30 @@ class CollapsibleSection(QFrame):
         self._toggle.setText("ー" if expanded else "＋")
 
 
+def viewport_work_height(
+    reserved: int = 160,
+    *,
+    min_height: int = 512,
+    max_ratio: float = 0.85,
+    widget: QWidget | None = None,
+) -> int:
+    """GAS の calc(100vh - Nrem) / clamp 相当の作業領域高さ。"""
+    from PySide6.QtWidgets import QApplication
+
+    avail = 800
+    if widget is not None:
+        win = widget.window()
+        if win is not None and win.height() > 400:
+            avail = win.height()
+    if avail <= 400:
+        app = QApplication.instance()
+        if app and app.primaryScreen():
+            avail = app.primaryScreen().availableGeometry().height()
+    target = avail - reserved
+    cap = int(avail * max_ratio)
+    return max(min_height, min(cap, target))
+
+
 def main_table_frame(title: str, table: QWidget) -> QFrame:
     """メイン一覧テーブル用フレーム（残り高さを占有）。"""
     frame = QFrame()

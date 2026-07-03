@@ -31,7 +31,8 @@ from models.criteria_repo import (
     merge_unique_with_criteria,
     save_grading_criteria,
 )
-from models.test_repo import get_answer_fields
+from models.database import connect
+from models.test_repo import get_answer_fields, get_points_conn
 from models.text_processing import (
     apply_deemed_scoring_to_field,
     apply_text_replacements_to_field,
@@ -44,7 +45,13 @@ from services.crop_preview import load_crops_for_rows
 from services.gemini_rubric import generate_rubric_with_gemini
 from ui_qt import helpers as h
 from ui_qt.helpers import pil_to_qpixmap
-from ui_qt.layout_helpers import CollapsibleSection, main_table_frame, make_expanding
+from ui_qt.criteria_widgets import ScoreStepWidget, make_judgment_combo, wrap_table_cell
+from ui_qt.layout_helpers import (
+    CollapsibleSection,
+    main_table_frame,
+    make_expanding,
+    viewport_work_height,
+)
 from ui_qt.style import COLORS
 from ui_qt.table_cells import (
     make_editable_item,
@@ -69,8 +76,20 @@ class Step4Page(QWidget):
         self._crop_grid_results: list[dict[str, Any]] = []
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        make_expanding(self._scroll)
+        outer.addWidget(self._scroll, 1)
+
+        body = QWidget()
+        self._scroll.setWidget(body)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 8, 0)
         root.setSpacing(8)
 
         root.addWidget(h.title_label("④ 採点基準の設定"))
@@ -92,8 +111,27 @@ class Step4Page(QWidget):
 
         root.addWidget(self._build_ocr_replace_section())
         root.addWidget(self._build_deemed_box())
-        root.addWidget(main_table_frame("", self._build_criteria_table()), 1)
-        root.addWidget(self._build_outlier_box(), 2)
+        root.addWidget(main_table_frame("", self._build_criteria_table()))
+        root.addWidget(self._build_outlier_box())
+        self._apply_viewport_heights()
+
+    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802
+        super().resizeEvent(event)
+        self._apply_viewport_heights()
+
+    def showEvent(self, event) -> None:  # noqa: ANN001, N802
+        super().showEvent(event)
+        self._apply_viewport_heights()
+
+    def _apply_viewport_heights(self) -> None:
+        if not hasattr(self, "crop_scroll"):
+            return
+        crop_h = viewport_work_height(160, min_height=512, max_ratio=0.85, widget=self)
+        self.crop_scroll.setMinimumHeight(crop_h)
+        self.crop_scroll.setMaximumHeight(crop_h)
+        crit_h = viewport_work_height(224, min_height=240, max_ratio=0.55, widget=self)
+        self.criteria_table.setMinimumHeight(min(280, crit_h))
+        self.criteria_table.setMaximumHeight(crit_h)
 
     # ==================== UI 構築 ====================
 
@@ -163,7 +201,7 @@ class Step4Page(QWidget):
         self.criteria_table.setHorizontalHeaderLabels(
             ["みなし", "不正解", "解答", "人数", "判定", "得点", "備考"]
         )
-        widths = [52, 52, 280, 52, 52, 52, 260]
+        widths = [52, 52, 280, 52, 72, 108, 260]
         for i, w in enumerate(widths):
             self.criteria_table.setColumnWidth(i, w)
         self.criteria_table.horizontalHeader().setStretchLastSection(True)
@@ -202,27 +240,48 @@ class Step4Page(QWidget):
         self.criteria_table.setCurrentCell(row, col)
 
     def _on_criteria_cell_clicked(self, row: int, col: int) -> None:
-        if col in (4, 5, 6):
+        if col == 6:
             start_cell_edit(self.criteria_table, row, col)
 
     def _on_criteria_item_changed(self, item: QTableWidgetItem) -> None:
         row, col = item.row(), item.column()
-        if row < 0 or row >= len(self._criteria_rows) or col not in (4, 5, 6):
+        if row < 0 or row >= len(self._criteria_rows) or col != 6:
             return
-        text = item.text().strip()
-        if col == 4:
-            self._criteria_rows[row]["judgment"] = text
-        elif col == 5:
-            if not text:
-                self._criteria_rows[row]["score"] = ""
-            else:
-                try:
-                    self._criteria_rows[row]["score"] = int(text)
-                except ValueError:
-                    h.warn(self, "入力エラー", "得点は整数で入力してください。")
-                    self._render_criteria_table()
-        elif col == 6:
-            self._criteria_rows[row]["reason"] = text
+        self._criteria_rows[row]["reason"] = item.text().strip()
+
+    def _field_max_score(self) -> int:
+        fid = self._selected_field_id()
+        test_id = self.app.active_test_id
+        if not fid or not test_id:
+            return 99
+        with connect() as conn:
+            pts = get_points_conn(conn, test_id)
+        return max(1, int(pts.get(fid, 1)))
+
+    @staticmethod
+    def _default_judgment(row: dict[str, Any]) -> str:
+        j = str(row.get("judgment") or "").strip()
+        return j if j in ("○", "△", "×") else "×"
+
+    def _default_score(self, row: dict[str, Any], max_score: int | None = None) -> int:
+        cap = max_score if max_score is not None else self._field_max_score()
+        s = row.get("score")
+        if s != "" and s is not None:
+            try:
+                return max(0, min(cap, int(s)))
+            except (TypeError, ValueError):
+                pass
+        if str(row.get("answer_text") or "") == "なし":
+            return 0
+        return min(1, cap)
+
+    def _set_criteria_judgment(self, row: int, judgment: str) -> None:
+        if 0 <= row < len(self._criteria_rows):
+            self._criteria_rows[row]["judgment"] = judgment
+
+    def _set_criteria_score(self, row: int, score: int) -> None:
+        if 0 <= row < len(self._criteria_rows):
+            self._criteria_rows[row]["score"] = int(score)
 
     def _build_outlier_box(self) -> QGroupBox:
         box = QGroupBox("外れ値・少数派解答の確認（回答欄画像）")
@@ -285,10 +344,9 @@ class Step4Page(QWidget):
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
-        make_expanding(self.crop_scroll)
         self.crop_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
-            f" background: {COLORS['sidebar']}; }}"
+            f" background: {COLORS['surface']}; }}"
         )
         self.crop_panel = QWidget()
         self.crop_panel.setStyleSheet("background: transparent;")
@@ -296,8 +354,7 @@ class Step4Page(QWidget):
         self.crop_grid.setContentsMargins(8, 8, 8, 8)
         self.crop_grid.setSpacing(8)
         self.crop_scroll.setWidget(self.crop_panel)
-        lay.addWidget(self.crop_scroll, 1)
-        make_expanding(box)
+        lay.addWidget(self.crop_scroll)
         return box
 
     # ==================== 状態ヘルパー ====================
@@ -531,6 +588,7 @@ class Step4Page(QWidget):
         t = self.criteria_table
         t.blockSignals(True)
         t.setRowCount(len(self._criteria_rows))
+        max_score = self._field_max_score()
         for i, row in enumerate(self._criteria_rows):
             ans = row.get("answer_text", "")
             if canonical and ans == canonical:
@@ -540,29 +598,44 @@ class Step4Page(QWidget):
             incorrect_item = make_toggle_item(self._is_incorrect(fid, ans))
             count_item = make_readonly_item(str(row.get("count", 0)), center=True)
             answer_item = make_readonly_item(ans)
-            judgment_item = make_editable_item(str(row.get("judgment", "") or ""), center=True)
-            score_item = make_editable_item(str(row.get("score", "") or ""), center=True)
             reason_item = make_editable_item(str(row.get("reason", "") or ""))
-            items = [
-                deemed_item,
-                incorrect_item,
-                answer_item,
-                count_item,
-                judgment_item,
-                score_item,
-                reason_item,
-            ]
+
+            judgment = self._default_judgment(row)
+            score_val = self._default_score(row, max_score)
+            self._criteria_rows[i]["judgment"] = judgment
+            self._criteria_rows[i]["score"] = score_val
+
+            j_combo = make_judgment_combo(
+                judgment,
+                lambda j, r=i: self._set_criteria_judgment(r, j),
+            )
+            score_widget = ScoreStepWidget(
+                score_val,
+                max_score,
+                lambda s, r=i: self._set_criteria_score(r, s),
+            )
+
+            t.setItem(i, 0, deemed_item)
+            t.setItem(i, 1, incorrect_item)
+            t.setItem(i, 2, answer_item)
+            t.setItem(i, 3, count_item)
+            t.setCellWidget(i, 4, wrap_table_cell(j_combo))
+            t.setCellWidget(i, 5, score_widget)
+            t.setItem(i, 6, reason_item)
+
             bg = None
             if row.get("deemed") or self._is_deemed(fid, ans):
                 bg = COLORS["accent_soft"]
             elif row.get("incorrect") or self._is_incorrect(fid, ans):
                 bg = COLORS["danger_soft"]
-            for c, item in enumerate(items):
-                if bg:
-                    from PySide6.QtGui import QColor
+            if bg:
+                from PySide6.QtGui import QColor
 
-                    item.setBackground(QColor(bg))
-                t.setItem(i, c, item)
+                color = QColor(bg)
+                for c in (0, 1, 2, 3, 6):
+                    item = t.item(i, c)
+                    if item:
+                        item.setBackground(color)
         t.blockSignals(False)
 
     def _on_outlier_toggle(self, row: int, col: int, checked: bool) -> None:
