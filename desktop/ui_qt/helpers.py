@@ -2,32 +2,21 @@
 
 from __future__ import annotations
 
+import threading
 from typing import Any, Callable
 
 import numpy as np
-from PySide6.QtCore import QObject, QThread, Signal, Qt
+from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton, QWidget
 
 from ui_qt.style import set_role, set_variant
 
 
-class _Worker(QObject):
+class _AsyncBridge(QObject):
+    """Python threading から UI スレッドへ結果を渡すブリッジ。"""
+
     finished = Signal(object, object)  # (result, error)
-    progress = Signal(object)
-
-    def __init__(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-        super().__init__()
-        self._fn = fn
-        self._args = args
-        self._kwargs = kwargs
-
-    def run(self) -> None:
-        try:
-            result = self._fn(*self._args, **self._kwargs)
-            self.finished.emit(result, None)
-        except Exception as e:  # noqa: BLE001 - UI に表示するため全捕捉
-            self.finished.emit(None, e)
 
 
 def run_in_thread(
@@ -35,41 +24,36 @@ def run_in_thread(
     fn: Callable[..., Any],
     on_done: Callable[[Any, Exception | None], None],
     *args: Any,
-    on_progress: Callable[[Any], None] | None = None,
     **kwargs: Any,
-) -> QThread:
+) -> _AsyncBridge:
     """バックグラウンドスレッドで fn を実行し、完了時に UI スレッドで on_done を呼ぶ。
 
-    fn へ progress コールバックを渡したい場合は、kwargs 側で
-    `progress_emitter` を受け取る設計にせず、Signal 経由で on_progress を使う。
+    QThread では PySide6 環境で完了コールバックが届かないことがあるため、
+    threading + Signal で UI に戻す。
     """
-    thread = QThread(parent)
-    worker = _Worker(fn, *args, **kwargs)
-    worker.moveToThread(thread)
-    if on_progress:
-        worker.progress.connect(on_progress)
+    bridge = _AsyncBridge()
 
-    def _done(result: Any, error: Exception | None) -> None:
+    def _handle(result: Any, error: Exception | None) -> None:
         on_done(result, error)
-        thread.quit()
+        workers = getattr(parent, "_async_workers", None)
+        if workers is not None and bridge in workers:
+            workers.remove(bridge)
 
-    worker.finished.connect(_done, Qt.ConnectionType.QueuedConnection)
-    thread.started.connect(worker.run)
-    thread.finished.connect(worker.deleteLater)
-    thread.finished.connect(thread.deleteLater)
-    # 親に参照を保持させて GC を防ぐ
-    if not hasattr(parent, "_bg_threads"):
-        parent._bg_threads = []  # type: ignore[attr-defined]
-    parent._bg_threads.append(thread)  # type: ignore[attr-defined]
+    bridge.finished.connect(_handle, Qt.ConnectionType.QueuedConnection)
 
-    def _remove_thread() -> None:
-        threads = getattr(parent, "_bg_threads", None)
-        if threads is not None and thread in threads:
-            threads.remove(thread)
+    if not hasattr(parent, "_async_workers"):
+        parent._async_workers = []  # type: ignore[attr-defined]
+    parent._async_workers.append(bridge)  # type: ignore[attr-defined]
 
-    thread.finished.connect(_remove_thread)
-    thread.start()
-    return thread
+    def work() -> None:
+        try:
+            result = fn(*args, **kwargs)
+            bridge.finished.emit(result, None)
+        except Exception as e:  # noqa: BLE001 - UI に表示するため全捕捉
+            bridge.finished.emit(None, e)
+
+    threading.Thread(target=work, daemon=True, name="AsyncWorker").start()
+    return bridge
 
 
 class ProgressBridge(QObject):

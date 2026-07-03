@@ -30,6 +30,7 @@ def _session() -> requests.Session:
     if _SESSION is None:
         _prefer_ipv4_on_windows()
         _SESSION = requests.Session()
+        _SESSION.trust_env = False
     return _SESSION
 
 

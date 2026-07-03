@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Callable
 
+from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -29,6 +30,7 @@ class SettingsDialog(QDialog):
         self.setWindowTitle("詳細設定")
         self.resize(600, 480)
         self._on_saved = on_saved
+        self._api_test_token = 0
         cfg = load_config()
 
         root = QVBoxLayout(self)
@@ -138,9 +140,13 @@ class SettingsDialog(QDialog):
         self.accept()
 
     def _run_api_test(self, label: str, worker: Callable[[], str]) -> None:
+        self._api_test_token += 1
+        token = self._api_test_token
         self.status_label.setText(f"{label} を確認中…")
 
         def done(msg, err):
+            if token != self._api_test_token:
+                return
             if err:
                 self.status_label.setText(str(err))
                 h.error(self, f"{label} — 失敗", str(err))
@@ -149,6 +155,20 @@ class SettingsDialog(QDialog):
                 h.info(self, f"{label} — OK", msg)
 
         h.run_in_thread(self, worker, done)
+
+        def watchdog() -> None:
+            if token != self._api_test_token:
+                return
+            if self.status_label.text().endswith("を確認中…"):
+                self.status_label.setText(f"{label} — 応答がありません（タイムアウト）")
+                h.error(
+                    self,
+                    f"{label} — タイムアウト",
+                    "40 秒以内に応答がありませんでした。\n"
+                    "インターネット接続、ファイアウォール、プロキシ、API キー制限を確認してください。",
+                )
+
+        QTimer.singleShot(40_000, watchdog)
 
     def _test_vision(self) -> None:
         key = self.vision_edit.text().strip()
