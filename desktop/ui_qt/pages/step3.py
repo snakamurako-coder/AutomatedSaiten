@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from functools import partial
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -117,7 +118,7 @@ class Step3Page(QWidget):
             ("＋失敗", "failed"),
         ]:
             tip = "該当ステータスにチェックを入れる" if mode != "none" else "すべてのチェックを外す"
-            btn = h.button(label, lambda m=mode: self._select_by_status(m))
+            btn = h.button(label, partial(self._select_by_status, mode))
             btn.setToolTip(tip)
             sel_row.addWidget(btn)
         sel_row.addStretch()
