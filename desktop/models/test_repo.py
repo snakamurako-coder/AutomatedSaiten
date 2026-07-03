@@ -482,6 +482,21 @@ def export_results_to_excel(test_id: str, output_path: str) -> str:
     """採点結果を GAS 互換のワイド形式 Excel にエクスポート。"""
     import pandas as pd
 
+    headers, rows = build_result_export_rows(test_id)
+    df = pd.DataFrame(rows, columns=headers)
+    df.to_excel(output_path, index=False, sheet_name="採点結果")
+    return output_path
+
+
+def escape_tsv_cell(value: Any) -> str:
+    s = "" if value is None else str(value)
+    if any(c in s for c in ("\t", "\n", "\r", '"')):
+        return '"' + s.replace('"', '""') + '"'
+    return s
+
+
+def build_result_export_rows(test_id: str) -> tuple[list[str], list[dict[str, Any]]]:
+    """採点結果のエクスポート用ヘッダーと行データ。"""
     fields = get_answer_fields(test_id)
     preview = get_all_results(test_id)
     headers = ["生徒ID", "ファイル名", "ファイルID", "補正画像FileID", "氏名"]
@@ -489,23 +504,61 @@ def export_results_to_excel(test_id: str, output_path: str) -> str:
         label = f["displayName"] or f["id"]
         headers.extend([f"{label}_テキスト", f"{label}_判定", f"{label}_得点"])
 
-    rows = []
+    rows: list[dict[str, Any]] = []
     for item in preview:
         row = {
-            "生徒ID": item["studentId"],
-            "ファイル名": item["fileName"],
-            "ファイルID": item.get("sourcePath", ""),
-            "補正画像FileID": item.get("warpedPath", ""),
-            "氏名": "",
+            "生徒ID": item.get("studentId") or "",
+            "ファイル名": item.get("fileName") or "",
+            "ファイルID": item.get("sourcePath") or "",
+            "補正画像FileID": item.get("warpedPath") or "",
+            "氏名": item.get("name") or "",
         }
         for f in fields:
             label = f["displayName"] or f["id"]
             fid = f["id"]
-            row[f"{label}_テキスト"] = item["textMapping"].get(fid, "なし")
-            row[f"{label}_判定"] = item.get("judgments", {}).get(fid, "")
-            row[f"{label}_得点"] = item.get("scores", {}).get(fid, "")
+            row[f"{label}_テキスト"] = (item.get("textMapping") or {}).get(fid, "なし")
+            row[f"{label}_判定"] = (item.get("judgments") or {}).get(fid, "")
+            row[f"{label}_得点"] = (item.get("scores") or {}).get(fid, "")
         rows.append(row)
+    return headers, rows
 
-    df = pd.DataFrame(rows, columns=headers)
-    df.to_excel(output_path, index=False, sheet_name="採点結果")
-    return output_path
+
+def build_results_tsv(test_id: str) -> str:
+    """採点結果を TSV 文字列にする（スプレッドシート貼付用）。"""
+    headers, rows = build_result_export_rows(test_id)
+    if not rows:
+        return ""
+    lines = ["\t".join(escape_tsv_cell(h) for h in headers)]
+    for row in rows:
+        lines.append("\t".join(escape_tsv_cell(row.get(h, "")) for h in headers))
+    return "\n".join(lines)
+
+
+def build_pending_rows_tsv(test_id: str, pending_rows: list[dict[str, Any]]) -> str:
+    """バッチ直後の未反映行だけ TSV にする（GAS の手動貼付用）。"""
+    if not pending_rows:
+        return ""
+    fields = get_answer_fields(test_id)
+    headers = ["生徒ID", "ファイル名", "ファイルID", "補正画像FileID", "氏名"]
+    for f in fields:
+        label = f["displayName"] or f["id"]
+        headers.extend([f"{label}_テキスト", f"{label}_判定", f"{label}_得点"])
+
+    lines = ["\t".join(escape_tsv_cell(h) for h in headers)]
+    for item in pending_rows:
+        row = {
+            "生徒ID": item.get("studentId") or "",
+            "ファイル名": item.get("fileName") or "",
+            "ファイルID": item.get("sourcePath") or "",
+            "補正画像FileID": item.get("warpedPath") or "",
+            "氏名": "",
+        }
+        texts = item.get("textMapping") or {}
+        for f in fields:
+            label = f["displayName"] or f["id"]
+            fid = f["id"]
+            row[f"{label}_テキスト"] = texts.get(fid, "なし")
+            row[f"{label}_判定"] = ""
+            row[f"{label}_得点"] = ""
+        lines.append("\t".join(escape_tsv_cell(row.get(h, "")) for h in headers))
+    return "\n".join(lines)

@@ -70,6 +70,7 @@ class ProgressBridge(QObject):
     """ワーカースレッドから UI スレッドへ進捗を渡すためのシグナル橋。"""
 
     updated = Signal(int, int, str)  # (current, total, name)
+    detailed = Signal(object)  # dict — ファイル単位の詳細進捗
 
 
 def bgr_to_qimage(image_bgr: np.ndarray) -> QImage:

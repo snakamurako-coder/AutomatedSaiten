@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
 )
 
 from constants import DESKTOP_READY_STEPS, STEPS
-from models.database import init_db
+from models.database import connect, get_active_test_id, init_db
 from services.ocr import check_ocr_config
 from ui_qt import helpers as h
 from ui_qt.pages.step0 import Step0Page
@@ -163,6 +163,7 @@ class MainWindow(QMainWindow):
         open_settings_dialog(self, on_saved=self._refresh_ocr_status)
 
     def load_step(self, step_id: int) -> None:
+        self._sync_active_test()
         self.stack.setCurrentWidget(self.pages[step_id])
         btn = self.nav_buttons.get(step_id)
         if btn:
@@ -172,3 +173,10 @@ class MainWindow(QMainWindow):
             page.refresh()  # type: ignore[attr-defined]
         elif step_id == 0:
             page.refresh()  # type: ignore[attr-defined]
+
+    def _sync_active_test(self) -> None:
+        """DB のアクティブテストをメモリに同期する。"""
+        with connect() as conn:
+            tid = get_active_test_id(conn)
+        if tid:
+            self.active_test_id = tid
