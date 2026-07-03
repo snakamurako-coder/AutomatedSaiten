@@ -210,7 +210,7 @@ class Step4Page(QWidget):
         self.criteria_table.setHorizontalHeaderLabels(
             ["みなし", "不正解", "解答", "人数", "判定", "得点", "備考", "操作"]
         )
-        widths = [52, 52, 280, 52, 72, 108, 220, 60]
+        widths = [52, 52, 280, 52, 72, 118, 220, 60]
         for i, w in enumerate(widths):
             self.criteria_table.setColumnWidth(i, w)
         self.criteria_table.horizontalHeader().setStretchLastSection(True)

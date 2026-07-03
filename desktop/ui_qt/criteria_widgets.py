@@ -15,7 +15,43 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from ui_qt.style import COLORS
+
 JUDGMENT_OPTIONS = ("○", "△", "×")
+
+_SCORE_BTN_STYLE = f"""
+QPushButton#ScoreStepButton {{
+    padding: 0px;
+    margin: 0px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 26px;
+    max-height: 26px;
+    font-size: 18px;
+    font-weight: 700;
+    color: {COLORS["accent"]};
+    background-color: #eff6ff;
+    border: 1px solid #93c5fd;
+    border-radius: 4px;
+}}
+QPushButton#ScoreStepButton:hover {{
+    background-color: #dbeafe;
+    border-color: {COLORS["accent"]};
+}}
+QPushButton#ScoreStepButton:pressed {{
+    background-color: #bfdbfe;
+}}
+"""
+
+
+def _make_score_button(symbol: str, tooltip: str) -> QPushButton:
+    btn = QPushButton(symbol)
+    btn.setObjectName("ScoreStepButton")
+    btn.setStyleSheet(_SCORE_BTN_STYLE)
+    btn.setFixedSize(28, 26)
+    btn.setToolTip(tooltip)
+    btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+    return btn
 
 
 def make_judgment_combo(
@@ -37,7 +73,7 @@ def make_judgment_combo(
 
 
 class ScoreStepWidget(QWidget):
-    """得点: － 直接入力 ＋（±1）。"""
+    """得点: [-] 直接入力 [+]（±1）。"""
 
     def __init__(
         self,
@@ -55,30 +91,18 @@ class ScoreStepWidget(QWidget):
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay.setSpacing(3)
 
-        btn_font = self.font()
-        btn_font.setPointSize(13)
-        btn_font.setBold(True)
-
-        self._down = QPushButton("－")
-        self._down.setFixedSize(26, 26)
-        self._down.setToolTip("1点減点")
-        self._down.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._down.setFont(btn_font)
+        self._down = _make_score_button("-", "1点減点")
 
         self._edit = QLineEdit()
         self._edit.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._edit.setFixedWidth(40)
-        self._edit.setFixedHeight(24)
+        self._edit.setFixedWidth(36)
+        self._edit.setFixedHeight(26)
         self._edit.setToolTip("得点（クリックで直接入力）")
         self._edit.setValidator(QIntValidator(0, self._max_score, self))
 
-        self._up = QPushButton("＋")
-        self._up.setFixedSize(26, 26)
-        self._up.setToolTip("1点加点")
-        self._up.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self._up.setFont(btn_font)
+        self._up = _make_score_button("+", "1点加点")
 
         lay.addStretch()
         lay.addWidget(self._down)
