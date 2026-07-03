@@ -13,7 +13,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.test_repo import get_test_info, save_points
+from models.test_repo import get_test_info, save_answer_fields, save_points
 from ui_qt import helpers as h
 from ui_qt.table_cells import make_editable_item, make_readonly_item, wire_excel_edit_columns
 
@@ -23,6 +23,7 @@ class Step2Page(QWidget):
         super().__init__()
         self.app = app
         self._points_map: dict[str, int] = {}
+        self._fields: list[dict[str, Any]] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -38,7 +39,7 @@ class Step2Page(QWidget):
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.verticalHeader().setDefaultSectionSize(32)
         self.table.verticalHeader().setVisible(False)
-        wire_excel_edit_columns(self.table, (2,), on_changed=self._on_points_cell_changed)
+        wire_excel_edit_columns(self.table, (1, 2), on_changed=self._on_table_cell_changed)
         root.addWidget(self.table, 1)
 
         row = QHBoxLayout()
@@ -58,41 +59,57 @@ class Step2Page(QWidget):
         info = get_test_info(self.app.active_test_id)
         fields = info["fields"]
         points = info["points"]
+        self._fields = [dict(f) for f in fields]
         self.table.setRowCount(0)
         self._points_map = {}
-        for f in fields:
+        for f in self._fields:
             pts = points.get(f["id"], 0)
             self._points_map[f["id"]] = pts
             r = self.table.rowCount()
             self.table.insertRow(r)
             self.table.setItem(r, 0, make_readonly_item(f["id"]))
-            self.table.setItem(r, 1, make_readonly_item(f["displayName"]))
+            self.table.setItem(r, 1, make_editable_item(f["displayName"]))
             self.table.setItem(r, 2, make_editable_item(str(pts), center=True))
 
-    def _on_points_cell_changed(self, row: int, col: int, text: str) -> None:
-        if col != 2 or row < 0:
+    def _on_table_cell_changed(self, row: int, col: int, text: str) -> None:
+        if row < 0:
             return
         fid_item = self.table.item(row, 0)
         if fid_item is None:
             return
-        try:
-            pts = int(text or 0)
-        except ValueError:
-            return
-        self._points_map[fid_item.text()] = pts
+        fid = fid_item.text()
+        if col == 1:
+            name = text.strip() or fid
+            for f in self._fields:
+                if f["id"] == fid:
+                    f["displayName"] = name
+                    break
+        elif col == 2:
+            try:
+                pts = int(text or 0)
+            except ValueError:
+                return
+            self._points_map[fid] = pts
 
-    def _sync_points_from_table(self) -> bool:
+    def _sync_from_table(self) -> bool:
         for i in range(self.table.rowCount()):
             fid_item = self.table.item(i, 0)
+            name_item = self.table.item(i, 1)
             pts_item = self.table.item(i, 2)
-            if fid_item is None or pts_item is None:
+            if fid_item is None or name_item is None or pts_item is None:
                 continue
+            fid = fid_item.text()
+            name = name_item.text().strip() or fid
             try:
                 pts = int(pts_item.text() or 0)
             except ValueError:
                 h.error(self, "入力エラー", f"配点は整数で入力してください（行 {i + 1}）。")
                 return False
-            self._points_map[fid_item.text()] = pts
+            for f in self._fields:
+                if f["id"] == fid:
+                    f["displayName"] = name
+                    break
+            self._points_map[fid] = pts
         return True
 
     def _on_apply(self) -> None:
@@ -111,10 +128,12 @@ class Step2Page(QWidget):
     def _on_save(self) -> None:
         if not self.app.require_active_test():
             return
-        if not self._sync_points_from_table():
+        if not self._sync_from_table():
             return
+        test_id = self.app.active_test_id
         try:
-            save_points(self.app.active_test_id, self._points_map)
-            h.info(self, "保存完了", "配点を保存しました。")
+            save_answer_fields(test_id, self._fields)
+            save_points(test_id, self._points_map)
+            h.info(self, "保存完了", "表示名と配点を保存しました。")
         except Exception as e:
             h.error(self, "エラー", str(e))
