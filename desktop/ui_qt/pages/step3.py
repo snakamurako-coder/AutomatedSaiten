@@ -64,6 +64,7 @@ class Step3Page(QWidget):
         self._row_by_name: dict[str, int] = {}
         self._inventory_rows: list[dict[str, Any]] = []
         self._last_pending_rows: list[dict[str, Any]] = []
+        self._checkboxes: list[QCheckBox | None] = []
         self._loaded_test_id: str | None = None
         self._scanned = False
 
@@ -106,16 +107,19 @@ class Step3Page(QWidget):
 
         # --- 選択・実行 ---
         sel_row = QHBoxLayout()
-        sel_row.addWidget(QLabel("選択:"))
+        sel_row.addWidget(QLabel("チェック:"))
         for label, mode in [
             ("全て", "all"),
             ("全解除", "none"),
-            ("未処理", "unprocessed"),
-            ("補正済", "warped"),
-            ("反映済", "processed"),
-            ("失敗", "failed"),
+            ("＋未処理", "unprocessed"),
+            ("＋補正済", "warped"),
+            ("＋反映済", "processed"),
+            ("＋失敗", "failed"),
         ]:
-            sel_row.addWidget(h.button(label, lambda m=mode: self._select_by_status(m)))
+            tip = "該当ステータスにチェックを入れる" if mode != "none" else "すべてのチェックを外す"
+            btn = h.button(label, lambda m=mode: self._select_by_status(m))
+            btn.setToolTip(tip)
+            sel_row.addWidget(btn)
         sel_row.addStretch()
         root.addLayout(sel_row)
 
@@ -144,7 +148,8 @@ class Step3Page(QWidget):
         hdr.setSectionResizeMode(_COL_FILE, QHeaderView.Stretch)
         hdr.setSectionResizeMode(_COL_STATUS, QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(_COL_FAIL, QHeaderView.ResizeToContents)
-        self.table.setColumnWidth(_COL_CHECK, 44)
+        self.table.setColumnWidth(_COL_CHECK, 52)
+        self.table.verticalHeader().setDefaultSectionSize(30)
         table_lay.addWidget(self.table)
         splitter.addWidget(table_box)
 
@@ -199,6 +204,7 @@ class Step3Page(QWidget):
         self.table.setRowCount(0)
         self._row_by_name = {}
         self._inventory_rows = []
+        self._checkboxes = []
         self.queue_stats.setText("一覧未表示 — 「フォルダを再認識」を押してください。")
         self.progress.setValue(0)
         self.progress_label.setText("")
@@ -231,20 +237,23 @@ class Step3Page(QWidget):
         self._inventory_rows = inv["rows"]
         self._rebuild_table(self._inventory_rows)
         self._scanned = True
+        n = sum(1 for cb in self._checkboxes if cb and cb.isChecked())
         self.status_label.setText(
-            f"{st['total']} 件を認識しました。チェックを確認して「チェックしたファイルを OCR」を押してください。"
+            f"{st['total']} 件を認識しました（{n} 件を選択中）。"
+            "「チェックしたファイルを OCR」を押してください。"
         )
         self.log.appendPlainText(f"--- フォルダ再認識: {st['total']} 件 ---")
 
     def _rebuild_table(self, rows_data: list[dict[str, Any]]) -> None:
         fields = self._fields
-        headers = ["☑", "状態", "失敗理由", "ファイル名", "生徒ID"]
+        headers = ["OCR", "状態", "失敗理由", "ファイル名", "生徒ID"]
         headers.extend(f.get("displayName") or f["id"] for f in fields)
         headers.append("DB")
 
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
         self._row_by_name = {}
+        self._checkboxes = []
         self.table.setRowCount(len(rows_data))
 
         for i, rd in enumerate(rows_data):
@@ -254,26 +263,29 @@ class Step3Page(QWidget):
             self._set_row(i, rd, checked=default_check)
 
     def _row_checkbox(self, row_idx: int) -> QCheckBox | None:
-        w = self.table.cellWidget(row_idx, _COL_CHECK)
-        if w is None:
-            return None
-        return w.findChild(QCheckBox)
+        if 0 <= row_idx < len(self._checkboxes):
+            return self._checkboxes[row_idx]
+        return None
 
     def _set_row_checkbox(self, row_idx: int, checked: bool) -> None:
         existing = self._row_checkbox(row_idx)
         if existing is not None:
+            existing.blockSignals(True)
             existing.setChecked(checked)
+            existing.blockSignals(False)
             return
         cb = QCheckBox()
         cb.setChecked(checked)
         cb.setToolTip("OCR 対象に含める")
-        wrap = QWidget()
-        lay = QHBoxLayout(wrap)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.addStretch()
-        lay.addWidget(cb)
-        lay.addStretch()
-        self.table.setCellWidget(row_idx, _COL_CHECK, wrap)
+        cb.setStyleSheet(
+            "QCheckBox { padding-left: 14px; }"
+            "QCheckBox::indicator { width: 20px; height: 20px; }"
+        )
+        cb.stateChanged.connect(self._update_check_count)
+        self.table.setCellWidget(row_idx, _COL_CHECK, cb)
+        if row_idx >= len(self._checkboxes):
+            self._checkboxes.extend([None] * (row_idx + 1 - len(self._checkboxes)))
+        self._checkboxes[row_idx] = cb
 
     def _set_row(self, row_idx: int, data: dict[str, Any], *, checked: bool = False) -> None:
         self._set_row_checkbox(row_idx, checked)
@@ -331,30 +343,54 @@ class Step3Page(QWidget):
     def _stage_label(self, stage: str) -> str:
         return STAGE_LABELS.get(stage, stage or STAGE_LABELS["unknown"])
 
+    def _update_check_count(self, *_args: Any) -> None:
+        n = sum(1 for cb in self._checkboxes if cb and cb.isChecked())
+        if self._scanned:
+            self.status_label.setText(f"{n} 件を選択中")
+
     def _select_by_status(self, mode: str) -> None:
         if self.table.rowCount() == 0:
             h.warn(self, "一覧なし", "先に「フォルダを再認識」でファイル一覧を表示してください。")
             return
+        if mode == "none":
+            for i in range(len(self._inventory_rows)):
+                cb = self._row_checkbox(i)
+                if cb:
+                    cb.setChecked(False)
+            self._update_check_count()
+            return
+        if mode == "all":
+            for i in range(len(self._inventory_rows)):
+                cb = self._row_checkbox(i)
+                if cb:
+                    cb.setChecked(True)
+            self._update_check_count()
+            return
+        # ＋未処理 等: 該当ステータスにだけチェックを入れる（他はそのまま）
+        matched = 0
         for i, rd in enumerate(self._inventory_rows):
             status = rd.get("status") or ""
-            check = False
-            if mode == "all":
-                check = True
-            elif mode == "none":
-                check = False
-            elif mode == "unprocessed":
-                check = status == "未処理"
-            elif mode == "warped":
-                check = status == "補正済"
-            elif mode == "processed":
-                check = status == "反映済"
-            elif mode == "failed":
-                check = status == "失敗"
+            hit = (
+                (mode == "unprocessed" and status == "未処理")
+                or (mode == "warped" and status == "補正済")
+                or (mode == "processed" and status == "反映済")
+                or (mode == "failed" and status == "失敗")
+            )
+            if not hit:
+                continue
             cb = self._row_checkbox(i)
-            if cb is not None:
-                cb.setChecked(check)
-        n = sum(1 for i in range(self.table.rowCount()) if (c := self._row_checkbox(i)) and c.isChecked())
-        self.status_label.setText(f"{n} 件を選択中")
+            if cb:
+                cb.setChecked(True)
+                matched += 1
+        if matched == 0:
+            labels = {
+                "unprocessed": "未処理",
+                "warped": "補正済",
+                "processed": "反映済",
+                "failed": "失敗",
+            }
+            h.warn(self, "該当なし", f"「{labels.get(mode, mode)}」の行がありません。")
+        self._update_check_count()
 
     def _get_checked_queue_items(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
