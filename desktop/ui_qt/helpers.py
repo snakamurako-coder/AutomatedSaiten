@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 import numpy as np
-from PySide6.QtCore import QObject, QThread, Signal
+from PySide6.QtCore import QObject, QThread, Signal, Qt
 from PySide6.QtGui import QImage, QPixmap
 from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton, QWidget
 
@@ -53,7 +53,7 @@ def run_in_thread(
         on_done(result, error)
         thread.quit()
 
-    worker.finished.connect(_done)
+    worker.finished.connect(_done, Qt.ConnectionType.QueuedConnection)
     thread.started.connect(worker.run)
     thread.finished.connect(worker.deleteLater)
     thread.finished.connect(thread.deleteLater)
@@ -61,7 +61,13 @@ def run_in_thread(
     if not hasattr(parent, "_bg_threads"):
         parent._bg_threads = []  # type: ignore[attr-defined]
     parent._bg_threads.append(thread)  # type: ignore[attr-defined]
-    thread.finished.connect(lambda: parent._bg_threads.remove(thread))  # type: ignore[attr-defined]
+
+    def _remove_thread() -> None:
+        threads = getattr(parent, "_bg_threads", None)
+        if threads is not None and thread in threads:
+            threads.remove(thread)
+
+    thread.finished.connect(_remove_thread)
     thread.start()
     return thread
 

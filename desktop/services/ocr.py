@@ -7,9 +7,8 @@ from typing import Any
 
 import cv2
 import numpy as np
-import requests
-
 from config import load_config
+from services.google_http import post_json
 from services.image_warp import crop_region
 
 _MIN_TEST_JPEG = base64.b64decode(
@@ -64,10 +63,7 @@ def call_vision_api(image_bytes: bytes, language_hints: list[str]) -> dict[str, 
             }
         ]
     }
-    resp = requests.post(url, json=payload, timeout=60)
-    data = resp.json()
-    if "error" in data:
-        raise ValueError(f"Vision API: {data['error']}")
+    data = post_json(url, payload)
     if not data.get("responses"):
         raise ValueError("Vision API 応答が空です。")
     return data["responses"][0]
@@ -199,12 +195,7 @@ def test_vision_api_key(api_key: str) -> str:
             }
         ]
     }
-    resp = requests.post(url, json=payload, timeout=30)
-    data = resp.json()
-    if "error" in data:
-        err = data["error"]
-        msg = err.get("message") if isinstance(err, dict) else str(err)
-        raise ValueError(msg or str(err))
+    data = post_json(url, payload)
     if not data.get("responses"):
         raise ValueError("Vision API 応答が空です。")
     return "Vision API に接続できました。"

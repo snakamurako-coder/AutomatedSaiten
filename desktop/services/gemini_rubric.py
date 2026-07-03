@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-import requests
-
 from config import load_config
+from services.google_http import post_json
 from models.test_repo import get_points_conn
 from models.database import connect, init_db
 
@@ -87,10 +86,7 @@ def generate_rubric_with_gemini(
         },
     }
 
-    resp = requests.post(url, json=prompt, timeout=120)
-    body = resp.json()
-    if "error" in body:
-        raise ValueError(f"Gemini API: {body['error']}")
+    body = post_json(url, prompt)
 
     text = body["candidates"][0]["content"]["parts"][0]["text"]
     return json.loads(text)
@@ -108,12 +104,7 @@ def test_gemini_api_key(api_key: str) -> str:
         "contents": [{"parts": [{"text": "接続確認。1文字でよいので応答してください。"}]}],
         "generationConfig": {"maxOutputTokens": 8},
     }
-    resp = requests.post(url, json=payload, timeout=30)
-    body = resp.json()
-    if "error" in body:
-        err = body["error"]
-        msg = err.get("message") if isinstance(err, dict) else str(err)
-        raise ValueError(msg or str(err))
+    body = post_json(url, payload)
     if not body.get("candidates"):
         raise ValueError("Gemini API 応答が空です。")
     return "Gemini API に接続できました。"

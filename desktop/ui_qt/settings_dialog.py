@@ -77,6 +77,14 @@ class SettingsDialog(QDialog):
         gemini_row.addWidget(h.button("接続確認", self._test_gemini))
         api_form.addRow("Gemini API キー", gemini_row)
         api_form.addRow("", h.caption_label("Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。"))
+        api_form.addRow(
+            "",
+            h.caption_label(
+                "Vision API キーは「HTTP リファラー（ウェブサイト）」制限では使えません。"
+                "制限は「なし」または IP アドレスにし、Cloud Vision API を有効化・課金設定してください。"
+                "設定後は必ず「保存」を押してください。"
+            ),
+        )
         root.addWidget(api_box)
 
         # その他
