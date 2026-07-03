@@ -46,9 +46,13 @@ from ui_qt import helpers as h
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.layout_helpers import CollapsibleSection, main_table_frame, make_expanding
 from ui_qt.style import COLORS
-
-_CHECK = "☑"
-_UNCHECK = "☐"
+from ui_qt.table_cells import (
+    make_editable_item,
+    make_readonly_item,
+    make_toggle_item,
+    start_cell_edit,
+    wire_toggle_columns,
+)
 
 
 class Step4Page(QWidget):
@@ -89,7 +93,6 @@ class Step4Page(QWidget):
         root.addWidget(self._build_ocr_replace_section())
         root.addWidget(self._build_deemed_box())
         root.addWidget(main_table_frame("", self._build_criteria_table()), 1)
-        root.addWidget(self._build_edit_box())
         root.addWidget(self._build_outlier_box(), 2)
 
     # ==================== UI 構築 ====================
@@ -143,7 +146,7 @@ class Step4Page(QWidget):
         lay = QVBoxLayout(box)
         lay.addWidget(
             h.caption_label(
-                "正答例を指定し、表の「みなし」「不正解」列をダブルクリックで選択 → 適用で正答例に統一します。"
+                "正答例を指定し、表の「みなし」「不正解」列をクリックで選択 → 適用で正答例に統一します。"
             )
         )
         row = QHBoxLayout()
@@ -164,29 +167,62 @@ class Step4Page(QWidget):
         for i, w in enumerate(widths):
             self.criteria_table.setColumnWidth(i, w)
         self.criteria_table.horizontalHeader().setStretchLastSection(True)
-        self.criteria_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.criteria_table.setSelectionBehavior(QTableWidget.SelectItems)
         self.criteria_table.setEditTriggers(QTableWidget.NoEditTriggers)
         make_expanding(self.criteria_table)
-        self.criteria_table.currentCellChanged.connect(lambda *_: self._on_criteria_select())
-        self.criteria_table.cellDoubleClicked.connect(self._on_criteria_double_click)
+        wire_toggle_columns(
+            self.criteria_table,
+            (0, 1),
+            self._on_criteria_toggle,
+        )
+        self.criteria_table.cellClicked.connect(self._on_criteria_cell_clicked)
+        self.criteria_table.itemChanged.connect(self._on_criteria_item_changed)
         return self.criteria_table
 
-    def _build_edit_box(self) -> QGroupBox:
-        box = QGroupBox("選択行の編集")
-        row = QHBoxLayout(box)
-        row.addWidget(QLabel("判定(○/△/×)"))
-        self.edit_judgment = QLineEdit()
-        self.edit_judgment.setFixedWidth(90)
-        row.addWidget(self.edit_judgment)
-        row.addWidget(QLabel("得点"))
-        self.edit_score = QLineEdit()
-        self.edit_score.setFixedWidth(70)
-        row.addWidget(self.edit_score)
-        row.addWidget(QLabel("備考"))
-        self.edit_reason = QLineEdit()
-        row.addWidget(self.edit_reason, 1)
-        row.addWidget(h.button("選択行に適用", self._on_apply_edit))
-        return box
+    def _on_criteria_toggle(self, row: int, col: int, checked: bool) -> None:
+        if row >= len(self._criteria_rows):
+            return
+        fid = self._selected_field_id()
+        if not fid:
+            return
+        ans = self._criteria_rows[row]["answer_text"]
+        if col == 0:
+            if self._canonical() and ans == self._canonical():
+                return
+            if checked:
+                self._deemed_map(fid)[ans] = True
+            else:
+                self._deemed_map(fid).pop(ans, None)
+        elif col == 1:
+            if checked:
+                self._incorrect_map(fid)[ans] = True
+            else:
+                self._incorrect_map(fid).pop(ans, None)
+        self._render_criteria_table()
+        self.criteria_table.setCurrentCell(row, col)
+
+    def _on_criteria_cell_clicked(self, row: int, col: int) -> None:
+        if col in (4, 5, 6):
+            start_cell_edit(self.criteria_table, row, col)
+
+    def _on_criteria_item_changed(self, item: QTableWidgetItem) -> None:
+        row, col = item.row(), item.column()
+        if row < 0 or row >= len(self._criteria_rows) or col not in (4, 5, 6):
+            return
+        text = item.text().strip()
+        if col == 4:
+            self._criteria_rows[row]["judgment"] = text
+        elif col == 5:
+            if not text:
+                self._criteria_rows[row]["score"] = ""
+            else:
+                try:
+                    self._criteria_rows[row]["score"] = int(text)
+                except ValueError:
+                    h.warn(self, "入力エラー", "得点は整数で入力してください。")
+                    self._render_criteria_table()
+        elif col == 6:
+            self._criteria_rows[row]["reason"] = text
 
     def _build_outlier_box(self) -> QGroupBox:
         box = QGroupBox("外れ値・少数派解答の確認（回答欄画像）")
@@ -196,7 +232,7 @@ class Step4Page(QWidget):
         lay = QVBoxLayout(box)
         lay.addWidget(
             h.caption_label(
-                "「みなし」「不正解」列はダブルクリックで切替。画像タイルクリックでもみなしを切替えられます。"
+                "「みなし」「不正解」「表示」列はクリックで切替。画像タイルクリックでもみなしを切替えられます。"
             )
         )
 
@@ -239,7 +275,12 @@ class Step4Page(QWidget):
         self.outlier_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.outlier_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.outlier_table.setMaximumHeight(144)
-        self.outlier_table.cellDoubleClicked.connect(self._on_outlier_double_click)
+        wire_toggle_columns(
+            self.outlier_table,
+            (0, 1, 4),
+            self._on_outlier_toggle,
+        )
+        self.outlier_table.cellClicked.connect(self._on_outlier_cell_clicked)
         lay.addWidget(self.outlier_table)
 
         self.crop_scroll = QScrollArea()
@@ -492,30 +533,31 @@ class Step4Page(QWidget):
         t.setRowCount(len(self._criteria_rows))
         for i, row in enumerate(self._criteria_rows):
             ans = row.get("answer_text", "")
-            deemed_mark = (
-                "—"
-                if canonical and ans == canonical
-                else (_CHECK if self._is_deemed(fid, ans) else _UNCHECK)
-            )
-            incorrect_mark = _CHECK if self._is_incorrect(fid, ans) else _UNCHECK
-            values = [
-                deemed_mark,
-                incorrect_mark,
-                ans,
-                str(row.get("count", 0)),
-                str(row.get("judgment", "") or ""),
-                str(row.get("score", "") or ""),
-                str(row.get("reason", "") or ""),
+            if canonical and ans == canonical:
+                deemed_item = make_readonly_item("—", center=True)
+            else:
+                deemed_item = make_toggle_item(self._is_deemed(fid, ans))
+            incorrect_item = make_toggle_item(self._is_incorrect(fid, ans))
+            count_item = make_readonly_item(str(row.get("count", 0)), center=True)
+            answer_item = make_readonly_item(ans)
+            judgment_item = make_editable_item(str(row.get("judgment", "") or ""), center=True)
+            score_item = make_editable_item(str(row.get("score", "") or ""), center=True)
+            reason_item = make_editable_item(str(row.get("reason", "") or ""))
+            items = [
+                deemed_item,
+                incorrect_item,
+                answer_item,
+                count_item,
+                judgment_item,
+                score_item,
+                reason_item,
             ]
             bg = None
             if row.get("deemed") or self._is_deemed(fid, ans):
                 bg = COLORS["accent_soft"]
             elif row.get("incorrect") or self._is_incorrect(fid, ans):
                 bg = COLORS["danger_soft"]
-            for c, v in enumerate(values):
-                item = QTableWidgetItem(v)
-                if c in (0, 1, 3, 4, 5):
-                    item.setTextAlignment(Qt.AlignCenter)
+            for c, item in enumerate(items):
                 if bg:
                     from PySide6.QtGui import QColor
 
@@ -523,42 +565,39 @@ class Step4Page(QWidget):
                 t.setItem(i, c, item)
         t.blockSignals(False)
 
-    def _on_criteria_double_click(self, row: int, col: int) -> None:
-        if col not in (0, 1) or row >= len(self._criteria_rows):
+    def _on_outlier_toggle(self, row: int, col: int, checked: bool) -> None:
+        if row >= len(self._outlier_flat_rows):
             return
+        flat = self._outlier_flat_rows[row]
         fid = self._selected_field_id()
         if not fid:
             return
-        ans = self._criteria_rows[row]["answer_text"]
+        ans = flat["answer_text"]
         if col == 0:
-            self._toggle_deemed(fid, ans)
-        else:
-            self._toggle_incorrect(fid, ans)
-        self.criteria_table.selectRow(row)
+            if checked:
+                self._deemed_map(fid)[ans] = True
+            else:
+                self._deemed_map(fid).pop(ans, None)
+            self._render_criteria_table()
+        elif col == 1:
+            if checked:
+                self._incorrect_map(fid)[ans] = True
+            else:
+                self._incorrect_map(fid).pop(ans, None)
+            self._render_criteria_table()
+        elif col == 4:
+            if flat.get("skip_img"):
+                return
+            flat["show"] = checked
+        self._render_outlier_table()
+        self.outlier_table.setCurrentCell(row, col)
 
-    def _on_criteria_select(self) -> None:
-        row = self.criteria_table.currentRow()
-        if row < 0 or row >= len(self._criteria_rows):
+    def _on_outlier_cell_clicked(self, row: int, col: int) -> None:
+        if col != 7 or row >= len(self._outlier_flat_rows):
             return
-        r = self._criteria_rows[row]
-        self.edit_judgment.setText(str(r.get("judgment", "") or ""))
-        self.edit_score.setText(str(r.get("score", "") or ""))
-        self.edit_reason.setText(str(r.get("reason", "") or ""))
-
-    def _on_apply_edit(self) -> None:
-        row = self.criteria_table.currentRow()
-        if row < 0 or row >= len(self._criteria_rows):
-            return
-        self._criteria_rows[row]["judgment"] = self.edit_judgment.text().strip()
-        score_val = self.edit_score.text().strip()
-        try:
-            self._criteria_rows[row]["score"] = int(score_val) if score_val else ""
-        except ValueError:
-            h.error(self, "入力エラー", "得点は整数で入力してください。")
-            return
-        self._criteria_rows[row]["reason"] = self.edit_reason.text().strip()
-        self._render_criteria_table()
-        self.criteria_table.selectRow(row)
+        flat = self._outlier_flat_rows[row]
+        if not flat.get("skip_img"):
+            self._load_crops_async([flat], allow_incorrect=True)
 
     def _on_save_criteria(self) -> None:
         fid = self._selected_field_id()
@@ -656,44 +695,29 @@ class Step4Page(QWidget):
     def _render_outlier_table(self) -> None:
         fid = self._selected_field_id() or ""
         t = self.outlier_table
+        t.blockSignals(True)
         t.setRowCount(len(self._outlier_flat_rows))
         for i, row in enumerate(self._outlier_flat_rows):
             ans = row["answer_text"]
-            values = [
-                _CHECK if self._is_deemed(fid, ans) else _UNCHECK,
-                _CHECK if self._is_incorrect(fid, ans) else _UNCHECK,
-                ans,
-                str(row["group_count"]),
-                _CHECK if row.get("show") and not row.get("skip_img") else _UNCHECK,
-                str(row.get("studentId") or "-"),
-                str(row.get("fileName") or ""),
-                "—" if row.get("skip_img") else "1枚",
+            deemed_item = make_toggle_item(self._is_deemed(fid, ans))
+            incorrect_item = make_toggle_item(self._is_incorrect(fid, ans))
+            if row.get("skip_img"):
+                show_item = make_readonly_item("—", center=True)
+            else:
+                show_item = make_toggle_item(bool(row.get("show")))
+            items = [
+                deemed_item,
+                incorrect_item,
+                make_readonly_item(ans),
+                make_readonly_item(str(row["group_count"]), center=True),
+                show_item,
+                make_readonly_item(str(row.get("studentId") or "-")),
+                make_readonly_item(str(row.get("fileName") or "")),
+                make_readonly_item("表示", center=True),
             ]
-            for c, v in enumerate(values):
-                item = QTableWidgetItem(v)
-                if c in (0, 1, 3, 4, 7):
-                    item.setTextAlignment(Qt.AlignCenter)
+            for c, item in enumerate(items):
                 t.setItem(i, c, item)
-
-    def _on_outlier_double_click(self, row: int, col: int) -> None:
-        if row >= len(self._outlier_flat_rows):
-            return
-        flat = self._outlier_flat_rows[row]
-        fid = self._selected_field_id()
-        if not fid:
-            return
-        ans = flat["answer_text"]
-        if col == 0:
-            self._toggle_deemed(fid, ans)
-        elif col == 1:
-            self._toggle_incorrect(fid, ans)
-        elif col == 4:
-            if flat.get("skip_img"):
-                return
-            flat["show"] = not flat.get("show")
-            self._render_outlier_table()
-        elif col == 7 and not flat.get("skip_img"):
-            self._load_crops_async([flat], allow_incorrect=True)
+        t.blockSignals(False)
 
     def _select_all_outlier(self, checked: bool) -> None:
         for row in self._outlier_flat_rows:
