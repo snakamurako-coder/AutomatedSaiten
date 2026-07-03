@@ -6,7 +6,7 @@ from collections import Counter
 from typing import Any
 
 from models.database import connect, init_db
-from models.test_repo import get_all_results, touch_progress
+from models.test_repo import get_all_results, touch_progress_conn
 
 
 def get_unique_answers(test_id: str, field_id: str) -> list[dict[str, Any]]:
@@ -97,7 +97,7 @@ def save_grading_criteria(
                     str(rule.get("reason") or ""),
                 ),
             )
-        touch_progress(test_id, 4)
+        touch_progress_conn(conn, test_id, 4)
         conn.commit()
     return get_grading_criteria(test_id, field_id)
 
