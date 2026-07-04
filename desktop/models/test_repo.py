@@ -146,7 +146,31 @@ def get_test_info(test_id: str | None = None) -> dict[str, Any]:
         "info": info,
         "fields": fields,
         "points": points,
+        "useIdMark": bool(test["use_id_mark"]) if "use_id_mark" in test.keys() else True,
     }
+
+
+def get_use_id_mark(test_id: str) -> bool:
+    """解答用紙に生徒IDマーク欄があり、③で OMR 読取するか。"""
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT use_id_mark FROM tests WHERE id = ?", (test_id,)
+        ).fetchone()
+        if not row:
+            return True
+        return bool(row["use_id_mark"])
+
+
+def set_use_id_mark(test_id: str, enabled: bool) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute(
+            "UPDATE tests SET use_id_mark = ? WHERE id = ?",
+            (1 if enabled else 0, test_id),
+        )
+        _set_test_info(conn, test_id, "IDマーク欄使用", "true" if enabled else "false")
+        conn.commit()
 
 
 def _set_test_info(conn, test_id: str, key: str, value: str) -> None:

@@ -7,10 +7,11 @@ from pathlib import Path
 from typing import Any, Callable
 
 from config import load_config, test_archive, test_warped
-from models.test_repo import flush_result_rows, get_answer_fields
+from models.test_repo import flush_result_rows, get_answer_fields, get_use_id_mark
 from services.image_loader import imread_bgr
 from services.image_warp import warp_image_file, warped_file_name
 from services.ocr import run_ocr_on_warped_image
+from services.omr_id import detect_omr_id
 from services.work_queue import build_ocr_work_queue
 
 
@@ -20,6 +21,7 @@ DetailProgressCallback = Callable[[dict[str, Any]], None]
 STAGE_LABELS: dict[str, str] = {
     "load_src": "原画像読込",
     "warp": "枠検出・補正",
+    "omr": "生徒ID（OMR）",
     "ocr": "OCRテキスト化",
     "save": "DB保存",
     "archive": "原本退避",
@@ -84,6 +86,7 @@ def process_single_item(
     item: dict[str, Any],
     orientation: str = "landscape",
     *,
+    use_id_mark: bool | None = None,
     on_detail: DetailProgressCallback | None = None,
     index: int = 1,
     total: int = 1,
@@ -91,6 +94,8 @@ def process_single_item(
     fields = get_answer_fields(test_id)
     if not fields:
         raise ValueError("記述欄が設定されていません。")
+    if use_id_mark is None:
+        use_id_mark = get_use_id_mark(test_id)
 
     source_path = item.get("path") or item.get("id") or ""
     file_name = item["name"]
@@ -135,6 +140,21 @@ def process_single_item(
             warp_image_file(source_path, out_path, orientation=orientation)
             warped_path = str(out_path.resolve())
 
+        warped_bgr = _load_warped_bgr(warped_path)
+
+        student_id = ""
+        if use_id_mark:
+            stage = "omr"
+            _emit_detail(
+                on_detail,
+                index=index,
+                total=total,
+                file_name=file_name,
+                stage=stage,
+                status="processing",
+            )
+            student_id = detect_omr_id(warped_bgr, orientation)
+
         stage = "ocr"
         _emit_detail(
             on_detail,
@@ -144,14 +164,13 @@ def process_single_item(
             stage=stage,
             status="processing",
         )
-        warped_bgr = _load_warped_bgr(warped_path)
         text_mapping = run_ocr_on_warped_image(warped_bgr, fields)
 
         row = {
             "fileName": file_name,
             "sourcePath": source_path,
             "warpedPath": warped_path,
-            "studentId": "",
+            "studentId": student_id,
             "textMapping": text_mapping,
         }
         _emit_detail(
@@ -179,6 +198,7 @@ def run_batch_ocr(
 ) -> dict[str, Any]:
     cfg = load_config()
     orientation = cfg.get("default_orientation", "landscape")
+    use_id_mark = get_use_id_mark(test_id)
     if items is None:
         queue = build_ocr_work_queue(test_id, inbox_path)
         items = queue["items"]
@@ -200,6 +220,7 @@ def run_batch_ocr(
                 test_id,
                 item,
                 orientation=orientation,
+                use_id_mark=use_id_mark,
                 on_detail=on_detail,
                 index=idx,
                 total=total,

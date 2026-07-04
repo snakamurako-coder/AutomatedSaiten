@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtWidgets import (
+    QFileDialog,
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
@@ -15,6 +16,11 @@ from PySide6.QtWidgets import (
 )
 
 from models.test_repo import create_test, list_tests, set_active_test
+from services.answer_sheet_template import (
+    SHEET_TEMPLATE_A4_LANDSCAPE,
+    SHEET_TEMPLATE_A4_PORTRAIT,
+    export_answer_sheet_templates,
+)
 from ui_qt import helpers as h
 
 
@@ -62,6 +68,23 @@ class Step0Page(QWidget):
 
         self.active_label = h.muted_label("選択中: （なし）")
         root.addWidget(self.active_label)
+
+        template_box = QGroupBox("解答用紙ひな形（Excel）")
+        template_lay = QVBoxLayout(template_box)
+        template_lay.addWidget(
+            h.caption_label(
+                "GAS 版ハブSSの「テンプレート_共通A4横」「テンプレート_共通A4縦」とほぼ同一の書式です。"
+                "生徒IDマーク欄（年/組/番・0〜9）付き。編集して印刷し、スキャン後に ③ で読み込みます。"
+            )
+        )
+        template_lay.addWidget(
+            h.button(
+                "A4横・A4縦ひな形を Excel 出力",
+                self._on_export_answer_templates,
+                variant="primary",
+            )
+        )
+        root.addWidget(template_box)
         root.addStretch()
 
     def refresh(self) -> None:
@@ -90,6 +113,27 @@ class Step0Page(QWidget):
             self.refresh()
         except Exception as e:
             h.error(self, "エラー", str(e))
+
+    def _on_export_answer_templates(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "解答用紙ひな形を Excel 出力",
+            "解答用紙ひな形_A4.xlsx",
+            "Excel (*.xlsx)",
+        )
+        if not path:
+            return
+        try:
+            saved = export_answer_sheet_templates(path)
+            h.info(
+                self,
+                "出力完了",
+                f"保存しました:\n{saved}\n\n"
+                f"シート「{SHEET_TEMPLATE_A4_LANDSCAPE}」「{SHEET_TEMPLATE_A4_PORTRAIT}」"
+                "（生徒IDマーク欄付き）を編集・印刷してください。",
+            )
+        except Exception as e:
+            h.error(self, "出力失敗", str(e))
 
     def _on_select(self) -> None:
         row = self.test_list.currentRow()

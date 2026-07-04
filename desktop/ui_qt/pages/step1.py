@@ -7,6 +7,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFileDialog,
     QFrame,
@@ -18,11 +19,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from config import load_config, save_config
 from models.test_repo import (
     get_answer_fields,
     get_test_info,
+    get_use_id_mark,
     save_answer_fields,
     save_model_answer_image,
+    set_use_id_mark,
 )
 from services.image_loader import is_supported_input_path
 from services.image_warp import warp_image_from_path
@@ -53,8 +57,15 @@ class Step1Page(QWidget):
         toolbar.setSpacing(8)
         toolbar.addWidget(QLabel("用紙方向"))
         self.orientation_combo = QComboBox()
-        self.orientation_combo.addItems(["landscape", "portrait"])
+        self.orientation_combo.addItem("A4横", "landscape")
+        self.orientation_combo.addItem("A4縦", "portrait")
         toolbar.addWidget(self.orientation_combo)
+        self.use_id_mark_check = QCheckBox("IDマーク欄あり（OMRで生徒ID読取）")
+        self.use_id_mark_check.setChecked(True)
+        self.use_id_mark_check.setToolTip(
+            "解答用紙ひな形の生徒IDマーク欄を③テキスト化時に OMR で読み取ります。"
+        )
+        toolbar.addWidget(self.use_id_mark_check)
         toolbar.addWidget(QLabel("二値化"))
         self.thresh_slider = QSlider(Qt.Horizontal)
         self.thresh_slider.setRange(0, 255)
@@ -138,7 +149,7 @@ class Step1Page(QWidget):
         if not self.app.require_active_test():
             return
         self._set_status("読込・補正中…")
-        orientation = self.orientation_combo.currentText() or "landscape"
+        orientation = self.orientation_combo.currentData() or "landscape"
         thresh = int(self.thresh_slider.value())
         test_id = self.app.active_test_id
         existing_fields = list(self._field_rows)
@@ -178,6 +189,11 @@ class Step1Page(QWidget):
             return
         self._field_rows = get_answer_fields(self.app.active_test_id)
         info = get_test_info(self.app.active_test_id)
+        self.use_id_mark_check.setChecked(bool(info.get("useIdMark", True)))
+        orient = load_config().get("default_orientation", "landscape")
+        idx = self.orientation_combo.findData(orient)
+        if idx >= 0:
+            self.orientation_combo.setCurrentIndex(idx)
         model_path = info.get("modelAnswerPath") or ""
         if model_path and Path(model_path).exists():
             try:
@@ -266,7 +282,13 @@ class Step1Page(QWidget):
             if warped is not None:
                 save_model_answer_image(self.app.active_test_id, warped)
             save_answer_fields(self.app.active_test_id, self._field_rows)
-            h.info(self, "保存完了", "模範解答と記述欄を保存しました。")
+            set_use_id_mark(self.app.active_test_id, self.use_id_mark_check.isChecked())
+            cfg = load_config()
+            cfg["default_orientation"] = (
+                self.orientation_combo.currentData() or "landscape"
+            )
+            save_config(cfg)
+            h.info(self, "保存完了", "模範解答・記述欄・IDマーク設定を保存しました。")
             self._set_status("記述欄を保存しました")
         except Exception as e:
             h.error(self, "エラー", str(e))
