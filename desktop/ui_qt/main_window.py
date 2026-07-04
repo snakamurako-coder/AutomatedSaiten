@@ -129,21 +129,41 @@ class MainWindow(QMainWindow):
             if step["id"] <= 2:
                 self._add_nav_button(lay, step)
 
+        fork_lbl = QLabel("▼ 分岐")
+        fork_lbl.setObjectName("NavForkLabel")
+        fork_lbl.setAlignment(Qt.AlignCenter)
+        lay.addWidget(fork_lbl)
+
         branch = QFrame()
         branch.setObjectName("NavBranchBlock")
         branch_lay = QHBoxLayout(branch)
-        branch_lay.setContentsMargins(0, 4, 0, 4)
+        branch_lay.setContentsMargins(0, 0, 0, 0)
         branch_lay.setSpacing(4)
 
-        auto_col = QWidget()
-        auto_lay = QVBoxLayout(auto_col)
-        auto_lay.setContentsMargins(0, 0, 0, 0)
+        auto_panel = QFrame()
+        auto_panel.setObjectName("NavAutoPath")
+        auto_lay = QVBoxLayout(auto_panel)
+        auto_lay.setContentsMargins(4, 4, 4, 4)
         auto_lay.setSpacing(2)
+        auto_title = QLabel("自動採点")
+        auto_title.setObjectName("NavAutoPathTitle")
+        auto_title.setAlignment(Qt.AlignCenter)
+        auto_lay.addWidget(auto_title)
         for step in STEPS:
             if step["id"] in (3, 4, 5):
                 self._add_nav_button(auto_lay, step, compact=True)
 
-        manual_btn = QPushButton("手動\n採点")
+        manual_panel = QFrame()
+        manual_panel.setObjectName("NavManualPath")
+        manual_panel.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        manual_lay = QVBoxLayout(manual_panel)
+        manual_lay.setContentsMargins(4, 4, 4, 4)
+        manual_lay.setSpacing(2)
+        manual_title = QLabel("手動採点")
+        manual_title.setObjectName("NavManualPathTitle")
+        manual_title.setAlignment(Qt.AlignCenter)
+        manual_lay.addWidget(manual_title)
+        manual_btn = QPushButton("画像を見ながら\n○△×")
         manual_btn.setObjectName("ManualGradingNav")
         set_variant(manual_btn, "nav")
         manual_btn.setCheckable(True)
@@ -156,10 +176,16 @@ class MainWindow(QMainWindow):
         )
         self.nav_group.addButton(manual_btn)
         self.nav_buttons[MANUAL_GRADING_STEP_ID] = manual_btn
+        manual_lay.addWidget(manual_btn, 1)
 
-        branch_lay.addWidget(auto_col, 3)
-        branch_lay.addWidget(manual_btn, 2)
+        branch_lay.addWidget(auto_panel, 3)
+        branch_lay.addWidget(manual_panel, 2)
         lay.addWidget(branch)
+
+        merge_lbl = QLabel("▼ 合流")
+        merge_lbl.setObjectName("NavMergeLabel")
+        merge_lbl.setAlignment(Qt.AlignCenter)
+        lay.addWidget(merge_lbl)
 
         for step in STEPS:
             if step["id"] >= 6:

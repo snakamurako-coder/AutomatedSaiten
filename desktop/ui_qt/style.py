@@ -48,20 +48,48 @@ QMainWindow, QDialog {{
     font-size: 11px;
     color: {COLORS["text_secondary"]};
 }}
+#NavForkLabel, #NavMergeLabel {{
+    font-size: 10px;
+    font-weight: 700;
+    color: {COLORS["text_muted"]};
+    padding: 2px 0;
+}}
 #NavBranchBlock {{
     background: transparent;
 }}
-QPushButton#NavBranchStep {{
-    padding: 6px 6px;
-    font-size: 11px;
-    min-height: 28px;
+#NavAutoPath {{
+    background: #f0fdf4;
+    border: 2px solid {COLORS["success"]};
+    border-radius: 8px;
 }}
-QPushButton#ManualGradingNav {{
+#NavAutoPathTitle {{
+    font-size: 10px;
+    font-weight: 700;
+    color: {COLORS["success"]};
+    padding: 0 0 2px 0;
+}}
+#NavManualPath {{
     background: {COLORS["accent_soft"]};
     border: 2px solid {COLORS["accent"]};
     border-radius: 8px;
+}}
+#NavManualPathTitle {{
+    font-size: 10px;
+    font-weight: 700;
+    color: {COLORS["accent_hover"]};
+    padding: 0 0 2px 0;
+}}
+QPushButton#NavBranchStep {{
+    padding: 5px 4px;
+    font-size: 11px;
+    min-height: 26px;
+}}
+QPushButton#ManualGradingNav {{
+    background: white;
+    border: 1px solid #93c5fd;
+    border-radius: 6px;
     padding: 6px 4px;
-    font-size: 13px;
+    font-size: 11px;
     font-weight: 700;
     color: {COLORS["accent_hover"]};
     text-align: center;
