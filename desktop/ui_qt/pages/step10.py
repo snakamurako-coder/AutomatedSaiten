@@ -44,7 +44,7 @@ from ui_qt.region_editor import AnswerRegionEditor
 from ui_qt.style import COLORS
 
 # 合計欄配置の模範解答表示・1件プレビュー画像欄の高さ（旧 220px の 3.5 倍）
-_IMAGE_PANEL_HEIGHT = 770, set_variant
+_IMAGE_PANEL_HEIGHT = 770
 
 
 class Step10Page(QWidget):
