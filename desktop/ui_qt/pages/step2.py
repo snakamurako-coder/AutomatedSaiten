@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -14,6 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from models.grading_status import field_grading_complete_map
 from models.test_repo import get_test_info, save_answer_fields, save_points
 from ui_qt import helpers as h
 from ui_qt.style import COLORS
@@ -44,11 +46,13 @@ class Step2Page(QWidget):
         header.addWidget(self.total_label)
         root.addLayout(header)
 
-        self.table = QTableWidget(0, 3)
-        self.table.setHorizontalHeaderLabels(["記述欄ID", "表示名", "配点"])
+        self.table = QTableWidget(0, 4)
+        self.table.setHorizontalHeaderLabels(["記述欄ID", "表示名", "配点", "採点"])
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 180)
         self.table.setColumnWidth(1, 220)
+        self.table.setColumnWidth(2, 80)
+        self.table.setColumnWidth(3, 72)
         self.table.setSelectionBehavior(QTableWidget.SelectItems)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.verticalHeader().setDefaultSectionSize(32)
@@ -74,6 +78,8 @@ class Step2Page(QWidget):
         fields = info["fields"]
         points = info["points"]
         self._fields = [dict(f) for f in fields]
+        complete_map = field_grading_complete_map(self.app.active_test_id)
+        done_bg = QColor(COLORS["selection_soft"])
         self.table.setRowCount(0)
         self._points_map = {}
         for f in self._fields:
@@ -81,9 +87,17 @@ class Step2Page(QWidget):
             self._points_map[f["id"]] = pts
             r = self.table.rowCount()
             self.table.insertRow(r)
+            done = bool(complete_map.get(f["id"], False))
             self.table.setItem(r, 0, make_readonly_item(f["id"]))
             self.table.setItem(r, 1, make_editable_item(f["displayName"]))
             self.table.setItem(r, 2, make_editable_item(str(pts), center=True))
+            status_item = make_readonly_item("完了" if done else "未完", center=True)
+            self.table.setItem(r, 3, status_item)
+            if done:
+                for c in range(4):
+                    item = self.table.item(r, c)
+                    if item is not None:
+                        item.setBackground(done_bg)
         self._update_total_label()
 
     def _update_total_label(self) -> None:
@@ -165,5 +179,6 @@ class Step2Page(QWidget):
             save_answer_fields(test_id, self._fields)
             save_points(test_id, self._points_map)
             h.info(self, "保存完了", "表示名と配点を保存しました。")
+            self.refresh()
         except Exception as e:
             h.error(self, "エラー", str(e))

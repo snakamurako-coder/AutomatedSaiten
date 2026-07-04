@@ -471,11 +471,9 @@ def update_results_field_grades(
     fid = str(field_id or "").strip()
     if not fid:
         raise ValueError("記述欄IDが空です。")
-    j = str(judgment or "").strip()
-    if j in ("〇", "◯"):
-        j = "○"
-    elif j in ("x", "X", "✕", "✖"):
-        j = "×"
+    from models.grading_status import normalize_judgment
+
+    j = normalize_judgment(judgment) or str(judgment or "").strip()
     sc = int(score)
     updated = 0
     with connect() as conn:

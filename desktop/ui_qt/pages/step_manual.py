@@ -6,7 +6,7 @@ from typing import Any
 
 from PIL import Image
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
+from PySide6.QtGui import QBrush, QColor, QPixmap, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -24,6 +24,11 @@ from PySide6.QtWidgets import (
 )
 
 from models.database import connect
+from models.grading_status import (
+    PENDING_JUDGMENT,
+    field_grading_complete_map,
+    normalize_judgment,
+)
 from models.output_repo import get_feedback_style
 from models.test_repo import (
     get_all_results,
@@ -53,22 +58,10 @@ def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
-def _normalize_judgment(value: Any) -> str:
-    """自動採点・手動採点で共通の判定記号に正規化（○△× / 空）。"""
-    j = str(value or "").strip()
-    if j in ("○", "〇", "◯"):
-        return "○"
-    if j == "△":
-        return "△"
-    if j in ("×", "x", "X", "✕", "✖"):
-        return "×"
-    return ""
-
-
 class StepManualPage(QWidget):
-    """記述欄画像を並べ、複数選択して ○△× を一括反映する手動採点。"""
+    """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
 
-    _MAIN_FILTERS = ("○", "△", "×", "未採点", "採点済み")
+    _MAIN_FILTERS = ("○", "△", "×", "?", "未採点", "採点済み")
 
     def __init__(self, app: Any) -> None:
         super().__init__()
@@ -237,8 +230,9 @@ class StepManualPage(QWidget):
             "○": "○ 判定のみ表示",
             "△": "△ 判定のみ表示",
             "×": "× 判定のみ表示",
+            "?": "保留（?）のみ表示",
             "未採点": "まだ判定がない回答のみ表示",
-            "採点済み": "○△× がすべて OFF のとき、採点済み（○△×）をすべて表示",
+            "採点済み": "○△× がすべて OFF のとき、確定判定（○△×）をすべて表示（保留は含まない）",
         }.get(key, "")
 
     def _build_footer_overlay(self) -> QFrame:
@@ -264,10 +258,13 @@ class StepManualPage(QWidget):
         self.btn_maru = QPushButton("○")
         self.btn_sankaku = QPushButton("△")
         self.btn_batsu = QPushButton("×")
+        self.btn_pending = QPushButton("?")
+        self.btn_pending.setToolTip("保留（あとで確認）")
         for btn, handler in (
             (self.btn_maru, lambda: self._apply_judgment("○")),
             (self.btn_sankaku, lambda: self._apply_judgment("△")),
             (self.btn_batsu, lambda: self._apply_judgment("×")),
+            (self.btn_pending, lambda: self._apply_judgment(PENDING_JUDGMENT)),
         ):
             btn.setFixedSize(44, 36)
             btn.setCursor(Qt.PointingHandCursor)
@@ -285,13 +282,8 @@ class StepManualPage(QWidget):
             return
         self._feedback_style = get_feedback_style()
         self._fields = get_answer_fields(self.app.active_test_id)
-        current = self.field_combo.currentIndex()
-        self.field_combo.blockSignals(True)
-        self.field_combo.clear()
-        self.field_combo.addItems([f"{f['displayName']} ({f['id']})" for f in self._fields])
-        if self._fields:
-            self.field_combo.setCurrentIndex(current if 0 <= current < len(self._fields) else 0)
-        self.field_combo.blockSignals(False)
+        current_fid = self._selected_field_id()
+        self._rebuild_field_combo(prefer_fid=current_fid)
         self._rebuild_triangle_filters()
         self._update_judge_buttons()
         if self._fields:
@@ -301,10 +293,39 @@ class StepManualPage(QWidget):
             self._selected_ids.clear()
             self._render_grid()
 
+    def _rebuild_field_combo(self, prefer_fid: str | None = None) -> None:
+        """未：/完：接頭辞と完了行の薄紫背景で記述欄プルダウンを再構築。"""
+        prefer = prefer_fid or self._selected_field_id()
+        complete_map = (
+            field_grading_complete_map(self.app.active_test_id)
+            if self.app.active_test_id
+            else {}
+        )
+        model = QStandardItemModel(self.field_combo)
+        select_idx = 0
+        for i, f in enumerate(self._fields):
+            done = bool(complete_map.get(f["id"], False))
+            prefix = "完：" if done else "未："
+            item = QStandardItem(f"{prefix}{f['displayName']} ({f['id']})")
+            item.setData(f["id"], Qt.UserRole)
+            if done:
+                item.setBackground(QBrush(QColor(COLORS["selection_soft"])))
+            model.appendRow(item)
+            if prefer and f["id"] == prefer:
+                select_idx = i
+        self.field_combo.blockSignals(True)
+        self.field_combo.setModel(model)
+        if self._fields:
+            self.field_combo.setCurrentIndex(select_idx)
+        self.field_combo.blockSignals(False)
+
     def _selected_field_id(self) -> str | None:
         idx = self.field_combo.currentIndex()
         if idx < 0 or idx >= len(self._fields):
             return None
+        data = self.field_combo.currentData()
+        if data:
+            return str(data)
         return self._fields[idx]["id"]
 
     def _field_max_score(self) -> int:
@@ -406,7 +427,7 @@ class StepManualPage(QWidget):
                 "fileId": r.get("sourcePath") or "",
                 "warpedPath": r.get("warpedPath") or "",
                 "answer_text": str(r.get("textMapping", {}).get(fid, "") or "").strip() or "なし",
-                "judgment": _normalize_judgment(r.get("judgments", {}).get(fid, "")),
+                "judgment": normalize_judgment(r.get("judgments", {}).get(fid, "")),
                 "score": r.get("scores", {}).get(fid),
             }
             for r in results
@@ -448,7 +469,7 @@ class StepManualPage(QWidget):
             row = by_id.get(rid)
             if not row:
                 continue
-            item["judgment"] = _normalize_judgment(row.get("judgments", {}).get(fid, ""))
+            item["judgment"] = normalize_judgment(row.get("judgments", {}).get(fid, ""))
             item["score"] = row.get("scores", {}).get(fid)
             if item.get("row") is not None:
                 item["row"]["answer_text"] = (
@@ -457,13 +478,14 @@ class StepManualPage(QWidget):
         self._selected_ids.clear()
         self._render_grid()
         self._update_status_summary()
+        self._rebuild_field_combo(prefer_fid=fid)
         h.info(self, "再読込", "自動採点・手動採点で共有している判定を DB から読み直しました。")
 
     def _update_status_summary(self) -> None:
-        counts = {"○": 0, "△": 0, "×": 0, "未採点": 0}
+        counts = {"○": 0, "△": 0, "×": 0, "?": 0, "未採点": 0}
         for item in self._items:
-            j = _normalize_judgment(item.get("judgment"))
-            if j in counts:
+            j = normalize_judgment(item.get("judgment"))
+            if j in ("○", "△", "×", "?"):
                 counts[j] += 1
             else:
                 counts["未採点"] += 1
@@ -471,7 +493,7 @@ class StepManualPage(QWidget):
         ok = sum(1 for i in self._items if i.get("ok"))
         self.status_label.setText(
             f"{ok}/{len(self._items)} 枚（○{counts['○']} △{counts['△']} "
-            f"×{counts['×']} 未採点{counts['未採点']}）— 表示 {visible} 枚"
+            f"×{counts['×']} ?{counts['?']} 未採点{counts['未採点']}）— 表示 {visible} 枚"
         )
 
     def _sort_items(self) -> None:
@@ -490,27 +512,32 @@ class StepManualPage(QWidget):
     def _item_passes_filter(self, item: dict[str, Any]) -> bool:
         """表示フィルタ。
 
-        - ○ / △ / × / 未採点: その判定（または未採点）だけを含める
-        - 採点済み: ○△× のいずれも ON でないとき、採点済みすべてを含める
-          （○△× のいずれかが ON のときは、採点済みボタンは無視し個別判定のみ）
-        - 複数 ON のときは OR（例: ○ と × → その両方）
+        - ○ / △ / × / ? / 未採点: その判定だけを含める
+        - 採点済み: 個別判定ボタンがすべて OFF のとき、確定判定（○△×）のみ
+          （保留 ? は含まない）
+        - 複数 ON のときは OR
         - すべて OFF のときは何も表示しない
         """
-        j = _normalize_judgment(item.get("judgment"))
+        j = normalize_judgment(item.get("judgment"))
         sc = item.get("score")
         btn = self._filter_btns
         show_maru = btn["○"].isChecked()
         show_sankaku = btn["△"].isChecked()
         show_batsu = btn["×"].isChecked()
+        show_pending = btn["?"].isChecked()
         show_ungraded = btn["未採点"].isChecked()
         show_graded_all = btn["採点済み"].isChecked()
-        any_specific = show_maru or show_sankaku or show_batsu
+        any_specific = show_maru or show_sankaku or show_batsu or show_pending
 
         if not j:
-            # 未採点
             return show_ungraded
 
-        # 採点済み（○ / △ / ×）
+        if j == PENDING_JUDGMENT:
+            if any_specific:
+                return show_pending
+            return False
+
+        # 確定判定（○ / △ / ×）
         if any_specific:
             allowed = (
                 (j == "○" and show_maru)
@@ -544,11 +571,14 @@ class StepManualPage(QWidget):
             h.warn(self, "未選択", "画像をタップして選択してください。")
             return
         max_score = self._field_max_score()
-        if judgment == "○":
+        nj = normalize_judgment(judgment)
+        if nj == "○":
             score = max_score
-        elif judgment == "×":
+        elif nj == "×":
             score = 0
-        elif judgment == "△":
+        elif nj == PENDING_JUDGMENT:
+            score = 0
+        elif nj == "△":
             if max_score <= 1:
                 return
             if max_score == 2:
@@ -571,14 +601,13 @@ class StepManualPage(QWidget):
                 self.app.active_test_id,
                 fid,
                 list(self._selected_ids),
-                judgment,
+                nj,
                 score,
             )
         except Exception as e:
             h.error(self, "保存エラー", str(e))
             return
         id_set = set(self._selected_ids)
-        nj = _normalize_judgment(judgment)
         for item in self._items:
             if item.get("result_id") in id_set:
                 item["judgment"] = nj
@@ -586,7 +615,9 @@ class StepManualPage(QWidget):
         self._selected_ids.clear()
         self._render_grid()
         self._update_status_summary()
-        h.info(self, "反映完了", f"{n} 件に {nj}（{score}点）を反映しました。")
+        self._rebuild_field_combo(prefer_fid=fid)
+        label = "保留" if nj == PENDING_JUDGMENT else nj
+        h.info(self, "反映完了", f"{n} 件に {label}（{score}点）を反映しました。")
 
     # --- グリッド ---
 
@@ -624,13 +655,15 @@ class StepManualPage(QWidget):
 
     def _judgment_stroke_color(self, judgment: str) -> str | None:
         mark = (self._feedback_style or {}).get("mark") or {}
-        j = _normalize_judgment(judgment)
+        j = normalize_judgment(judgment)
         if j == "○":
             return str((mark.get("maru") or {}).get("strokeColor") or "#dc2626")
         if j == "△":
             return str((mark.get("sankaku") or {}).get("strokeColor") or "#ea580c")
         if j == "×":
             return str((mark.get("batsu") or {}).get("strokeColor") or "#2563eb")
+        if j == PENDING_JUDGMENT:
+            return "#a16207"  # 保留（琥珀色）
         return None
 
     def _tile_colors(self, judgment: str, *, selected: bool) -> tuple[str, str]:
@@ -661,7 +694,7 @@ class StepManualPage(QWidget):
     def _make_tile(self, item: dict[str, Any], zoom: float) -> QWidget:
         rid = int(item.get("result_id") or 0)
         selected = rid in self._selected_ids
-        j = _normalize_judgment(item.get("judgment"))
+        j = normalize_judgment(item.get("judgment"))
         sc = item.get("score")
         tile = QFrame()
         pad = 4 if self._print_mark_mode else 6
