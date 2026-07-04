@@ -50,6 +50,7 @@ class ZoomControls(QWidget):
         min_pct: int = 30,
         max_pct: int = 400,
         value: int = 100,
+        slider_max_width: int | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -62,7 +63,11 @@ class ZoomControls(QWidget):
         self.zoom_slider.setStyleSheet(_CROP_ZOOM_SLIDER_STYLE)
         self.zoom_slider.setRange(min_pct, max_pct)
         self.zoom_slider.setValue(value)
-        lay.addWidget(self.zoom_slider, 1)
+        if slider_max_width is not None:
+            self.zoom_slider.setFixedWidth(slider_max_width)
+            lay.addWidget(self.zoom_slider)
+        else:
+            lay.addWidget(self.zoom_slider, 1)
         self.zoom_spin = QSpinBox()
         self.zoom_spin.setRange(min_pct, max_pct)
         self.zoom_spin.setValue(value)
@@ -99,18 +104,26 @@ class ZoomControls(QWidget):
 class CropDisplayControls(QWidget):
     """表示倍率スライダー・数値入力・タイルメタ情報の表示切替。"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        slider_max_width: int | None = None,
+    ) -> None:
         super().__init__(parent)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(4)
+        root.setSpacing(2)
 
-        self._zoom = ZoomControls(min_pct=30, max_pct=400, value=100)
+        self._zoom = ZoomControls(
+            min_pct=30, max_pct=400, value=100, slider_max_width=slider_max_width
+        )
         self.zoom_slider = self._zoom.zoom_slider
         self.zoom_spin = self._zoom.zoom_spin
         root.addWidget(self._zoom)
 
         meta_row = QHBoxLayout()
+        meta_row.setSpacing(8)
         self.show_id_check = QCheckBox("IDを表示")
         self.show_id_check.setChecked(True)
         self.show_file_check = QCheckBox("ファイル名を表示")

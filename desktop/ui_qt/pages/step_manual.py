@@ -44,7 +44,7 @@ from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.layout_helpers import make_expanding
-from ui_qt.style import COLORS, set_variant
+from ui_qt.style import COLORS
 
 
 def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
@@ -86,51 +86,53 @@ class StepManualPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- 上部作業エリア（フィルタ・画像）---
+        # --- 上部作業エリア（コンパクトにして画像領域を最大化）---
         work = QWidget()
         work_lay = QVBoxLayout(work)
-        work_lay.setContentsMargins(0, 0, 0, 8)
-        work_lay.setSpacing(6)
+        work_lay.setContentsMargins(0, 0, 0, 4)
+        work_lay.setSpacing(4)
 
-        work_lay.addWidget(h.title_label("手動採点"))
-        work_lay.addWidget(
-            h.muted_label(
-                "判定・得点は自動採点（③④⑤）と共通です。"
-                "⑤で付けた ○△× をフィルタで絞り、画像で確認・修正できます。"
-                "（画像の登録は③テキスト化が必要）"
-            )
-        )
+        # タイトル行＝全件/指定件数トグルを同じ高さに
+        title_row = QHBoxLayout()
+        title_row.setSpacing(12)
+        title_row.setAlignment(Qt.AlignVCenter)
+        title_lbl = h.title_label("手動採点")
+        title_row.addWidget(title_lbl, 0, Qt.AlignVCenter)
+        title_row.addWidget(self._build_page_mode_row(), 1, Qt.AlignVCenter)
+        work_lay.addLayout(title_row)
 
+        # 記述欄・並べ替え・フィルタ
         header = QHBoxLayout()
         header.setSpacing(8)
-        left_hdr = QVBoxLayout()
-        left_hdr.setSpacing(4)
         top = QHBoxLayout()
+        top.setSpacing(6)
         top.addWidget(QLabel("採点する記述欄"))
         self.field_combo = QComboBox()
-        self.field_combo.setMinimumWidth(240)
+        self.field_combo.setMinimumWidth(200)
         self.field_combo.currentIndexChanged.connect(self._on_field_changed)
         top.addWidget(self.field_combo)
-        top.addSpacing(8)
         top.addWidget(QLabel("並べ替え"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("ファイル名", "file")
         self.sort_combo.addItem("ID", "id")
         self.sort_combo.addItem("自動採点：解答の集約順（ファイル名）", "agg_file")
         self.sort_combo.addItem("自動採点：解答の集約順（ID）", "agg_id")
-        self.sort_combo.setMinimumWidth(220)
+        self.sort_combo.setMinimumWidth(200)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         top.addWidget(self.sort_combo)
         top.addWidget(h.button("判定を再読込", self._reload_grades))
         top.addStretch()
-        left_hdr.addLayout(top)
-        self.selection_label = h.caption_label("0 件を選択中")
-        left_hdr.addWidget(self.selection_label)
-        left_hdr.addWidget(self._build_mark_mode_switch())
-        left_hdr.addWidget(self._build_page_mode_row())
-        header.addLayout(left_hdr, 1)
+        header.addLayout(top, 1)
         header.addWidget(self._build_filter_box(), 0)
         work_lay.addLayout(header)
+
+        self.selection_label = h.caption_label("0 件を選択中")
+        self.status_label = h.caption_label("")
+        info_row = QHBoxLayout()
+        info_row.addWidget(self.selection_label)
+        info_row.addStretch()
+        info_row.addWidget(self.status_label)
+        work_lay.addLayout(info_row)
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
@@ -141,24 +143,22 @@ class StepManualPage(QWidget):
         make_expanding(self.crop_scroll)
         self.crop_panel = QWidget()
         self.crop_grid = QGridLayout(self.crop_panel)
-        self.crop_grid.setContentsMargins(8, 8, 8, 8)
-        self.crop_grid.setSpacing(8)
+        self.crop_grid.setContentsMargins(6, 6, 6, 6)
+        self.crop_grid.setSpacing(6)
         self.crop_scroll.setWidget(self.crop_panel)
         work_lay.addWidget(self.crop_scroll, 1)
-
-        self.status_label = h.caption_label("")
-        work_lay.addWidget(self.status_label)
         root.addWidget(work, 1)
 
         # --- 最下部固定オーバーレイ ---
         root.addWidget(self._build_footer_overlay())
 
     def _build_mark_mode_switch(self) -> QWidget:
+        """判定表示（文字/印字）— 下部固定メニュー用。"""
         wrap = QWidget()
         lay = QHBoxLayout(wrap)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        lay.addWidget(h.caption_label("判定表示:"))
+        lay.setSpacing(4)
+        lay.addWidget(h.caption_label("判定表示"))
         self._mode_lbl_text = QLabel("文字")
         self._mode_lbl_print = QLabel("印字")
         self.mark_mode_switch = QCheckBox()
@@ -190,7 +190,6 @@ class StepManualPage(QWidget):
         lay.addWidget(self._mode_lbl_text)
         lay.addWidget(self.mark_mode_switch)
         lay.addWidget(self._mode_lbl_print)
-        lay.addStretch()
         self._update_mode_labels()
         return wrap
 
@@ -260,6 +259,8 @@ class StepManualPage(QWidget):
         lay.addStretch()
         self._update_page_mode_labels()
         self._update_page_controls_enabled()
+        # タイトル行に並べるため縦方向は中央寄せ
+        wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         return wrap
 
     def _on_page_mode_toggled(self, checked: bool) -> None:
@@ -304,8 +305,8 @@ class StepManualPage(QWidget):
     def _build_filter_box(self) -> QGroupBox:
         box = QGroupBox("表示フィルタ（押し込んだボタンだけ表示）")
         lay = QVBoxLayout(box)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(4)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(2)
         row1 = QHBoxLayout()
         for key in self._MAIN_FILTERS:
             btn = QPushButton(key)
@@ -360,17 +361,27 @@ class StepManualPage(QWidget):
             f" border-top: 2px solid {COLORS['border_strong']}; }}"
         )
         lay = QHBoxLayout(footer)
-        lay.setContentsMargins(10, 8, 10, 8)
-        lay.setSpacing(12)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(10)
 
-        self.crop_controls = CropDisplayControls()
+        # 左: 短い拡大率 + メタ表示 + 判定表示切替
+        left = QWidget()
+        left.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
+        left_lay = QVBoxLayout(left)
+        left_lay.setContentsMargins(0, 0, 0, 0)
+        left_lay.setSpacing(2)
+        self.crop_controls = CropDisplayControls(slider_max_width=140)
         self.crop_controls.connect_zoom_changed(self._render_grid)
         self.crop_controls.connect_meta_changed(self._render_grid)
-        lay.addWidget(self.crop_controls, 2)
+        left_lay.addWidget(self.crop_controls)
+        left_lay.addWidget(self._build_mark_mode_switch())
+        lay.addWidget(left, 0)
 
+        # 右: 判定反映（余白を広く）
         judge = QGroupBox("選択への判定反映")
         judge_lay = QHBoxLayout(judge)
-        judge_lay.setContentsMargins(8, 6, 8, 6)
+        judge_lay.setContentsMargins(8, 4, 8, 4)
+        judge_lay.setSpacing(6)
         judge_lay.addWidget(h.caption_label("画像をタップで複数選択 →"))
         self.btn_maru = QPushButton("○")
         self.btn_sankaku = QPushButton("△")
@@ -385,22 +396,47 @@ class StepManualPage(QWidget):
         ):
             btn.setFixedSize(44, 36)
             btn.setCursor(Qt.PointingHandCursor)
-            set_variant(btn, "primary")
             btn.clicked.connect(handler)
             judge_lay.addWidget(btn)
+        self._apply_judgment_button_colors()
         judge_lay.addWidget(
             h.button("未採点を一括選択", self._select_ungraded, variant="success")
         )
         judge_lay.addWidget(h.button("選択を解除", self._clear_selection))
+        judge_lay.addStretch()
         lay.addWidget(judge, 1)
         return footer
 
     # --- データ ---
 
+    def _judgment_button_style(self, stroke: str) -> str:
+        """⑩出力書式の判定色をボタンに反映。"""
+        soft = _mix_hex_with_white(stroke, 0.82)
+        return (
+            f"QPushButton {{ background: {soft}; color: {stroke}; font-weight: 800;"
+            f" font-size: 16px; border: 2px solid {stroke}; border-radius: 6px; }}"
+            f"QPushButton:hover {{ background: {_mix_hex_with_white(stroke, 0.7)}; }}"
+            f"QPushButton:pressed {{ background: {stroke}; color: white; }}"
+        )
+
+    def _apply_judgment_button_colors(self) -> None:
+        """○△× は個票出力と同じ判定記号色。? は保留用の琥珀色。"""
+        mark = (self._feedback_style or {}).get("mark") or {}
+        maru = str((mark.get("maru") or {}).get("strokeColor") or "#dc2626")
+        sankaku = str((mark.get("sankaku") or {}).get("strokeColor") or "#ea580c")
+        batsu = str((mark.get("batsu") or {}).get("strokeColor") or "#2563eb")
+        pending = "#a16207"
+        if hasattr(self, "btn_maru"):
+            self.btn_maru.setStyleSheet(self._judgment_button_style(maru))
+            self.btn_sankaku.setStyleSheet(self._judgment_button_style(sankaku))
+            self.btn_batsu.setStyleSheet(self._judgment_button_style(batsu))
+            self.btn_pending.setStyleSheet(self._judgment_button_style(pending))
+
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
         self._feedback_style = get_feedback_style()
+        self._apply_judgment_button_colors()
         self._fields = get_answer_fields(self.app.active_test_id)
         current_fid = self._selected_field_id()
         self._rebuild_field_combo(prefer_fid=current_fid)
