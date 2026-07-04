@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
@@ -43,6 +44,46 @@ from ui_qt.helpers import ProgressBridge, pil_to_qpixmap
 from ui_qt.layout_helpers import CollapsibleSection, make_expanding
 from ui_qt.region_editor import AnswerRegionEditor
 from ui_qt.style import COLORS
+
+
+class _FeedbackPreviewHost(QWidget):
+    """個票プレビュー用 — ピクセル等倍で描画し、右端が切れないようにする。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._pixmap: QPixmap | None = None
+        self._placeholder = "「1件プレビュー」で個票の合成結果を確認できます"
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+
+    def set_placeholder(self, text: str) -> None:
+        self._placeholder = text
+
+    def set_pixmap(self, pixmap: QPixmap | None) -> None:
+        self._pixmap = pixmap
+        if pixmap is None or pixmap.isNull():
+            self.setFixedSize(480, 72)
+        else:
+            self.setFixedSize(pixmap.size())
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        painter = QPainter(self)
+        painter.fillRect(self.rect(), QColor(COLORS["sidebar"]))
+        if self._pixmap is not None and not self._pixmap.isNull():
+            painter.drawPixmap(0, 0, self._pixmap)
+            return
+        painter.setPen(QColor(COLORS["text_muted"]))
+        painter.drawText(self.rect(), Qt.AlignCenter, self._placeholder)
+
+
+class _PreviewScrollArea(QScrollArea):
+    """プレビュー欄のリサイズを親へ通知。"""
+
+    viewport_resized = Signal()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.viewport_resized.emit()
 
 
 class Step10Page(QWidget):
@@ -205,26 +246,25 @@ class Step10Page(QWidget):
         ctrl.addStretch()
         lay.addLayout(ctrl)
 
-        self.preview_zoom = ZoomControls(min_pct=10, max_pct=400, value=40)
+        self.preview_zoom = ZoomControls(min_pct=10, max_pct=400, value=100)
         self.preview_zoom.connect_zoom_changed(self._update_preview_pixmap)
         lay.addWidget(self.preview_zoom)
 
-        preview_scroll = QScrollArea()
+        preview_scroll = _PreviewScrollArea()
         preview_scroll.setWidgetResizable(False)
         preview_scroll.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         preview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         preview_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        preview_scroll.setFixedHeight(120)
+        preview_scroll.setMinimumHeight(120)
         self._preview_scroll = preview_scroll
         preview_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['sidebar']}; }}"
         )
-        self.preview_label = QLabel("「1件プレビュー」で個票の合成結果を確認できます")
-        self.preview_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
-        self.preview_label.setStyleSheet("background: transparent; padding: 8px;")
-        preview_scroll.setWidget(self.preview_label)
+        self.preview_host = _FeedbackPreviewHost()
+        preview_scroll.setWidget(self.preview_host)
+        preview_scroll.viewport_resized.connect(self._update_preview_pixmap)
         lay.addWidget(preview_scroll)
         return box
 
@@ -408,32 +448,55 @@ class Step10Page(QWidget):
             return
         row = self._rows[idx]
         test_id = self.app.active_test_id
-        self.preview_label.setText("合成中…")
+        self.preview_host.set_pixmap(None)
+        self.preview_host.set_placeholder("合成中…")
 
         def done(img, err):
             if err:
-                self.preview_label.setText("")
+                self.preview_host.set_placeholder(
+                    "「1件プレビュー」で個票の合成結果を確認できます"
+                )
                 h.error(self, "プレビューエラー", str(err))
                 return
             self._preview_image = img
+            self._fit_preview_zoom_to_viewport()
             self._update_preview_pixmap()
 
         h.run_in_thread(self, lambda: render_feedback_for_row(test_id, row), done)
 
-    def _update_preview_pixmap(self) -> None:
+    def _fit_preview_zoom_to_viewport(self) -> None:
+        """ビューポート幅に収まる倍率を初期設定（全体が見えるように）。"""
         if self._preview_image is None or self._preview_scroll is None:
+            return
+        vw = max(120, self._preview_scroll.viewport().width() - 4)
+        iw = max(1, self._preview_image.width)
+        pct = max(10, min(400, int(vw / iw * 100)))
+        self.preview_zoom.set_zoom_value(pct)
+
+    def _update_preview_pixmap(self) -> None:
+        if self._preview_scroll is None:
+            return
+        if self._preview_image is None:
+            self.preview_host.set_pixmap(None)
+            self._apply_preview_scroll_height(72, 480)
             return
         zoom = max(10, min(400, self.preview_zoom.zoom_value())) / 100.0
         pix = pil_to_qpixmap(self._preview_image)
-        w = max(100, int(pix.width() * zoom))
-        scaled = pix.scaledToWidth(w, Qt.SmoothTransformation)
-        self.preview_label.setPixmap(scaled)
-        self.preview_label.setFixedSize(scaled.size())
+        w = max(1, int(round(pix.width() * zoom)))
+        h = max(1, int(round(pix.height() * zoom)))
+        scaled = pix.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio, Qt.SmoothTransformation)
+        scaled.setDevicePixelRatio(1.0)
+        self.preview_host.set_pixmap(scaled)
+        self._apply_preview_scroll_height(scaled.height(), scaled.width())
+
+    def _apply_preview_scroll_height(self, content_h: int, content_w: int) -> None:
+        if self._preview_scroll is None:
+            return
         frame = self._preview_scroll.frameWidth() * 2
         extra = 0
-        if scaled.width() > max(1, self._preview_scroll.viewport().width()):
+        if content_w > max(1, self._preview_scroll.viewport().width()):
             extra = self._preview_scroll.horizontalScrollBar().sizeHint().height()
-        self._preview_scroll.setFixedHeight(max(80, scaled.height() + frame + extra))
+        self._preview_scroll.setFixedHeight(max(80, content_h + frame + extra))
 
     # ---------- 一括生成 ----------
 
