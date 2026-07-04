@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPlainTextEdit,
     QProgressBar,
+    QPushButton,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -26,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import test_warped
+from config import load_config, test_warped
 from models.test_repo import (
     build_pending_rows_tsv,
     build_results_tsv,
@@ -40,12 +41,20 @@ from models.test_repo import (
     save_student_folder,
     set_step3_failed_entry,
 )
-from services.batch_processor import STAGE_LABELS, run_batch_ocr
+from services.batch_processor import (
+    STAGE_LABELS,
+    run_batch_ocr,
+    run_ocr_for_manual_warp_entries,
+)
 from services.work_queue import build_file_inventory
 from ui_qt import helpers as h
 from ui_qt.helpers import ProgressBridge
 from ui_qt.layout_helpers import CollapsibleSection, main_table_frame, make_expanding
 from ui_qt.style import COLORS
+from ui_qt.manual_warp_dialog import (
+    ManualWarpDialog,
+    collect_continuous_manual_warp_queue,
+)
 from ui_qt.table_cells import (
     is_toggle_checked,
     make_toggle_item,
@@ -84,6 +93,7 @@ class Step3Page(QWidget):
             h.muted_label(
                 "「フォルダを再認識」で一覧を表示し、チェックしたファイルだけ処理します。"
                 "①で「IDマーク欄あり」のとき、補正後に生徒IDを OMR で読み取ります（読めない桁は ?）。"
+                "自動補正に失敗した場合は「手動補正」または「連続手動補正」を利用してください。"
             )
         )
 
@@ -134,6 +144,9 @@ class Step3Page(QWidget):
         btns = QHBoxLayout()
         self.run_btn = h.button("チェックしたファイルを OCR", self._on_run_ocr, variant="primary")
         btns.addWidget(self.run_btn)
+        btns.addWidget(
+            h.button("連続手動補正", self._on_continuous_manual_warp, variant="primary")
+        )
         btns.addWidget(h.button("③をリセット", self._on_reset, variant="danger-soft"))
         btns.addStretch()
         root.addLayout(btns)
@@ -264,7 +277,7 @@ class Step3Page(QWidget):
         fields = self._fields
         headers = ["OCR", "状態", "失敗理由", "ファイル名", "生徒ID"]
         headers.extend(f.get("displayName") or f["id"] for f in fields)
-        headers.append("DB")
+        headers.extend(["DB", "操作"])
 
         self.table.setColumnCount(len(headers))
         self.table.setHorizontalHeaderLabels(headers)
@@ -317,6 +330,24 @@ class Step3Page(QWidget):
             self.table.setItem(row_idx, col, item)
 
         self._set_cell(row_idx, _COL_FIELD_START + len(self._fields), data.get("db") or "—")
+        self._set_manual_warp_button(row_idx, data)
+
+    def _col_action(self) -> int:
+        return _COL_FIELD_START + len(self._fields) + 1
+
+    def _set_manual_warp_button(self, row_idx: int, data: dict[str, Any]) -> None:
+        col = self._col_action()
+        q = data.get("queueItem")
+        if not q or not q.get("path"):
+            self._set_cell(row_idx, col, "—")
+            return
+        btn = QPushButton("手動補正")
+        btn.setStyleSheet(
+            f"color: {COLORS['accent']}; text-decoration: underline; border: none; background: transparent;"
+        )
+        btn.setCursor(Qt.PointingHandCursor)
+        btn.clicked.connect(partial(self._open_manual_warp_for_row, row_idx))
+        self.table.setCellWidget(row_idx, col, btn)
 
     def _set_cell(
         self, row: int, col: int, text: str, color: QColor | None = None
@@ -699,3 +730,83 @@ class Step3Page(QWidget):
             f"新規 {res['inserted']} 件 / 更新 {res['updated']} 件を取り込みました。\n"
             "「ファイル別の処理状況」を更新しました。",
         )
+
+    def _warp_dialog_settings(self) -> tuple[str, int]:
+        cfg = load_config()
+        orientation = cfg.get("default_orientation", "landscape")
+        return orientation, 128
+
+    def _open_manual_warp_for_row(self, row_idx: int) -> None:
+        if not self.app.require_active_test():
+            return
+        if row_idx < 0 or row_idx >= len(self._inventory_rows):
+            return
+        rd = self._inventory_rows[row_idx]
+        q = rd.get("queueItem")
+        if not q or not q.get("path"):
+            h.warn(self, "手動補正不可", "この行には原画像パスがありません。")
+            return
+        orientation, thresh = self._warp_dialog_settings()
+        dlg = ManualWarpDialog(
+            self,
+            test_id=self.app.active_test_id,
+            orientation=orientation,
+            on_saved=lambda entry: self._run_manual_warp_ocr([entry]),
+        )
+        dlg.open_single(q, thresh=thresh)
+        dlg.exec()
+
+    def _on_continuous_manual_warp(self) -> None:
+        if not self.app.require_active_test():
+            return
+        if not self._scanned:
+            h.warn(self, "一覧未表示", "先に「フォルダを再認識」でファイル一覧を表示してください。")
+            return
+        queue = collect_continuous_manual_warp_queue(self._inventory_rows)
+        if not queue:
+            h.warn(
+                self,
+                "対象なし",
+                "連続手動補正対象（読込・補正失敗）がありません。",
+            )
+            return
+        orientation, thresh = self._warp_dialog_settings()
+        dlg = ManualWarpDialog(
+            self,
+            test_id=self.app.active_test_id,
+            orientation=orientation,
+            on_batch_done=lambda payload: self._run_manual_warp_ocr(payload.get("entries") or []),
+        )
+        dlg.open_continuous(queue, thresh=thresh)
+        dlg.exec()
+
+    def _run_manual_warp_ocr(self, entries: list[dict[str, Any]]) -> None:
+        if not entries or not self.app.require_active_test():
+            return
+        test_id = self.app.active_test_id
+        total = len(entries)
+        self.run_btn.setEnabled(False)
+        self.progress.setValue(0)
+        self.progress_label.setText(f"0/{total}")
+        self.status_label.setText(f"手動補正後 OCR 開始（{total} 件）…")
+        self.log.appendPlainText(f"--- 手動補正後 OCR 開始（{total} 件）---")
+
+        bridge = ProgressBridge(self)
+        bridge.updated.connect(self._update_progress)
+        bridge.detailed.connect(self._on_detail_progress)
+
+        def task():
+            def on_progress(current: int, t: int, name: str) -> None:
+                bridge.updated.emit(current, t, name)
+
+            def on_detail(ev: dict[str, Any]) -> None:
+                bridge.detailed.emit(ev)
+
+            return run_ocr_for_manual_warp_entries(
+                test_id,
+                entries,
+                on_progress=on_progress,
+                on_detail=on_detail,
+            )
+
+        h.run_in_thread(self, task, self._on_ocr_done)

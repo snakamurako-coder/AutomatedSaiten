@@ -60,6 +60,54 @@ def default_paper_corners(img_w: int, img_h: int) -> Corners:
     )
 
 
+def clone_corners(corners: Corners) -> Corners:
+    return Corners(tl=corners.tl, tr=corners.tr, br=corners.br, bl=corners.bl)
+
+
+def corners_from_rect(x1: float, y1: float, x2: float, y2: float) -> Corners:
+    left = min(x1, x2)
+    right = max(x1, x2)
+    top = min(y1, y2)
+    bottom = max(y1, y2)
+    return Corners(tl=(left, top), tr=(right, top), br=(right, bottom), bl=(left, bottom))
+
+
+def clamp_corner_point(
+    x: float, y: float, img_w: int, img_h: int
+) -> tuple[float, float]:
+    return (
+        max(0.0, min(float(img_w), x)),
+        max(0.0, min(float(img_h), y)),
+    )
+
+
+def rotate_corners_around_center(
+    corners: Corners,
+    img_w: int,
+    img_h: int,
+    deg: float,
+) -> Corners:
+    if not deg or abs(deg) < 0.01:
+        return clone_corners(corners)
+    rad = deg * np.pi / 180.0
+    cx, cy = img_w / 2.0, img_h / 2.0
+    cos_r, sin_r = float(np.cos(rad)), float(np.sin(rad))
+
+    def rot(px: float, py: float) -> tuple[float, float]:
+        dx, dy = px - cx, py - cy
+        return (
+            cx + dx * cos_r - dy * sin_r,
+            cy + dx * sin_r + dy * cos_r,
+        )
+
+    return Corners(
+        tl=rot(*corners.tl),
+        tr=rot(*corners.tr),
+        br=rot(*corners.br),
+        bl=rot(*corners.bl),
+    )
+
+
 def detect_paper_corners(image_bgr: np.ndarray, thresh_val: int = 128) -> Corners:
     gray = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2GRAY)
     _, thresh = cv2.threshold(gray, thresh_val, 255, cv2.THRESH_BINARY_INV)

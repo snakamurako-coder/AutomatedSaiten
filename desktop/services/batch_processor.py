@@ -287,3 +287,101 @@ def run_batch_ocr(
         "queueStats": queue_stats,
         "itemLogs": item_logs,
     }
+
+
+def run_ocr_for_manual_warp_entries(
+    test_id: str,
+    entries: list[dict[str, Any]],
+    on_progress: ProgressCallback | None = None,
+    on_detail: DetailProgressCallback | None = None,
+) -> dict[str, Any]:
+    """手動補正済み画像に対して OCR のみ実行する。"""
+    cfg = load_config()
+    orientation = cfg.get("default_orientation", "landscape")
+    use_id_mark = get_use_id_mark(test_id)
+    total = len(entries)
+    pending_rows: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    item_logs: list[dict[str, Any]] = []
+
+    for idx, entry in enumerate(entries, start=1):
+        file_name = entry["fileName"]
+        item = {
+            "name": file_name,
+            "path": entry.get("sourcePath") or "",
+            "stage": "ocr_only",
+            "warpedPath": entry.get("warpedPath") or "",
+        }
+        if on_progress:
+            on_progress(idx, total, file_name)
+        try:
+            row = process_single_item(
+                test_id,
+                item,
+                orientation=orientation,
+                use_id_mark=use_id_mark,
+                on_detail=on_detail,
+                index=idx,
+                total=total,
+            )
+            pending_rows.append(row)
+            item_logs.append({"fileName": file_name, "status": "done", "row": row})
+        except BatchItemError as e:
+            errors.append({"fileName": file_name, "error": str(e), "stage": e.stage})
+            item_logs.append(
+                {"fileName": file_name, "status": "failed", "error": str(e), "stage": e.stage}
+            )
+        except Exception as e:
+            errors.append({"fileName": file_name, "error": str(e), "stage": "unknown"})
+            item_logs.append({"fileName": file_name, "status": "failed", "error": str(e), "stage": "unknown"})
+
+    if pending_rows and on_detail:
+        _emit_detail(
+            on_detail,
+            index=total,
+            total=total,
+            file_name="",
+            stage="save",
+            status="processing",
+        )
+
+    flush_result = flush_result_rows(test_id, pending_rows)
+
+    if pending_rows and on_detail:
+        _emit_detail(
+            on_detail,
+            index=total,
+            total=total,
+            file_name="",
+            stage="save",
+            status="done",
+        )
+
+    archive_dir = test_archive(test_id)
+    for row in pending_rows:
+        if on_detail:
+            _emit_detail(
+                on_detail,
+                index=total,
+                total=total,
+                file_name=row.get("fileName") or "",
+                stage="archive",
+                status="processing",
+            )
+        _archive_source(row.get("sourcePath", ""), archive_dir)
+        if on_detail:
+            _emit_detail(
+                on_detail,
+                index=total,
+                total=total,
+                file_name=row.get("fileName") or "",
+                stage="archive",
+                status="done",
+            )
+
+    return {
+        "processed": len(pending_rows),
+        "errors": errors,
+        "flush": flush_result,
+        "itemLogs": item_logs,
+    }
