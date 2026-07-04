@@ -129,34 +129,37 @@ class MainWindow(QMainWindow):
             if step["id"] <= 2:
                 self._add_nav_button(lay, step)
 
-        grp = QLabel("③〜⑤ または手動採点")
-        grp.setObjectName("SidebarGroupLabel")
-        lay.addWidget(grp)
+        branch = QFrame()
+        branch.setObjectName("NavBranchBlock")
+        branch_lay = QHBoxLayout(branch)
+        branch_lay.setContentsMargins(0, 4, 0, 4)
+        branch_lay.setSpacing(4)
 
+        auto_col = QWidget()
+        auto_lay = QVBoxLayout(auto_col)
+        auto_lay.setContentsMargins(0, 0, 0, 0)
+        auto_lay.setSpacing(2)
         for step in STEPS:
             if step["id"] in (3, 4, 5):
-                self._add_nav_button(lay, step)
+                self._add_nav_button(auto_lay, step, compact=True)
 
-        manual_btn = QPushButton("手動採点")
+        manual_btn = QPushButton("手動\n採点")
         manual_btn.setObjectName("ManualGradingNav")
         set_variant(manual_btn, "nav")
         manual_btn.setCheckable(True)
         manual_btn.setEnabled(MANUAL_GRADING_STEP_ID in DESKTOP_READY_STEPS)
         manual_btn.setCursor(Qt.PointingHandCursor)
         manual_btn.setToolTip("③④⑤ の代替 — 画像を見ながら ○△× を付ける")
+        manual_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         manual_btn.clicked.connect(
             lambda _c=False: self.load_step(MANUAL_GRADING_STEP_ID)
         )
         self.nav_group.addButton(manual_btn)
         self.nav_buttons[MANUAL_GRADING_STEP_ID] = manual_btn
-        lay.addWidget(manual_btn)
 
-        lay.addSpacing(6)
-        div_auto = QFrame()
-        div_auto.setFrameShape(QFrame.HLine)
-        div_auto.setStyleSheet("color: #e5e7eb;")
-        lay.addWidget(div_auto)
-        lay.addSpacing(4)
+        branch_lay.addWidget(auto_col, 3)
+        branch_lay.addWidget(manual_btn, 2)
+        lay.addWidget(branch)
 
         for step in STEPS:
             if step["id"] >= 6:
@@ -182,14 +185,19 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.ocr_status_label)
         return sidebar
 
-    def _add_nav_button(self, lay: QVBoxLayout, step: dict) -> None:
+    def _add_nav_button(
+        self, lay: QVBoxLayout, step: dict, *, compact: bool = False
+    ) -> None:
         sid = step["id"]
         enabled = sid in DESKTOP_READY_STEPS
-        btn = QPushButton(step["label"] + ("" if enabled else " …準備中"))
+        label = step["label"] + ("" if enabled else " …準備中")
+        btn = QPushButton(label)
         set_variant(btn, "nav")
         btn.setCheckable(True)
         btn.setEnabled(enabled)
         btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
+        if compact:
+            btn.setObjectName("NavBranchStep")
         if enabled:
             btn.clicked.connect(lambda _c=False, s=sid: self.load_step(s))
         self.nav_group.addButton(btn)

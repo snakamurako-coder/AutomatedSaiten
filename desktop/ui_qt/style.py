@@ -48,19 +48,20 @@ QMainWindow, QDialog {{
     font-size: 11px;
     color: {COLORS["text_secondary"]};
 }}
-#SidebarGroupLabel {{
-    font-size: 10px;
-    font-weight: 600;
-    color: {COLORS["text_muted"]};
-    padding: 4px 4px 2px 4px;
+#NavBranchBlock {{
+    background: transparent;
+}}
+QPushButton#NavBranchStep {{
+    padding: 6px 6px;
+    font-size: 11px;
+    min-height: 28px;
 }}
 QPushButton#ManualGradingNav {{
     background: {COLORS["accent_soft"]};
     border: 2px solid {COLORS["accent"]};
     border-radius: 8px;
-    padding: 12px 10px;
-    min-height: 52px;
-    font-size: 14px;
+    padding: 6px 4px;
+    font-size: 13px;
     font-weight: 700;
     color: {COLORS["accent_hover"]};
     text-align: center;
