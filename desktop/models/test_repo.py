@@ -434,6 +434,49 @@ def get_all_results(test_id: str) -> list[dict[str, Any]]:
     return out
 
 
+def update_results_field_grades(
+    test_id: str,
+    field_id: str,
+    result_ids: list[int],
+    judgment: str,
+    score: int,
+) -> int:
+    """手動採点: 指定結果行の記述欄判定・得点を一括更新。"""
+    if not result_ids:
+        return 0
+    fid = str(field_id or "").strip()
+    if not fid:
+        raise ValueError("記述欄IDが空です。")
+    j = str(judgment or "").strip()
+    sc = int(score)
+    updated = 0
+    with connect() as conn:
+        for rid in result_ids:
+            row = conn.execute(
+                "SELECT id, judgments_json, scores_json FROM results WHERE test_id = ? AND id = ?",
+                (test_id, int(rid)),
+            ).fetchone()
+            if not row:
+                continue
+            judgments = json.loads(row["judgments_json"] or "{}")
+            scores = json.loads(row["scores_json"] or "{}")
+            judgments[fid] = j
+            scores[fid] = sc
+            conn.execute(
+                "UPDATE results SET judgments_json = ?, scores_json = ? WHERE id = ?",
+                (
+                    json.dumps(judgments, ensure_ascii=False),
+                    json.dumps(scores, ensure_ascii=False),
+                    row["id"],
+                ),
+            )
+            updated += 1
+        if updated:
+            touch_progress_conn(conn, test_id, 5, "手動採点")
+        conn.commit()
+    return updated
+
+
 def rewrite_field_texts(
     test_id: str,
     field_id: str,

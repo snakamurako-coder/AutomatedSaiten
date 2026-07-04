@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from constants import DESKTOP_READY_STEPS, STEPS
+from constants import DESKTOP_READY_STEPS, MANUAL_GRADING_STEP_ID, STEPS
 from models.database import connect, get_active_test_id, init_db
 from services.ocr import check_ocr_config
 from ui_qt import helpers as h
@@ -31,6 +31,7 @@ from ui_qt.pages.step7 import Step7Page
 from ui_qt.pages.step8 import Step8Page
 from ui_qt.pages.step9 import Step9Page
 from ui_qt.pages.step10 import Step10Page
+from ui_qt.pages.step_manual import StepManualPage
 from ui_qt.settings_dialog import open_settings_dialog
 from ui_qt.style import set_variant
 
@@ -94,6 +95,11 @@ class MainWindow(QMainWindow):
                 lay.addStretch()
             self.pages[sid] = page
             self.stack.addWidget(page)
+        # 手動採点（STEPS リスト外）
+        if MANUAL_GRADING_STEP_ID not in self.pages:
+            page = StepManualPage(self)
+            self.pages[MANUAL_GRADING_STEP_ID] = page
+            self.stack.addWidget(page)
 
         self._refresh_ocr_status()
         self.load_step(0)
@@ -118,19 +124,43 @@ class MainWindow(QMainWindow):
         self.nav_group = QButtonGroup(self)
         self.nav_group.setExclusive(True)
         self.nav_buttons: dict[int, QPushButton] = {}
+
         for step in STEPS:
-            sid = step["id"]
-            enabled = sid in DESKTOP_READY_STEPS
-            btn = QPushButton(step["label"] + ("" if enabled else " …準備中"))
-            set_variant(btn, "nav")
-            btn.setCheckable(True)
-            btn.setEnabled(enabled)
-            btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
-            if enabled:
-                btn.clicked.connect(lambda _c=False, s=sid: self.load_step(s))
-            self.nav_group.addButton(btn)
-            self.nav_buttons[sid] = btn
-            lay.addWidget(btn)
+            if step["id"] <= 2:
+                self._add_nav_button(lay, step)
+
+        grp = QLabel("③〜⑤ または手動採点")
+        grp.setObjectName("SidebarGroupLabel")
+        lay.addWidget(grp)
+
+        for step in STEPS:
+            if step["id"] in (3, 4, 5):
+                self._add_nav_button(lay, step)
+
+        manual_btn = QPushButton("手動採点")
+        manual_btn.setObjectName("ManualGradingNav")
+        set_variant(manual_btn, "nav")
+        manual_btn.setCheckable(True)
+        manual_btn.setEnabled(MANUAL_GRADING_STEP_ID in DESKTOP_READY_STEPS)
+        manual_btn.setCursor(Qt.PointingHandCursor)
+        manual_btn.setToolTip("③④⑤ の代替 — 画像を見ながら ○△× を付ける")
+        manual_btn.clicked.connect(
+            lambda _c=False: self.load_step(MANUAL_GRADING_STEP_ID)
+        )
+        self.nav_group.addButton(manual_btn)
+        self.nav_buttons[MANUAL_GRADING_STEP_ID] = manual_btn
+        lay.addWidget(manual_btn)
+
+        lay.addSpacing(6)
+        div_auto = QFrame()
+        div_auto.setFrameShape(QFrame.HLine)
+        div_auto.setStyleSheet("color: #e5e7eb;")
+        lay.addWidget(div_auto)
+        lay.addSpacing(4)
+
+        for step in STEPS:
+            if step["id"] >= 6:
+                self._add_nav_button(lay, step)
 
         lay.addSpacing(10)
         divider = QFrame()
@@ -152,6 +182,20 @@ class MainWindow(QMainWindow):
         lay.addWidget(self.ocr_status_label)
         return sidebar
 
+    def _add_nav_button(self, lay: QVBoxLayout, step: dict) -> None:
+        sid = step["id"]
+        enabled = sid in DESKTOP_READY_STEPS
+        btn = QPushButton(step["label"] + ("" if enabled else " …準備中"))
+        set_variant(btn, "nav")
+        btn.setCheckable(True)
+        btn.setEnabled(enabled)
+        btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
+        if enabled:
+            btn.clicked.connect(lambda _c=False, s=sid: self.load_step(s))
+        self.nav_group.addButton(btn)
+        self.nav_buttons[sid] = btn
+        lay.addWidget(btn)
+
     # --- 共通 ---
 
     def require_active_test(self) -> bool:
@@ -169,11 +213,13 @@ class MainWindow(QMainWindow):
 
     def load_step(self, step_id: int) -> None:
         self._sync_active_test()
-        self.stack.setCurrentWidget(self.pages[step_id])
+        page = self.pages.get(step_id)
+        if page is None:
+            return
+        self.stack.setCurrentWidget(page)
         btn = self.nav_buttons.get(step_id)
         if btn:
             btn.setChecked(True)
-        page = self.pages[step_id]
         if step_id != 0 and hasattr(page, "refresh") and self.active_test_id:
             page.refresh()  # type: ignore[attr-defined]
         elif step_id == 0:

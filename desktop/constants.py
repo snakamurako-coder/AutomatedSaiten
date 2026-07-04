@@ -77,4 +77,7 @@ STEPS = [
     {"id": 10, "label": "⑩ 個票出力"},
 ]
 
-DESKTOP_READY_STEPS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10}
+# ② から分岐する手動採点（③④⑤ の代替フロー）
+MANUAL_GRADING_STEP_ID = 11
+
+DESKTOP_READY_STEPS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, MANUAL_GRADING_STEP_ID}
