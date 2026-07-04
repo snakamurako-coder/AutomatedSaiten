@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
+    QFrame,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -57,8 +58,20 @@ class Step10Page(QWidget):
         self._preview_scroll: QScrollArea | None = None
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        make_expanding(self._scroll)
+        outer.addWidget(self._scroll, 1)
+
+        body = QWidget()
+        self._scroll.setWidget(body)
+        root = QVBoxLayout(body)
+        root.setContentsMargins(0, 0, 8, 0)
         root.setSpacing(8)
 
         root.addWidget(h.title_label("⑩ 個票出力"))
@@ -67,10 +80,11 @@ class Step10Page(QWidget):
                 "補正済み解答画像に判定マーク（○/△/×）・小問得点・合計欄を合成した個票を生成します。"
             )
         )
-        root.addWidget(self._build_slots_box(), 2)
+        root.addWidget(self._build_slots_box())
         root.addWidget(self._build_style_section())
-        root.addWidget(self._build_preview_box(), 3)
+        root.addWidget(self._build_preview_box())
         root.addWidget(self._build_batch_box())
+        root.addStretch()
 
     # ---------- 合計欄の配置 ----------
 
@@ -105,9 +119,9 @@ class Step10Page(QWidget):
 
         self.slot_editor = AnswerRegionEditor(on_change=self._on_slots_changed)
         self.slot_editor.setMinimumHeight(_IMAGE_PANEL_HEIGHT)
-        make_expanding(self.slot_editor)
-        lay.addWidget(self.slot_editor, 1)
-        make_expanding(box)
+        self.slot_editor.setMaximumHeight(_IMAGE_PANEL_HEIGHT)
+        self.slot_editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        lay.addWidget(self.slot_editor)
 
         self.slot_status = h.caption_label("")
         lay.addWidget(self.slot_status)
@@ -203,7 +217,8 @@ class Step10Page(QWidget):
         preview_scroll = QScrollArea()
         preview_scroll.setWidgetResizable(True)
         preview_scroll.setMinimumHeight(_IMAGE_PANEL_HEIGHT)
-        make_expanding(preview_scroll)
+        preview_scroll.setMaximumHeight(_IMAGE_PANEL_HEIGHT)
+        preview_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self._preview_scroll = preview_scroll
         preview_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
@@ -213,8 +228,7 @@ class Step10Page(QWidget):
         self.preview_label.setAlignment(Qt.AlignTop | Qt.AlignLeft)
         self.preview_label.setStyleSheet("background: transparent; padding: 8px;")
         preview_scroll.setWidget(self.preview_label)
-        lay.addWidget(preview_scroll, 1)
-        make_expanding(box)
+        lay.addWidget(preview_scroll)
         return box
 
     def _build_batch_box(self) -> QGroupBox:
