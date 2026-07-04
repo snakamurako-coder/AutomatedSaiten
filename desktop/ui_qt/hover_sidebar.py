@@ -41,12 +41,14 @@ class HoverSidebar(QWidget):
         self._collapse_timer.setSingleShot(True)
         self._collapse_timer.timeout.connect(self._collapse)
 
-        self._grabber = QLabel("メ\nニ\nュー")
+        # 1文字ずつ改行して縦書き表示（付箋グラバー）
+        self._grabber = QLabel("\n".join("メニュー"))
         self._grabber.setObjectName("NavGrabber")
         self._grabber.setAlignment(Qt.AlignCenter)
         self._grabber.setToolTip("マウスを乗せるとメニューを表示")
         self._grabber.setFixedWidth(_COLLAPSED_W)
         self._grabber.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
+        self._grabber.setWordWrap(False)
 
         self._content_host = QFrame()
         self._content_host.setObjectName("Sidebar")

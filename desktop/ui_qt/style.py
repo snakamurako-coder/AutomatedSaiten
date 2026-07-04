@@ -134,8 +134,10 @@ QPushButton[variant="nav"]:disabled {{
     border-top-right-radius: 8px;
     border-bottom-right-radius: 8px;
     color: #713f12;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 700;
+    line-height: 14px;
+    padding: 8px 0;
 }}
 #NavGrabber:hover {{
     background: qlineargradient(x1:0, y1:0, x2:1, y2:1,

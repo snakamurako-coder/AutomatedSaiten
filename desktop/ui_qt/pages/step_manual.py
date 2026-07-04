@@ -19,10 +19,12 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from models.criteria_repo import get_unique_answers
 from models.database import connect
 from models.grading_status import (
     PENDING_JUDGMENT,
@@ -75,6 +77,9 @@ class StepManualPage(QWidget):
         self._sort_mode = "file"
         self._print_mark_mode = False  # False=文字情報 / True=個票と同じ印字
         self._feedback_style: dict[str, Any] = get_feedback_style()
+        self._show_all_pages = False  # False=指定件数表示 / True=全件表示
+        self._page_size = 20
+        self._page_index = 0
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -111,6 +116,9 @@ class StepManualPage(QWidget):
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("ファイル名", "file")
         self.sort_combo.addItem("ID", "id")
+        self.sort_combo.addItem("自動採点：解答の集約順（ファイル名）", "agg_file")
+        self.sort_combo.addItem("自動採点：解答の集約順（ID）", "agg_id")
+        self.sort_combo.setMinimumWidth(220)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         top.addWidget(self.sort_combo)
         top.addWidget(h.button("判定を再読込", self._reload_grades))
@@ -119,6 +127,7 @@ class StepManualPage(QWidget):
         self.selection_label = h.caption_label("0 件を選択中")
         left_hdr.addWidget(self.selection_label)
         left_hdr.addWidget(self._build_mark_mode_switch())
+        left_hdr.addWidget(self._build_page_mode_row())
         header.addLayout(left_hdr, 1)
         header.addWidget(self._build_filter_box(), 0)
         work_lay.addLayout(header)
@@ -200,6 +209,98 @@ class StepManualPage(QWidget):
             self._mode_lbl_text.setStyleSheet(active)
             self._mode_lbl_print.setStyleSheet(idle)
 
+    def _build_page_mode_row(self) -> QWidget:
+        wrap = QWidget()
+        lay = QHBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._page_lbl_all = QLabel("全件表示")
+        self._page_lbl_chunk = QLabel("指定件数表示")
+        self.page_mode_switch = QCheckBox()
+        self.page_mode_switch.setObjectName("PageModeSwitch")
+        self.page_mode_switch.setChecked(True)  # 指定件数表示がデフォルト
+        self.page_mode_switch.setCursor(Qt.PointingHandCursor)
+        self.page_mode_switch.setToolTip(
+            "全件表示: フィルタ後の画像をすべて並べる\n"
+            "指定件数表示: 一度に表示する件数を区切る（ページ送り）"
+        )
+        self.page_mode_switch.setStyleSheet(
+            f"""
+            QCheckBox#PageModeSwitch::indicator {{
+                width: 40px; height: 22px; border-radius: 11px;
+                border: 1px solid {COLORS["border_strong"]}; background: #e5e7eb;
+            }}
+            QCheckBox#PageModeSwitch::indicator:checked {{
+                background: {COLORS["accent"]}; border-color: {COLORS["accent_hover"]};
+            }}
+            """
+        )
+        self.page_mode_switch.toggled.connect(self._on_page_mode_toggled)
+        lay.addWidget(self._page_lbl_all)
+        lay.addWidget(self.page_mode_switch)
+        lay.addWidget(self._page_lbl_chunk)
+
+        self.page_size_spin = QSpinBox()
+        self.page_size_spin.setRange(1, 500)
+        self.page_size_spin.setValue(self._page_size)
+        self.page_size_spin.setSuffix(" 件ごと")
+        self.page_size_spin.setFixedWidth(100)
+        self.page_size_spin.setToolTip("一度に表示する件数（クリックして直接入力可）")
+        self.page_size_spin.valueChanged.connect(self._on_page_size_changed)
+        lay.addWidget(self.page_size_spin)
+
+        self.page_prev_btn = h.button("◀", self._on_page_prev)
+        self.page_prev_btn.setFixedWidth(32)
+        self.page_next_btn = h.button("▶", self._on_page_next)
+        self.page_next_btn.setFixedWidth(32)
+        self.page_info_label = h.caption_label("")
+        lay.addWidget(self.page_prev_btn)
+        lay.addWidget(self.page_info_label)
+        lay.addWidget(self.page_next_btn)
+        lay.addStretch()
+        self._update_page_mode_labels()
+        self._update_page_controls_enabled()
+        return wrap
+
+    def _on_page_mode_toggled(self, checked: bool) -> None:
+        # checked=True → 指定件数表示, False → 全件表示
+        self._show_all_pages = not checked
+        self._page_index = 0
+        self._update_page_mode_labels()
+        self._update_page_controls_enabled()
+        self._render_grid()
+
+    def _update_page_mode_labels(self) -> None:
+        active = "font-weight: 700; color: #111827;"
+        idle = f"font-weight: 400; color: {COLORS['text_muted']};"
+        if self._show_all_pages:
+            self._page_lbl_all.setStyleSheet(active)
+            self._page_lbl_chunk.setStyleSheet(idle)
+        else:
+            self._page_lbl_all.setStyleSheet(idle)
+            self._page_lbl_chunk.setStyleSheet(active)
+
+    def _update_page_controls_enabled(self) -> None:
+        chunk = not self._show_all_pages
+        self.page_size_spin.setVisible(chunk)
+        self.page_prev_btn.setVisible(chunk)
+        self.page_next_btn.setVisible(chunk)
+        self.page_info_label.setVisible(chunk)
+
+    def _on_page_size_changed(self, value: int) -> None:
+        self._page_size = max(1, int(value))
+        self._page_index = 0
+        self._render_grid()
+
+    def _on_page_prev(self) -> None:
+        if self._page_index > 0:
+            self._page_index -= 1
+            self._render_grid()
+
+    def _on_page_next(self) -> None:
+        self._page_index += 1
+        self._render_grid()
+
     def _build_filter_box(self) -> QGroupBox:
         box = QGroupBox("表示フィルタ")
         lay = QVBoxLayout(box)
@@ -271,6 +372,9 @@ class StepManualPage(QWidget):
             set_variant(btn, "primary")
             btn.clicked.connect(handler)
             judge_lay.addWidget(btn)
+        judge_lay.addWidget(
+            h.button("未採点を一括選択", self._select_ungraded, variant="success")
+        )
         judge_lay.addWidget(h.button("選択を解除", self._clear_selection))
         lay.addWidget(judge, 1)
         return footer
@@ -339,16 +443,19 @@ class StepManualPage(QWidget):
 
     def _on_field_changed(self, _index: int) -> None:
         self._selected_ids.clear()
+        self._page_index = 0
         self._rebuild_triangle_filters()
         self._update_judge_buttons()
         self._load_crops_async()
 
     def _on_sort_changed(self, _index: int) -> None:
         self._sort_mode = self.sort_combo.currentData() or "file"
+        self._page_index = 0
         self._sort_items()
         self._render_grid()
 
     def _on_filter_toggled(self) -> None:
+        self._page_index = 0
         self._render_grid()
 
     def _rebuild_triangle_filters(self) -> None:
@@ -496,8 +603,32 @@ class StepManualPage(QWidget):
             f"×{counts['×']} ?{counts['?']} 未採点{counts['未採点']}）— 表示 {visible} 枚"
         )
 
+    def _answer_aggregate_order(self) -> dict[str, int]:
+        """④解答の集約と同じ順（人数降順・解答テキスト昇順）の順位マップ。"""
+        fid = self._selected_field_id()
+        test_id = self.app.active_test_id
+        if not fid or not test_id:
+            return {}
+        unique = get_unique_answers(test_id, fid)
+        return {str(u.get("answer_text") or "なし"): i for i, u in enumerate(unique)}
+
     def _sort_items(self) -> None:
-        if self._sort_mode == "id":
+        mode = self._sort_mode
+        if mode in ("agg_file", "agg_id"):
+            order = self._answer_aggregate_order()
+
+            def key_fn(item: dict[str, Any]) -> tuple:
+                row = item.get("row") or {}
+                ans = str(row.get("answer_text") or "なし")
+                rank = order.get(ans, 10**9)
+                if mode == "agg_id":
+                    sec = str(row.get("studentId") or "").strip().lower()
+                else:
+                    sec = str(row.get("fileName") or "").lower()
+                return (rank, sec, str(row.get("fileName") or "").lower())
+
+            self._items.sort(key=key_fn)
+        elif mode == "id":
             self._items.sort(
                 key=lambda i: (
                     str((i.get("row") or {}).get("studentId") or "").strip().lower(),
@@ -558,6 +689,21 @@ class StepManualPage(QWidget):
 
     def _clear_selection(self) -> None:
         self._selected_ids.clear()
+        self._render_grid()
+
+    def _select_ungraded(self) -> None:
+        """フィルタ後の一覧のうち、判定なし（未採点）をすべて選択する。"""
+        ids = {
+            int(i.get("result_id") or 0)
+            for i in self._items
+            if self._item_passes_filter(i)
+            and not normalize_judgment(i.get("judgment"))
+            and int(i.get("result_id") or 0)
+        }
+        if not ids:
+            h.warn(self, "未採点なし", "表示中の未採点（判定なし）はありません。")
+            return
+        self._selected_ids = ids
         self._render_grid()
 
     def _apply_judgment(self, judgment: str) -> None:
@@ -630,10 +776,33 @@ class StepManualPage(QWidget):
     def _render_grid(self) -> None:
         self._clear_grid()
         visible = [i for i in self._items if self._item_passes_filter(i)]
-        self.selection_label.setText(f"{len(self._selected_ids)} 件を選択中（表示 {len(visible)} 枚）")
+        total_vis = len(visible)
+        if self._show_all_pages:
+            page_items = visible
+            self.page_info_label.setText("")
+        else:
+            size = max(1, self._page_size)
+            pages = max(1, (total_vis + size - 1) // size) if total_vis else 1
+            if self._page_index >= pages:
+                self._page_index = pages - 1
+            if self._page_index < 0:
+                self._page_index = 0
+            start = self._page_index * size
+            page_items = visible[start : start + size]
+            self.page_info_label.setText(
+                f"{self._page_index + 1} / {pages} ページ（全 {total_vis} 件）"
+            )
+            self.page_prev_btn.setEnabled(self._page_index > 0)
+            self.page_next_btn.setEnabled(self._page_index < pages - 1)
+
+        self.selection_label.setText(
+            f"{len(self._selected_ids)} 件を選択中（該当 {total_vis} 枚"
+            + (f"・このページ {len(page_items)} 枚" if not self._show_all_pages else "")
+            + "）"
+        )
         if self._items:
             self._update_status_summary()
-        if not visible:
+        if not page_items:
             self.crop_grid.addWidget(
                 h.muted_label("表示する画像がありません。フィルタまたは記述欄を確認してください。"),
                 0,
@@ -644,7 +813,7 @@ class StepManualPage(QWidget):
         cols = 4
         col_idx = 0
         row_idx = 0
-        for item in visible:
+        for item in page_items:
             tile = self._make_tile(item, zoom)
             self.crop_grid.addWidget(tile, row_idx, col_idx, Qt.AlignTop | Qt.AlignLeft)
             col_idx += 1
