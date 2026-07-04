@@ -101,9 +101,11 @@ class StepManualPage(QWidget):
         title_row.addWidget(self._build_page_mode_row(), 1, Qt.AlignVCenter)
         work_lay.addLayout(title_row)
 
-        # 記述欄・並べ替え・フィルタ
+        # 記述欄・並べ替え（直下に選択件数＋判定件数）／右にフィルタ
         header = QHBoxLayout()
         header.setSpacing(8)
+        left_hdr = QVBoxLayout()
+        left_hdr.setSpacing(2)
         top = QHBoxLayout()
         top.setSpacing(6)
         top.addWidget(QLabel("採点する記述欄"))
@@ -122,17 +124,21 @@ class StepManualPage(QWidget):
         top.addWidget(self.sort_combo)
         top.addWidget(h.button("判定を再読込", self._reload_grades))
         top.addStretch()
-        header.addLayout(top, 1)
+        left_hdr.addLayout(top)
+
+        info_row = QHBoxLayout()
+        info_row.setSpacing(16)
+        self.selection_label = h.caption_label("0 件を選択中")
+        self.selection_label.setWordWrap(False)
+        self.status_label = h.caption_label("○0 △0 ×0 ?0 未採点0")
+        self.status_label.setWordWrap(False)
+        info_row.addWidget(self.selection_label, 0)
+        info_row.addWidget(self.status_label, 0)
+        info_row.addStretch()
+        left_hdr.addLayout(info_row)
+        header.addLayout(left_hdr, 1)
         header.addWidget(self._build_filter_box(), 0)
         work_lay.addLayout(header)
-
-        self.selection_label = h.caption_label("0 件を選択中")
-        self.status_label = h.caption_label("")
-        info_row = QHBoxLayout()
-        info_row.addWidget(self.selection_label)
-        info_row.addStretch()
-        info_row.addWidget(self.status_label)
-        work_lay.addLayout(info_row)
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
@@ -303,7 +309,7 @@ class StepManualPage(QWidget):
         self._render_grid()
 
     def _build_filter_box(self) -> QGroupBox:
-        box = QGroupBox("表示フィルタ（押し込んだボタンだけ表示）")
+        box = QGroupBox("表示フィルタ（オフ＝全件／ON＝該当のみ）")
         lay = QVBoxLayout(box)
         lay.setContentsMargins(6, 4, 6, 4)
         lay.setSpacing(2)
@@ -311,7 +317,7 @@ class StepManualPage(QWidget):
         for key in self._MAIN_FILTERS:
             btn = QPushButton(key)
             btn.setCheckable(True)
-            btn.setChecked(True)
+            btn.setChecked(False)  # デフォルト全オフ＝全件表示
             btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(self._filter_tooltip(key))
             btn.setStyleSheet(
@@ -344,13 +350,13 @@ class StepManualPage(QWidget):
     @staticmethod
     def _filter_tooltip(key: str) -> str:
         return {
-            "○": "ON のとき ○ 判定を表示",
-            "△": "ON のとき △ 判定を表示",
-            "×": "ON のとき × 判定を表示",
-            "?": "ON のとき 保留（?）を表示",
-            "未採点": "ON のとき 判定がまだない回答を表示",
-            "採点済み": "ON のとき 確定判定（○△×）を表示（保留は含まない）",
-            "無回答": "ON のとき OCR/集約で「なし」とされた無回答を表示",
+            "○": "ON にすると ○ 判定のみ表示（他も ON なら OR）",
+            "△": "ON にすると △ 判定のみ表示",
+            "×": "ON にすると × 判定のみ表示",
+            "?": "ON にすると 保留（?）のみ表示",
+            "未採点": "ON にすると 判定がまだない回答を表示",
+            "採点済み": "ON にすると 確定判定（○△×）を表示（保留は含まない）",
+            "無回答": "ON にすると OCR/集約で「なし」の無回答を表示",
         }.get(key, "")
 
     def _build_footer_overlay(self) -> QFrame:
@@ -648,11 +654,9 @@ class StepManualPage(QWidget):
                 counts[j] += 1
             else:
                 counts["未採点"] += 1
-        visible = sum(1 for i in self._items if self._item_passes_filter(i))
-        ok = sum(1 for i in self._items if i.get("ok"))
         self.status_label.setText(
-            f"{ok}/{len(self._items)} 枚（○{counts['○']} △{counts['△']} "
-            f"×{counts['×']} ?{counts['?']} 未採点{counts['未採点']}）— 表示 {visible} 枚"
+            f"○{counts['○']} △{counts['△']} ×{counts['×']} "
+            f"?{counts['?']} 未採点{counts['未採点']}"
         )
 
     def _answer_aggregate_order(self) -> dict[str, int]:
@@ -714,10 +718,10 @@ class StepManualPage(QWidget):
         return tags
 
     def _item_passes_filter(self, item: dict[str, Any]) -> bool:
-        """押し込んだ（ON の）トグルに該当するものだけ表示。複数 ON は OR。すべて OFF は非表示。"""
+        """すべて OFF＝全件表示。1つでも ON なら、ON のタグに該当するものだけ（OR）。"""
         active = {k for k, btn in self._filter_btns.items() if btn.isChecked()}
         if not active:
-            return False
+            return True
         tags = self._item_filter_tags(item)
         if not any(t in active for t in tags):
             return False
@@ -839,11 +843,11 @@ class StepManualPage(QWidget):
             self.page_prev_btn.setEnabled(self._page_index > 0)
             self.page_next_btn.setEnabled(self._page_index < pages - 1)
 
-        self.selection_label.setText(
-            f"{len(self._selected_ids)} 件を選択中（該当 {total_vis} 枚"
-            + (f"・このページ {len(page_items)} 枚" if not self._show_all_pages else "")
-            + "）"
-        )
+        sel = f"{len(self._selected_ids)} 件を選択中（該当 {total_vis} 枚"
+        if not self._show_all_pages:
+            sel += f"・このページ {len(page_items)} 枚"
+        sel += "）"
+        self.selection_label.setText(sel)
         if self._items:
             self._update_status_summary()
         if not page_items:
