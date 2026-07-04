@@ -41,7 +41,10 @@ from ui_qt import helpers as h
 from ui_qt.helpers import ProgressBridge, pil_to_qpixmap
 from ui_qt.layout_helpers import CollapsibleSection, make_expanding
 from ui_qt.region_editor import AnswerRegionEditor
-from ui_qt.style import COLORS, set_variant
+from ui_qt.style import COLORS
+
+# 合計欄配置の模範解答表示・1件プレビュー画像欄の高さ（旧 220px の 3.5 倍）
+_IMAGE_PANEL_HEIGHT = 770, set_variant
 
 
 class Step10Page(QWidget):
@@ -101,7 +104,7 @@ class Step10Page(QWidget):
         lay.addWidget(self.slot_hint)
 
         self.slot_editor = AnswerRegionEditor(on_change=self._on_slots_changed)
-        self.slot_editor.setMinimumHeight(220)
+        self.slot_editor.setMinimumHeight(_IMAGE_PANEL_HEIGHT)
         make_expanding(self.slot_editor)
         lay.addWidget(self.slot_editor, 1)
         make_expanding(box)
@@ -199,6 +202,7 @@ class Step10Page(QWidget):
 
         preview_scroll = QScrollArea()
         preview_scroll.setWidgetResizable(True)
+        preview_scroll.setMinimumHeight(_IMAGE_PANEL_HEIGHT)
         make_expanding(preview_scroll)
         self._preview_scroll = preview_scroll
         preview_scroll.setStyleSheet(
