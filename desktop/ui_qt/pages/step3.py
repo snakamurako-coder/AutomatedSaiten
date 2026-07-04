@@ -82,8 +82,8 @@ class Step3Page(QWidget):
         root.addWidget(h.title_label("③ テキスト化（OCRバッチ）"))
         root.addWidget(
             h.muted_label(
-                "自動処理は行いません。「フォルダを再認識」で一覧を表示し、"
-                "チェックしたファイルだけ OCR を実行してください。"
+                "「フォルダを再認識」で一覧を表示し、チェックしたファイルだけ処理します。"
+                "①で「IDマーク欄あり」のとき、補正後に生徒IDを OMR で読み取ります（読めない桁は ?）。"
             )
         )
 

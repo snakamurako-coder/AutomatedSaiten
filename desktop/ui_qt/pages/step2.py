@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
@@ -15,6 +16,7 @@ from PySide6.QtWidgets import (
 
 from models.test_repo import get_test_info, save_answer_fields, save_points
 from ui_qt import helpers as h
+from ui_qt.style import COLORS
 from ui_qt.table_cells import make_editable_item, make_readonly_item, wire_excel_edit_columns
 
 
@@ -28,7 +30,19 @@ class Step2Page(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(10)
-        root.addWidget(h.title_label("② 配点決定"))
+
+        header = QHBoxLayout()
+        header.addWidget(h.title_label("② 配点決定"))
+        header.addStretch()
+        self.total_label = QLabel("合計点: 0")
+        self.total_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.total_label.setStyleSheet(
+            f"font-size: 16px; font-weight: 700; color: {COLORS['accent']};"
+            f" padding: 4px 10px; background: {COLORS['accent_soft']};"
+            f" border: 1px solid #93c5fd; border-radius: 8px;"
+        )
+        header.addWidget(self.total_label)
+        root.addLayout(header)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["記述欄ID", "表示名", "配点"])
@@ -70,6 +84,19 @@ class Step2Page(QWidget):
             self.table.setItem(r, 0, make_readonly_item(f["id"]))
             self.table.setItem(r, 1, make_editable_item(f["displayName"]))
             self.table.setItem(r, 2, make_editable_item(str(pts), center=True))
+        self._update_total_label()
+
+    def _update_total_label(self) -> None:
+        total = 0
+        for i in range(self.table.rowCount()):
+            item = self.table.item(i, 2)
+            if item is None:
+                continue
+            try:
+                total += int(item.text() or 0)
+            except ValueError:
+                continue
+        self.total_label.setText(f"合計点: {total}")
 
     def _on_table_cell_changed(self, row: int, col: int, text: str) -> None:
         if row < 0:
@@ -88,8 +115,10 @@ class Step2Page(QWidget):
             try:
                 pts = int(text or 0)
             except ValueError:
+                self._update_total_label()
                 return
             self._points_map[fid] = pts
+            self._update_total_label()
 
     def _sync_from_table(self) -> bool:
         for i in range(self.table.rowCount()):
@@ -124,6 +153,7 @@ class Step2Page(QWidget):
         fid = self.table.item(row, 0).text()
         self._points_map[fid] = pts
         self.table.item(row, 2).setText(str(pts))
+        self._update_total_label()
 
     def _on_save(self) -> None:
         if not self.app.require_active_test():
