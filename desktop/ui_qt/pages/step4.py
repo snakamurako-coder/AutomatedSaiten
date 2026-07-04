@@ -982,10 +982,12 @@ class Step4Page(QWidget):
         row = item["row"]
         ans = row.get("answer_text") or ""
         deemed = self._is_deemed(fid, ans)
-        border = COLORS["accent"] if deemed else COLORS["border"]
-        bg = COLORS["accent_soft"] if deemed else COLORS["surface"]
+        border = COLORS["selection"] if deemed else COLORS["border"]
+        bg = COLORS["selection_soft"] if deemed else COLORS["surface"]
+        border_w = 3 if deemed else 2
         tile.setStyleSheet(
-            f"QFrame {{ background: {bg}; border: 2px solid {border}; border-radius: 6px; }}"
+            f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
+            f" border-radius: 6px; }}"
         )
         tile.setCursor(Qt.PointingHandCursor)
 

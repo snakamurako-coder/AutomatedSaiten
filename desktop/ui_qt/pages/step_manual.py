@@ -219,7 +219,8 @@ class StepManualPage(QWidget):
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.toggled.connect(lambda _c, k=key: self._on_filter_toggled())
+            btn.setToolTip(self._filter_tooltip(key))
+            btn.toggled.connect(lambda _c=False: self._on_filter_toggled())
             self._filter_btns[key] = btn
             row1.addWidget(btn)
         row1.addStretch()
@@ -229,6 +230,16 @@ class StepManualPage(QWidget):
         self.tri_filter_row.addWidget(h.caption_label("△の部分点:"))
         lay.addLayout(self.tri_filter_row)
         return box
+
+    @staticmethod
+    def _filter_tooltip(key: str) -> str:
+        return {
+            "○": "○ 判定のみ表示",
+            "△": "△ 判定のみ表示",
+            "×": "× 判定のみ表示",
+            "未採点": "まだ判定がない回答のみ表示",
+            "採点済み": "○△× がすべて OFF のとき、採点済み（○△×）をすべて表示",
+        }.get(key, "")
 
     def _build_footer_overlay(self) -> QFrame:
         footer = QFrame()
@@ -477,19 +488,40 @@ class StepManualPage(QWidget):
             )
 
     def _item_passes_filter(self, item: dict[str, Any]) -> bool:
+        """表示フィルタ。
+
+        - ○ / △ / × / 未採点: その判定（または未採点）だけを含める
+        - 採点済み: ○△× のいずれも ON でないとき、採点済みすべてを含める
+          （○△× のいずれかが ON のときは、採点済みボタンは無視し個別判定のみ）
+        - 複数 ON のときは OR（例: ○ と × → その両方）
+        - すべて OFF のときは何も表示しない
+        """
         j = _normalize_judgment(item.get("judgment"))
         sc = item.get("score")
-        tags: list[str] = []
-        if j:
-            tags.append("採点済み")
-            tags.append(j)
-        else:
-            tags.append("未採点")
-        active = [k for k, btn in self._filter_btns.items() if btn.isChecked()]
-        if not active:
-            return True
-        if not any(t in active for t in tags):
+        btn = self._filter_btns
+        show_maru = btn["○"].isChecked()
+        show_sankaku = btn["△"].isChecked()
+        show_batsu = btn["×"].isChecked()
+        show_ungraded = btn["未採点"].isChecked()
+        show_graded_all = btn["採点済み"].isChecked()
+        any_specific = show_maru or show_sankaku or show_batsu
+
+        if not j:
+            # 未採点
+            return show_ungraded
+
+        # 採点済み（○ / △ / ×）
+        if any_specific:
+            allowed = (
+                (j == "○" and show_maru)
+                or (j == "△" and show_sankaku)
+                or (j == "×" and show_batsu)
+            )
+            if not allowed:
+                return False
+        elif not show_graded_all:
             return False
+
         if j == "△" and self._tri_filter_key != "all" and self._field_max_score() > 1:
             try:
                 return int(float(sc)) == int(self._tri_filter_key)
@@ -602,17 +634,13 @@ class StepManualPage(QWidget):
         return None
 
     def _tile_colors(self, judgment: str, *, selected: bool) -> tuple[str, str]:
-        """タイル余白の背景色・枠色（⑩の判定色ベース）。"""
+        """タイル余白の背景色・枠色（⑩の判定色ベース。選択時は紫）。"""
+        if selected:
+            return COLORS["selection_soft"], COLORS["selection"]
         stroke = self._judgment_stroke_color(judgment)
         if stroke:
-            bg = _mix_hex_with_white(stroke, 0.82)
-            border = stroke
-        else:
-            bg = COLORS["surface"]
-            border = COLORS["border"]
-        if selected:
-            border = COLORS["accent"]
-        return bg, border
+            return _mix_hex_with_white(stroke, 0.82), stroke
+        return COLORS["surface"], COLORS["border"]
 
     def _pil_with_mark(self, pil: Image.Image, judgment: str, score: Any) -> Image.Image:
         """⑩個票プレビューと同じ判定マーク・得点を画像上に重ねる。"""

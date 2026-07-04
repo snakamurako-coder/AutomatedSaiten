@@ -23,6 +23,9 @@ COLORS = {
     "danger": "#dc2626",
     "danger_soft": "#fef2f2",
     "select_bg": "#dbeafe",
+    # 手動採点・④画像タイルの選択ハイライト
+    "selection": "#7c3aed",
+    "selection_soft": "#f3e8ff",
 }
 
 _QSS = f"""
