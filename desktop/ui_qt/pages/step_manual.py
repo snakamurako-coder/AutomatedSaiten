@@ -32,7 +32,7 @@ from services.crop_preview import load_crops_for_rows
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
-from ui_qt.layout_helpers import make_expanding, viewport_work_height
+from ui_qt.layout_helpers import make_expanding
 from ui_qt.style import COLORS, set_variant
 
 
@@ -55,23 +55,33 @@ class StepManualPage(QWidget):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setSpacing(0)
 
-        root.addWidget(h.title_label("手動採点"))
-        root.addWidget(
+        # --- 上部作業エリア（フィルタ・画像）---
+        work = QWidget()
+        work_lay = QVBoxLayout(work)
+        work_lay.setContentsMargins(0, 0, 0, 8)
+        work_lay.setSpacing(6)
+
+        work_lay.addWidget(h.title_label("手動採点"))
+        work_lay.addWidget(
             h.muted_label(
                 "② 配点決定のあと、記述欄ごとに解答画像を見ながら ○△× を付けます。"
                 "（③ テキスト化・④ 採点基準・⑤ 一括採点の代替フロー）"
             )
         )
 
+        header = QHBoxLayout()
+        header.setSpacing(8)
+        left_hdr = QVBoxLayout()
+        left_hdr.setSpacing(4)
         top = QHBoxLayout()
         top.addWidget(QLabel("採点する記述欄"))
         self.field_combo = QComboBox()
-        self.field_combo.setMinimumWidth(260)
+        self.field_combo.setMinimumWidth(240)
         self.field_combo.currentIndexChanged.connect(self._on_field_changed)
         top.addWidget(self.field_combo)
-        top.addSpacing(12)
+        top.addSpacing(8)
         top.addWidget(QLabel("並べ替え"))
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("ファイル名", "file")
@@ -79,19 +89,12 @@ class StepManualPage(QWidget):
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         top.addWidget(self.sort_combo)
         top.addStretch()
+        left_hdr.addLayout(top)
         self.selection_label = h.caption_label("0 件を選択中")
-        top.addWidget(self.selection_label)
-        root.addLayout(top)
-
-        root.addWidget(self._build_filter_box())
-        root.addWidget(self._build_judge_box())
-
-        zoom_row = QHBoxLayout()
-        self.crop_controls = CropDisplayControls()
-        self.crop_controls.connect_zoom_changed(self._render_grid)
-        self.crop_controls.connect_meta_changed(self._render_grid)
-        zoom_row.addWidget(self.crop_controls, 1)
-        root.addLayout(zoom_row)
+        left_hdr.addWidget(self.selection_label)
+        header.addLayout(left_hdr, 1)
+        header.addWidget(self._build_filter_box(), 0)
+        work_lay.addLayout(header)
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
@@ -105,26 +108,20 @@ class StepManualPage(QWidget):
         self.crop_grid.setContentsMargins(8, 8, 8, 8)
         self.crop_grid.setSpacing(8)
         self.crop_scroll.setWidget(self.crop_panel)
-        root.addWidget(self.crop_scroll, 1)
+        work_lay.addWidget(self.crop_scroll, 1)
 
         self.status_label = h.caption_label("")
-        root.addWidget(self.status_label)
+        work_lay.addWidget(self.status_label)
+        root.addWidget(work, 1)
 
-    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802
-        super().resizeEvent(event)
-        crop_h = viewport_work_height(160, min_height=512, max_ratio=0.85, widget=self)
-        self.crop_scroll.setMinimumHeight(crop_h)
-        self.crop_scroll.setMaximumHeight(crop_h)
-
-    def showEvent(self, event) -> None:  # noqa: ANN001, N802
-        super().showEvent(event)
-        crop_h = viewport_work_height(160, min_height=512, max_ratio=0.85, widget=self)
-        self.crop_scroll.setMinimumHeight(crop_h)
-        self.crop_scroll.setMaximumHeight(crop_h)
+        # --- 最下部固定オーバーレイ ---
+        root.addWidget(self._build_footer_overlay())
 
     def _build_filter_box(self) -> QGroupBox:
         box = QGroupBox("表示フィルタ")
         lay = QVBoxLayout(box)
+        lay.setContentsMargins(8, 6, 8, 6)
+        lay.setSpacing(4)
         row1 = QHBoxLayout()
         row1.addWidget(h.caption_label("判定:"))
         for key in self._MAIN_FILTERS:
@@ -143,10 +140,26 @@ class StepManualPage(QWidget):
         lay.addLayout(self.tri_filter_row)
         return box
 
-    def _build_judge_box(self) -> QGroupBox:
-        box = QGroupBox("選択への判定反映")
-        lay = QHBoxLayout(box)
-        lay.addWidget(h.caption_label("画像をタップで複数選択 →"))
+    def _build_footer_overlay(self) -> QFrame:
+        footer = QFrame()
+        footer.setObjectName("ManualGradeFooter")
+        footer.setStyleSheet(
+            f"#ManualGradeFooter {{ background: {COLORS['surface']};"
+            f" border-top: 2px solid {COLORS['border_strong']}; }}"
+        )
+        lay = QHBoxLayout(footer)
+        lay.setContentsMargins(10, 8, 10, 8)
+        lay.setSpacing(12)
+
+        self.crop_controls = CropDisplayControls()
+        self.crop_controls.connect_zoom_changed(self._render_grid)
+        self.crop_controls.connect_meta_changed(self._render_grid)
+        lay.addWidget(self.crop_controls, 2)
+
+        judge = QGroupBox("選択への判定反映")
+        judge_lay = QHBoxLayout(judge)
+        judge_lay.setContentsMargins(8, 6, 8, 6)
+        judge_lay.addWidget(h.caption_label("画像をタップで複数選択 →"))
         self.btn_maru = QPushButton("○")
         self.btn_sankaku = QPushButton("△")
         self.btn_batsu = QPushButton("×")
@@ -159,10 +172,10 @@ class StepManualPage(QWidget):
             btn.setCursor(Qt.PointingHandCursor)
             set_variant(btn, "primary")
             btn.clicked.connect(handler)
-            lay.addWidget(btn)
-        lay.addWidget(h.button("選択を解除", self._clear_selection))
-        lay.addStretch()
-        return box
+            judge_lay.addWidget(btn)
+        judge_lay.addWidget(h.button("選択を解除", self._clear_selection))
+        lay.addWidget(judge, 1)
+        return footer
 
     # --- データ ---
 
