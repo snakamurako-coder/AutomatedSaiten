@@ -339,8 +339,11 @@ class AnswerRegionEditor(QScrollArea):
         parent: QWidget | None = None,
         on_change: Callable[[], None] | None = None,
         on_status: Callable[[str], None] | None = None,
+        *,
+        fit_height_to_image: bool = False,
     ) -> None:
         super().__init__(parent)
+        self._fit_height_to_image = fit_height_to_image
         self._canvas = _EditorCanvas()
         self.setWidget(self._canvas)
         self.setWidgetResizable(False)
@@ -349,6 +352,9 @@ class AnswerRegionEditor(QScrollArea):
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
+        if fit_height_to_image:
+            self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+            self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         if on_change:
             self._canvas.changed.connect(on_change)
         if on_status:
@@ -357,6 +363,20 @@ class AnswerRegionEditor(QScrollArea):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self._canvas._update_scale()
+        self._apply_fit_height()
+
+    def _apply_fit_height(self) -> None:
+        """画像の表示高さに欄を合わせ、縦スクロール不要にする。"""
+        if not self._fit_height_to_image:
+            return
+        canvas_h = self._canvas.height() if self._canvas._pixmap is not None else 200
+        frame = self.frameWidth() * 2
+        # 横スクロールバーが出る場合はその分を足す
+        extra = 0
+        hbar = self.horizontalScrollBar()
+        if hbar is not None and self._canvas.width() > max(1, self.viewport().width()):
+            extra = hbar.sizeHint().height()
+        self.setFixedHeight(max(120, canvas_h + frame + extra))
 
     # --- Tkinter 版と同じ公開 API ---
 
@@ -368,6 +388,7 @@ class AnswerRegionEditor(QScrollArea):
 
     def set_image(self, image_bgr: np.ndarray) -> None:
         self._canvas.set_image(image_bgr)
+        self._apply_fit_height()
 
     def load_image_from_path(self, path: str) -> None:
         self.set_image(load_image_bgr(path))

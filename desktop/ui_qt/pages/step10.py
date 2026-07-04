@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
-    QSlider,
     QSpinBox,
     QVBoxLayout,
     QWidget,
@@ -39,13 +38,11 @@ from services.feedback_renderer import (
     render_feedback_for_row,
 )
 from ui_qt import helpers as h
+from ui_qt.crop_widgets import ZoomControls
 from ui_qt.helpers import ProgressBridge, pil_to_qpixmap
 from ui_qt.layout_helpers import CollapsibleSection, make_expanding
 from ui_qt.region_editor import AnswerRegionEditor
 from ui_qt.style import COLORS
-
-# 合計欄配置の模範解答表示・1件プレビュー画像欄の高さ（旧 220px の 3.5 倍）
-_IMAGE_PANEL_HEIGHT = 770
 
 
 class Step10Page(QWidget):
@@ -117,9 +114,10 @@ class Step10Page(QWidget):
         self.slot_hint = h.caption_label("")
         lay.addWidget(self.slot_hint)
 
-        self.slot_editor = AnswerRegionEditor(on_change=self._on_slots_changed)
-        self.slot_editor.setMinimumHeight(_IMAGE_PANEL_HEIGHT)
-        self.slot_editor.setMaximumHeight(_IMAGE_PANEL_HEIGHT)
+        self.slot_editor = AnswerRegionEditor(
+            on_change=self._on_slots_changed,
+            fit_height_to_image=True,
+        )
         self.slot_editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         lay.addWidget(self.slot_editor)
 
@@ -204,21 +202,20 @@ class Step10Page(QWidget):
         self.preview_row_combo.setMinimumWidth(320)
         ctrl.addWidget(self.preview_row_combo)
         ctrl.addWidget(h.button("1件プレビュー", self._on_preview, variant="primary"))
-        ctrl.addWidget(QLabel("表示倍率"))
-        self.preview_zoom = QSlider(Qt.Horizontal)
-        self.preview_zoom.setRange(10, 200)
-        self.preview_zoom.setValue(40)
-        self.preview_zoom.setFixedWidth(160)
-        self.preview_zoom.valueChanged.connect(lambda _v: self._update_preview_pixmap())
-        ctrl.addWidget(self.preview_zoom)
         ctrl.addStretch()
         lay.addLayout(ctrl)
 
+        self.preview_zoom = ZoomControls(min_pct=10, max_pct=400, value=40)
+        self.preview_zoom.connect_zoom_changed(self._update_preview_pixmap)
+        lay.addWidget(self.preview_zoom)
+
         preview_scroll = QScrollArea()
-        preview_scroll.setWidgetResizable(True)
-        preview_scroll.setMinimumHeight(_IMAGE_PANEL_HEIGHT)
-        preview_scroll.setMaximumHeight(_IMAGE_PANEL_HEIGHT)
+        preview_scroll.setWidgetResizable(False)
+        preview_scroll.setAlignment(Qt.AlignLeft | Qt.AlignTop)
+        preview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         preview_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        preview_scroll.setFixedHeight(120)
         self._preview_scroll = preview_scroll
         preview_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
@@ -424,12 +421,19 @@ class Step10Page(QWidget):
         h.run_in_thread(self, lambda: render_feedback_for_row(test_id, row), done)
 
     def _update_preview_pixmap(self) -> None:
-        if self._preview_image is None:
+        if self._preview_image is None or self._preview_scroll is None:
             return
-        zoom = max(10, min(200, self.preview_zoom.value())) / 100.0
+        zoom = max(10, min(400, self.preview_zoom.zoom_value())) / 100.0
         pix = pil_to_qpixmap(self._preview_image)
         w = max(100, int(pix.width() * zoom))
-        self.preview_label.setPixmap(pix.scaledToWidth(w, Qt.SmoothTransformation))
+        scaled = pix.scaledToWidth(w, Qt.SmoothTransformation)
+        self.preview_label.setPixmap(scaled)
+        self.preview_label.setFixedSize(scaled.size())
+        frame = self._preview_scroll.frameWidth() * 2
+        extra = 0
+        if scaled.width() > max(1, self._preview_scroll.viewport().width()):
+            extra = self._preview_scroll.horizontalScrollBar().sizeHint().height()
+        self._preview_scroll.setFixedHeight(max(80, scaled.height() + frame + extra))
 
     # ---------- 一括生成 ----------
 
