@@ -5,7 +5,6 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -30,6 +29,7 @@ from models.criteria_repo import (
     merge_unique_with_criteria,
     save_grading_criteria,
 )
+from models.ink_repo import get_ink_strokes_batch, save_ink_strokes
 from models.database import connect
 from models.test_repo import get_answer_fields, get_points_conn
 from models.text_processing import (
@@ -43,7 +43,6 @@ from models.text_processing import (
 from services.crop_preview import load_crops_for_rows
 from services.gemini_rubric import generate_rubric_with_gemini
 from ui_qt import helpers as h
-from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.criteria_widgets import (
     ScoreStepWidget,
     find_judgment_combo,
@@ -54,6 +53,8 @@ from ui_qt.criteria_widgets import (
     wrap_table_cell,
 )
 from ui_qt.crop_widgets import CropDisplayControls
+from ui_qt.stylus_controls import StylusControls
+from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.layout_helpers import (
     CollapsibleSection,
     main_table_frame,
@@ -83,6 +84,7 @@ class Step4Page(QWidget):
         self._outlier_groups: list[dict[str, Any]] = []
         self._outlier_flat_rows: list[dict[str, Any]] = []
         self._crop_grid_results: list[dict[str, Any]] = []
+        self._ink_stacks: list[CropInkImageStack] = []
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer = QVBoxLayout(self)
@@ -340,6 +342,10 @@ class Step4Page(QWidget):
         self.crop_controls.connect_meta_changed(self._render_crop_grid)
         zoom_row.addWidget(self.crop_controls, 1)
         lay.addLayout(zoom_row)
+
+        self.stylus_controls = StylusControls()
+        self.stylus_controls.settings_changed.connect(self._apply_stylus_settings)
+        lay.addWidget(self.stylus_controls)
 
         self.outlier_table = QTableWidget(0, 8)
         self.outlier_table.setHorizontalHeaderLabels(
@@ -923,10 +929,46 @@ class Step4Page(QWidget):
             if err:
                 h.error(self, "画像読込エラー", str(err))
                 return
+            test_id = self.app.active_test_id
+            result_ids = [
+                int(r.get("row", {}).get("rowIndex") or 0)
+                for r in results
+                if r.get("row", {}).get("rowIndex")
+            ]
+            ink_map = get_ink_strokes_batch(test_id, fid, result_ids) if test_id else {}
+            for r in results:
+                row = r.get("row") or {}
+                rid = int(row.get("rowIndex") or 0)
+                r["ink_strokes"] = ink_map.get(rid, [])
             self._crop_grid_results = results
             self._render_crop_grid()
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
+
+    def _apply_stylus_settings(self) -> None:
+        if not hasattr(self, "stylus_controls"):
+            return
+        pr = self.stylus_controls.palm_rejection()
+        show = self.stylus_controls.show_ink_layer()
+        for stack in self._ink_stacks:
+            stack.set_palm_rejection(pr)
+            stack.set_show_ink(show)
+
+    def _save_ink_strokes(self, result_id: int, strokes: list) -> None:
+        test_id = self.app.active_test_id
+        fid = self._selected_field_id()
+        if not test_id or not fid or not result_id:
+            return
+        try:
+            save_ink_strokes(test_id, result_id, fid, strokes)
+        except Exception as e:
+            h.error(self, "手書き保存エラー", str(e))
+            return
+        for r in self._crop_grid_results:
+            row = r.get("row") or {}
+            if int(row.get("rowIndex") or 0) == int(result_id):
+                r["ink_strokes"] = list(strokes)
+                break
 
     # ==================== 画像タイル ====================
 
@@ -938,6 +980,7 @@ class Step4Page(QWidget):
 
     def _render_crop_grid(self) -> None:
         self._clear_crop_grid()
+        self._ink_stacks = []
         if not self._crop_grid_results:
             self.crop_grid.addWidget(
                 h.muted_label("「選択を画像表示」または外れ値一覧の「1枚」で回答欄画像を表示します"),
@@ -992,12 +1035,19 @@ class Step4Page(QWidget):
         tile.setCursor(Qt.PointingHandCursor)
 
         pil = item["pil"]
-        w = max(40, int(pil.width * zoom))
-        pix: QPixmap = pil_to_qpixmap(pil).scaledToWidth(w, Qt.SmoothTransformation)
-        img = QLabel()
-        img.setPixmap(pix)
-        img.setStyleSheet("border: none;")
-        lay.addWidget(img)
+        row_index = int(row.get("rowIndex") or 0)
+        ink_stack = CropInkImageStack(
+            pil_image=pil,
+            field_id=fid,
+            strokes=item.get("ink_strokes") or [],
+            zoom=zoom,
+            on_strokes_changed=lambda s, rid=row_index: self._save_ink_strokes(rid, s),
+        )
+        ink_stack.set_palm_rejection(self.stylus_controls.palm_rejection())
+        ink_stack.set_show_ink(self.stylus_controls.show_ink_layer())
+        ink_stack.image_clicked.connect(lambda a=ans: self._toggle_deemed(fid, a))
+        self._ink_stacks.append(ink_stack)
+        lay.addWidget(ink_stack)
 
         if self.crop_controls.show_id():
             id_label = QLabel(f"ID: {row.get('studentId') or '-'}")
@@ -1018,12 +1068,6 @@ class Step4Page(QWidget):
             ans_label.setWordWrap(True)
             lay.addWidget(ans_label)
 
-        def click_handler(_event, a=ans):
-            f = self._selected_field_id()
-            if f:
-                self._toggle_deemed(f, a)
-
-        tile.mousePressEvent = click_handler  # type: ignore[method-assign]
         return tile
 
     def _purge_incorrect_from_grid(self) -> None:

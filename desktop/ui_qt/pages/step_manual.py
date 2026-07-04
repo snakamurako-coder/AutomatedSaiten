@@ -6,7 +6,7 @@ from typing import Any
 
 from PIL import Image
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QBrush, QColor, QPixmap, QStandardItem, QStandardItemModel
+from PySide6.QtGui import QBrush, QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -32,6 +32,7 @@ from models.grading_status import (
     field_grading_complete_map,
     normalize_judgment,
 )
+from models.ink_repo import get_ink_strokes_batch, save_ink_strokes
 from models.output_repo import get_feedback_style
 from models.test_repo import (
     get_all_results,
@@ -45,6 +46,8 @@ from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.layout_helpers import make_expanding
+from ui_qt.stylus_controls import StylusControls
+from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.style import COLORS
 
 
@@ -84,6 +87,7 @@ class StepManualPage(QWidget):
         self._parallel_palette_mode = False  # False=同一判定連続選択 / True=切り替え平行選択
         self._palette_active_key: str | None = None
         self._palette_btns: dict[str, QPushButton] = {}
+        self._ink_stacks: list[CropInkImageStack] = []
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -386,6 +390,9 @@ class StepManualPage(QWidget):
         self.crop_controls.connect_meta_changed(self._render_grid)
         left_lay.addWidget(self.crop_controls)
         left_lay.addWidget(self._build_mark_mode_switch())
+        self.stylus_controls = StylusControls()
+        self.stylus_controls.settings_changed.connect(self._apply_stylus_settings)
+        left_lay.addWidget(self.stylus_controls)
         lay.addWidget(left, 0)
 
         # 右: 採点モードに応じて「選択への判定反映」または「判定パレット」
@@ -767,14 +774,19 @@ class StepManualPage(QWidget):
             if err:
                 h.error(self, "画像読込エラー", str(err))
                 return
+            test_id = self.app.active_test_id
+            result_ids = [int(src["rowIndex"]) for src in rows if src.get("rowIndex")]
+            ink_map = get_ink_strokes_batch(test_id, fid, result_ids) if test_id else {}
             self._items = []
             for cr, src in zip(crop_results, rows, strict=False):
+                rid = int(src["rowIndex"])
                 self._items.append(
                     {
                         **cr,
-                        "result_id": src["rowIndex"],
+                        "result_id": rid,
                         "judgment": src["judgment"],
                         "score": src["score"],
+                        "ink_strokes": ink_map.get(rid, []),
                     }
                 )
             self._sort_items()
@@ -782,6 +794,30 @@ class StepManualPage(QWidget):
             self._update_status_summary()
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
+
+    def _apply_stylus_settings(self) -> None:
+        if not hasattr(self, "stylus_controls"):
+            return
+        pr = self.stylus_controls.palm_rejection()
+        show = self.stylus_controls.show_ink_layer()
+        for stack in self._ink_stacks:
+            stack.set_palm_rejection(pr)
+            stack.set_show_ink(show)
+
+    def _save_ink_strokes(self, result_id: int, strokes: list) -> None:
+        test_id = self.app.active_test_id
+        fid = self._selected_field_id()
+        if not test_id or not fid or not result_id:
+            return
+        try:
+            save_ink_strokes(test_id, result_id, fid, strokes)
+        except Exception as e:
+            h.error(self, "手書き保存エラー", str(e))
+            return
+        for item in self._items:
+            if int(item.get("result_id") or 0) == int(result_id):
+                item["ink_strokes"] = list(strokes)
+                break
 
     def _reload_grades(self) -> None:
         """DB の判定を再読込（⑤一括採点後の確認用。画像は再取得しない）。"""
@@ -1015,6 +1051,7 @@ class StepManualPage(QWidget):
 
     def _render_grid(self) -> None:
         self._clear_grid()
+        self._ink_stacks = []
         visible = [i for i in self._items if self._item_passes_filter(i)]
         total_vis = len(visible)
         if self._show_all_pages:
@@ -1144,12 +1181,22 @@ class StepManualPage(QWidget):
         pil = item["pil"]
         if self._print_mark_mode and j:
             pil = self._pil_with_mark(pil, j, sc)
-        w = max(40, int(pil.width * zoom))
-        pix: QPixmap = pil_to_qpixmap(pil).scaledToWidth(w, Qt.SmoothTransformation)
-        img = QLabel()
-        img.setPixmap(pix)
-        img.setStyleSheet("border: none; background: transparent;")
-        lay.addWidget(img)
+
+        fid = self._selected_field_id() or ""
+        ink_stack = CropInkImageStack(
+            pil_image=pil,
+            field_id=fid,
+            strokes=item.get("ink_strokes") or [],
+            zoom=zoom,
+            on_strokes_changed=lambda s, rid=rid: self._save_ink_strokes(rid, s),
+        )
+        ink_stack.set_palm_rejection(self.stylus_controls.palm_rejection())
+        ink_stack.set_show_ink(self.stylus_controls.show_ink_layer())
+        ink_stack.image_clicked.connect(
+            lambda rid=rid: self._on_tile_image_clicked(rid)
+        )
+        self._ink_stacks.append(ink_stack)
+        lay.addWidget(ink_stack)
 
         # 文字モードのみ、画像下に判定・得点を表示
         if j and not self._print_mark_mode:
@@ -1186,16 +1233,15 @@ class StepManualPage(QWidget):
             )
             lay.addWidget(ans)
 
-        def click_handler(_event, result_id=rid):
-            if self._parallel_palette_mode:
-                if self._palette_active_key:
-                    self._apply_palette_to_image(result_id)
-                return
-            if result_id in self._selected_ids:
-                self._selected_ids.discard(result_id)
-            else:
-                self._selected_ids.add(result_id)
-            self._render_grid()
-
-        tile.mousePressEvent = click_handler  # type: ignore[method-assign]
         return tile
+
+    def _on_tile_image_clicked(self, result_id: int) -> None:
+        if self._parallel_palette_mode:
+            if self._palette_active_key:
+                self._apply_palette_to_image(result_id)
+            return
+        if result_id in self._selected_ids:
+            self._selected_ids.discard(result_id)
+        else:
+            self._selected_ids.add(result_id)
+        self._render_grid()
