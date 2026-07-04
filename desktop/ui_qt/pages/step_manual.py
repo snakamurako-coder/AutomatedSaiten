@@ -63,7 +63,7 @@ def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
 
-    _MAIN_FILTERS = ("○", "△", "×", "?", "未採点", "採点済み")
+    _MAIN_FILTERS = ("○", "△", "×", "?", "未採点", "採点済み", "無回答")
 
     def __init__(self, app: Any) -> None:
         super().__init__()
@@ -302,18 +302,33 @@ class StepManualPage(QWidget):
         self._render_grid()
 
     def _build_filter_box(self) -> QGroupBox:
-        box = QGroupBox("表示フィルタ")
+        box = QGroupBox("表示フィルタ（押し込んだボタンだけ表示）")
         lay = QVBoxLayout(box)
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(4)
         row1 = QHBoxLayout()
-        row1.addWidget(h.caption_label("判定:"))
         for key in self._MAIN_FILTERS:
             btn = QPushButton(key)
             btn.setCheckable(True)
             btn.setChecked(True)
             btn.setCursor(Qt.PointingHandCursor)
             btn.setToolTip(self._filter_tooltip(key))
+            btn.setStyleSheet(
+                f"""
+                QPushButton {{
+                    padding: 4px 8px;
+                    border: 1px solid {COLORS["border_strong"]};
+                    border-radius: 6px;
+                    background: {COLORS["surface"]};
+                }}
+                QPushButton:checked {{
+                    background: {COLORS["accent"]};
+                    color: white;
+                    font-weight: 700;
+                    border-color: {COLORS["accent_hover"]};
+                }}
+                """
+            )
             btn.toggled.connect(lambda _c=False: self._on_filter_toggled())
             self._filter_btns[key] = btn
             row1.addWidget(btn)
@@ -328,12 +343,13 @@ class StepManualPage(QWidget):
     @staticmethod
     def _filter_tooltip(key: str) -> str:
         return {
-            "○": "○ 判定のみ表示",
-            "△": "△ 判定のみ表示",
-            "×": "× 判定のみ表示",
-            "?": "保留（?）のみ表示",
-            "未採点": "まだ判定がない回答のみ表示",
-            "採点済み": "○△× がすべて OFF のとき、確定判定（○△×）をすべて表示（保留は含まない）",
+            "○": "ON のとき ○ 判定を表示",
+            "△": "ON のとき △ 判定を表示",
+            "×": "ON のとき × 判定を表示",
+            "?": "ON のとき 保留（?）を表示",
+            "未採点": "ON のとき 判定がまだない回答を表示",
+            "採点済み": "ON のとき 確定判定（○△×）を表示（保留は含まない）",
+            "無回答": "ON のとき OCR/集約で「なし」とされた無回答を表示",
         }.get(key, "")
 
     def _build_footer_overlay(self) -> QFrame:
@@ -640,47 +656,39 @@ class StepManualPage(QWidget):
                 key=lambda i: str((i.get("row") or {}).get("fileName") or "").lower()
             )
 
-    def _item_passes_filter(self, item: dict[str, Any]) -> bool:
-        """表示フィルタ。
+    def _item_filter_tags(self, item: dict[str, Any]) -> list[str]:
+        """この回答が属するフィルタタグ（トグル ON のいずれかと一致すれば表示）。"""
+        j = normalize_judgment(item.get("judgment"))
+        ans = str((item.get("row") or {}).get("answer_text") or "").strip() or "なし"
+        tags: list[str] = []
+        if j == "○":
+            tags.append("○")
+        elif j == "△":
+            tags.append("△")
+        elif j == "×":
+            tags.append("×")
+        elif j == PENDING_JUDGMENT:
+            tags.append("?")
+        else:
+            tags.append("未採点")
+        if j in ("○", "△", "×"):
+            tags.append("採点済み")
+        if ans == "なし":
+            tags.append("無回答")
+        return tags
 
-        - ○ / △ / × / ? / 未採点: その判定だけを含める
-        - 採点済み: 個別判定ボタンがすべて OFF のとき、確定判定（○△×）のみ
-          （保留 ? は含まない）
-        - 複数 ON のときは OR
-        - すべて OFF のときは何も表示しない
-        """
+    def _item_passes_filter(self, item: dict[str, Any]) -> bool:
+        """押し込んだ（ON の）トグルに該当するものだけ表示。複数 ON は OR。すべて OFF は非表示。"""
+        active = {k for k, btn in self._filter_btns.items() if btn.isChecked()}
+        if not active:
+            return False
+        tags = self._item_filter_tags(item)
+        if not any(t in active for t in tags):
+            return False
         j = normalize_judgment(item.get("judgment"))
         sc = item.get("score")
-        btn = self._filter_btns
-        show_maru = btn["○"].isChecked()
-        show_sankaku = btn["△"].isChecked()
-        show_batsu = btn["×"].isChecked()
-        show_pending = btn["?"].isChecked()
-        show_ungraded = btn["未採点"].isChecked()
-        show_graded_all = btn["採点済み"].isChecked()
-        any_specific = show_maru or show_sankaku or show_batsu or show_pending
-
-        if not j:
-            return show_ungraded
-
-        if j == PENDING_JUDGMENT:
-            if any_specific:
-                return show_pending
-            return False
-
-        # 確定判定（○ / △ / ×）
-        if any_specific:
-            allowed = (
-                (j == "○" and show_maru)
-                or (j == "△" and show_sankaku)
-                or (j == "×" and show_batsu)
-            )
-            if not allowed:
-                return False
-        elif not show_graded_all:
-            return False
-
         if j == "△" and self._tri_filter_key != "all" and self._field_max_score() > 1:
+            # △ ボタンが OFF でも「採点済み」だけで見ている場合は部分点フィルタを適用
             try:
                 return int(float(sc)) == int(self._tri_filter_key)
             except (TypeError, ValueError):
