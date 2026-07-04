@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -80,6 +81,9 @@ class StepManualPage(QWidget):
         self._show_all_pages = False  # False=指定件数表示 / True=全件表示
         self._page_size = 20
         self._page_index = 0
+        self._parallel_palette_mode = False  # False=同一判定連続選択 / True=切り替え平行選択
+        self._palette_active_key: str | None = None
+        self._palette_btns: dict[str, QPushButton] = {}
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -134,6 +138,7 @@ class StepManualPage(QWidget):
         self.status_label.setWordWrap(False)
         info_row.addWidget(self.selection_label, 0)
         info_row.addWidget(self.status_label, 0)
+        info_row.addWidget(self._build_selection_mode_switch(), 0)
         info_row.addStretch()
         left_hdr.addLayout(info_row)
         header.addLayout(left_hdr, 1)
@@ -383,7 +388,66 @@ class StepManualPage(QWidget):
         left_lay.addWidget(self._build_mark_mode_switch())
         lay.addWidget(left, 0)
 
-        # 右: 判定反映（余白を広く）
+        # 右: 採点モードに応じて「選択への判定反映」または「判定パレット」
+        self.judge_stack = QStackedWidget()
+        self.judge_stack.addWidget(self._build_continuous_judge_panel())  # 0
+        self.judge_stack.addWidget(self._build_palette_judge_panel())  # 1
+        lay.addWidget(self.judge_stack, 1)
+        return footer
+
+    def _build_selection_mode_switch(self) -> QWidget:
+        wrap = QWidget()
+        lay = QHBoxLayout(wrap)
+        lay.setContentsMargins(8, 0, 0, 0)
+        lay.setSpacing(4)
+        self._sel_lbl_continuous = QLabel("同一判定連続選択")
+        self._sel_lbl_parallel = QLabel("切り替え平行選択")
+        self.selection_mode_switch = QCheckBox()
+        self.selection_mode_switch.setObjectName("SelectionModeSwitch")
+        self.selection_mode_switch.setChecked(False)
+        self.selection_mode_switch.setCursor(Qt.PointingHandCursor)
+        self.selection_mode_switch.setToolTip(
+            "同一判定連続選択: 画像を複数選択してから ○△× を一括反映\n"
+            "切り替え平行選択: 判定パレットで判定を選び、画像タップで即反映"
+        )
+        self.selection_mode_switch.setStyleSheet(
+            f"""
+            QCheckBox#SelectionModeSwitch::indicator {{
+                width: 40px; height: 22px; border-radius: 11px;
+                border: 1px solid {COLORS["border_strong"]}; background: #e5e7eb;
+            }}
+            QCheckBox#SelectionModeSwitch::indicator:checked {{
+                background: {COLORS["accent"]}; border-color: {COLORS["accent_hover"]};
+            }}
+            """
+        )
+        self.selection_mode_switch.toggled.connect(self._on_selection_mode_toggled)
+        lay.addWidget(self._sel_lbl_continuous)
+        lay.addWidget(self.selection_mode_switch)
+        lay.addWidget(self._sel_lbl_parallel)
+        self._update_selection_mode_labels()
+        return wrap
+
+    def _on_selection_mode_toggled(self, checked: bool) -> None:
+        self._parallel_palette_mode = bool(checked)
+        self._selected_ids.clear()
+        self._palette_active_key = None
+        self._update_selection_mode_labels()
+        self.judge_stack.setCurrentIndex(1 if self._parallel_palette_mode else 0)
+        self._rebuild_palette_buttons()
+        self._render_grid()
+
+    def _update_selection_mode_labels(self) -> None:
+        active = "font-weight: 700; color: #111827;"
+        idle = f"font-weight: 400; color: {COLORS['text_muted']};"
+        if self._parallel_palette_mode:
+            self._sel_lbl_continuous.setStyleSheet(idle)
+            self._sel_lbl_parallel.setStyleSheet(active)
+        else:
+            self._sel_lbl_continuous.setStyleSheet(active)
+            self._sel_lbl_parallel.setStyleSheet(idle)
+
+    def _build_continuous_judge_panel(self) -> QGroupBox:
         judge = QGroupBox("選択への判定反映")
         judge_lay = QHBoxLayout(judge)
         judge_lay.setContentsMargins(8, 4, 8, 4)
@@ -410,8 +474,21 @@ class StepManualPage(QWidget):
         )
         judge_lay.addWidget(h.button("選択を解除", self._clear_selection))
         judge_lay.addStretch()
-        lay.addWidget(judge, 1)
-        return footer
+        return judge
+
+    def _build_palette_judge_panel(self) -> QGroupBox:
+        box = QGroupBox("判定パレット")
+        lay = QHBoxLayout(box)
+        lay.setContentsMargins(8, 4, 8, 4)
+        lay.setSpacing(6)
+        lay.addWidget(
+            h.caption_label("有効な判定をタップ → 画像タップで即反映")
+        )
+        self.palette_btn_row = QHBoxLayout()
+        self.palette_btn_row.setSpacing(4)
+        lay.addLayout(self.palette_btn_row)
+        lay.addStretch()
+        return box
 
     # --- データ ---
 
@@ -437,6 +514,88 @@ class StepManualPage(QWidget):
             self.btn_sankaku.setStyleSheet(self._judgment_button_style(sankaku))
             self.btn_batsu.setStyleSheet(self._judgment_button_style(batsu))
             self.btn_pending.setStyleSheet(self._judgment_button_style(pending))
+        self._update_palette_button_styles()
+
+    def _palette_specs(self) -> list[tuple[str, str, str, int]]:
+        """(key, label, judgment, score) — 配点の高い順（○→△部分点→×）。"""
+        max_score = self._field_max_score()
+        specs: list[tuple[str, str, str, int]] = [("○", "○", "○", max_score)]
+        if max_score > 1:
+            for s in range(max_score - 1, 0, -1):
+                specs.append((f"△:{s}", f"△({s})", "△", s))
+        specs.append(("×", "×", "×", 0))
+        return specs
+
+    def _palette_stroke_for_key(self, key: str) -> str:
+        mark = (self._feedback_style or {}).get("mark") or {}
+        if key == "○":
+            return str((mark.get("maru") or {}).get("strokeColor") or "#dc2626")
+        if key.startswith("△:"):
+            return str((mark.get("sankaku") or {}).get("strokeColor") or "#ea580c")
+        if key == "×":
+            return str((mark.get("batsu") or {}).get("strokeColor") or "#2563eb")
+        return COLORS["text_secondary"]
+
+    def _palette_button_style(self, key: str, *, active: bool) -> str:
+        stroke = self._palette_stroke_for_key(key)
+        if active:
+            return self._judgment_button_style(stroke)
+        return (
+            f"QPushButton {{ background: {COLORS['surface']}; color: {COLORS['text_muted']};"
+            f" font-weight: 700; font-size: 14px; border: 2px solid {COLORS['border']};"
+            f" border-radius: 6px; }}"
+            f"QPushButton:hover {{ background: #f9fafb; }}"
+        )
+
+    def _rebuild_palette_buttons(self) -> None:
+        if not hasattr(self, "palette_btn_row"):
+            return
+        while self.palette_btn_row.count():
+            item = self.palette_btn_row.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._palette_btns.clear()
+        valid_keys = {spec[0] for spec in self._palette_specs()}
+        if self._palette_active_key not in valid_keys:
+            self._palette_active_key = None
+        for key, label, _j, _s in self._palette_specs():
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(key == self._palette_active_key)
+            btn.setFixedHeight(36)
+            btn.setMinimumWidth(44)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.toggled.connect(lambda checked, k=key: self._on_palette_toggled(k, checked))
+            self._palette_btns[key] = btn
+            self.palette_btn_row.addWidget(btn)
+        self._update_palette_button_styles()
+
+    def _on_palette_toggled(self, key: str, checked: bool) -> None:
+        if checked:
+            self._palette_active_key = key
+            for k, btn in self._palette_btns.items():
+                if k != key:
+                    btn.blockSignals(True)
+                    btn.setChecked(False)
+                    btn.blockSignals(False)
+        elif self._palette_active_key == key:
+            self._palette_active_key = None
+        self._update_palette_button_styles()
+        self._render_grid()
+
+    def _update_palette_button_styles(self) -> None:
+        for key, btn in self._palette_btns.items():
+            btn.setStyleSheet(
+                self._palette_button_style(key, active=(key == self._palette_active_key))
+            )
+
+    def _palette_active_spec(self) -> tuple[str, str, int] | None:
+        if not self._palette_active_key:
+            return None
+        for key, _label, judgment, score in self._palette_specs():
+            if key == self._palette_active_key:
+                return judgment, self._palette_active_key, score
+        return None
 
     def refresh(self) -> None:
         if not self.app.require_active_test():
@@ -448,6 +607,7 @@ class StepManualPage(QWidget):
         self._rebuild_field_combo(prefer_fid=current_fid)
         self._rebuild_triangle_filters()
         self._update_judge_buttons()
+        self._rebuild_palette_buttons()
         if self._fields:
             self._load_crops_async()
         else:
@@ -562,13 +722,15 @@ class StepManualPage(QWidget):
 
     def _update_judge_buttons(self) -> None:
         max_score = self._field_max_score()
-        self.btn_sankaku.setVisible(max_score > 1)
+        if hasattr(self, "btn_sankaku"):
+            self.btn_sankaku.setVisible(max_score > 1)
+            self.btn_sankaku.setToolTip(
+                "1点（配点2点時）" if max_score == 2 else "部分点を指定して一括反映"
+            )
         tri_btn = self._filter_btns.get("△")
         if tri_btn is not None:
             tri_btn.setVisible(max_score > 1)
-        self.btn_sankaku.setToolTip(
-            "1点（配点2点時）" if max_score == 2 else "部分点を指定して一括反映"
-        )
+        self._rebuild_palette_buttons()
 
     def _load_crops_async(self) -> None:
         fid = self._selected_field_id()
@@ -754,64 +916,94 @@ class StepManualPage(QWidget):
         self._selected_ids = ids
         self._render_grid()
 
-    def _apply_judgment(self, judgment: str) -> None:
-        if not self.app.require_active_test():
-            return
-        fid = self._selected_field_id()
-        if not fid:
-            h.warn(self, "記述欄未選択", "記述欄を選んでください。")
-            return
-        if not self._selected_ids:
-            h.warn(self, "未選択", "画像をタップして選択してください。")
-            return
+    def _resolve_judgment_score(self, judgment: str) -> tuple[str, int] | None:
         max_score = self._field_max_score()
         nj = normalize_judgment(judgment)
         if nj == "○":
-            score = max_score
-        elif nj == "×":
-            score = 0
-        elif nj == PENDING_JUDGMENT:
-            score = 0
-        elif nj == "△":
+            return nj, max_score
+        if nj == "×":
+            return nj, 0
+        if nj == PENDING_JUDGMENT:
+            return nj, 0
+        if nj == "△":
             if max_score <= 1:
-                return
+                return None
             if max_score == 2:
-                score = 1
-            else:
-                score, ok = QInputDialog.getInt(
-                    self,
-                    "部分点",
-                    f"選択 {len(self._selected_ids)} 件の得点（1〜{max_score - 1}）",
-                    1,
-                    1,
-                    max_score - 1,
-                )
-                if not ok:
-                    return
-        else:
-            return
+                return nj, 1
+            score, ok = QInputDialog.getInt(
+                self,
+                "部分点",
+                f"選択 {len(self._selected_ids)} 件の得点（1〜{max_score - 1}）",
+                1,
+                1,
+                max_score - 1,
+            )
+            if not ok:
+                return None
+            return nj, score
+        return None
+
+    def _commit_grades(
+        self,
+        result_ids: list[int],
+        judgment: str,
+        score: int,
+        *,
+        silent: bool = False,
+    ) -> bool:
+        if not self.app.require_active_test():
+            return False
+        fid = self._selected_field_id()
+        if not fid or not result_ids:
+            return False
+        nj = normalize_judgment(judgment)
         try:
             n = update_results_field_grades(
                 self.app.active_test_id,
                 fid,
-                list(self._selected_ids),
+                result_ids,
                 nj,
                 score,
             )
         except Exception as e:
             h.error(self, "保存エラー", str(e))
-            return
-        id_set = set(self._selected_ids)
+            return False
+        id_set = set(result_ids)
         for item in self._items:
             if item.get("result_id") in id_set:
                 item["judgment"] = nj
                 item["score"] = score
-        self._selected_ids.clear()
         self._render_grid()
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
-        label = "保留" if nj == PENDING_JUDGMENT else nj
-        h.info(self, "反映完了", f"{n} 件に {label}（{score}点）を反映しました。")
+        if not silent:
+            label = "保留" if nj == PENDING_JUDGMENT else nj
+            h.info(self, "反映完了", f"{n} 件に {label}（{score}点）を反映しました。")
+        return True
+
+    def _apply_judgment(self, judgment: str) -> None:
+        if not self.app.require_active_test():
+            return
+        if not self._selected_field_id():
+            h.warn(self, "記述欄未選択", "記述欄を選んでください。")
+            return
+        if not self._selected_ids:
+            h.warn(self, "未選択", "画像をタップして選択してください。")
+            return
+        resolved = self._resolve_judgment_score(judgment)
+        if not resolved:
+            return
+        nj, score = resolved
+        ids = list(self._selected_ids)
+        self._selected_ids.clear()
+        self._commit_grades(ids, nj, score)
+
+    def _apply_palette_to_image(self, result_id: int) -> None:
+        spec = self._palette_active_spec()
+        if not spec or not result_id:
+            return
+        judgment, _key, score = spec
+        self._commit_grades([result_id], judgment, score, silent=True)
 
     # --- グリッド ---
 
@@ -847,6 +1039,17 @@ class StepManualPage(QWidget):
         if not self._show_all_pages:
             sel += f"・このページ {len(page_items)} 枚"
         sel += "）"
+        if self._parallel_palette_mode:
+            spec = self._palette_active_spec()
+            if spec:
+                _j, key, score = spec
+                label = next(
+                    (lbl for k, lbl, _j2, _s in self._palette_specs() if k == key),
+                    key,
+                )
+                sel = f"判定パレット: {label}（{score}点）— 画像タップで即反映"
+            else:
+                sel = "判定パレット: 判定を選んでから画像をタップ"
         self.selection_label.setText(sel)
         if self._items:
             self._update_status_summary()
@@ -984,6 +1187,10 @@ class StepManualPage(QWidget):
             lay.addWidget(ans)
 
         def click_handler(_event, result_id=rid):
+            if self._parallel_palette_mode:
+                if self._palette_active_key:
+                    self._apply_palette_to_image(result_id)
+                return
             if result_id in self._selected_ids:
                 self._selected_ids.discard(result_id)
             else:
