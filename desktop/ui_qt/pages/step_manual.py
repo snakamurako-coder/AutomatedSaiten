@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
+from PIL import Image
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QFrame,
     QGridLayout,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
 )
 
 from models.database import connect
+from models.output_repo import get_feedback_style
 from models.test_repo import (
     get_all_results,
     get_answer_fields,
@@ -29,11 +32,37 @@ from models.test_repo import (
     update_results_field_grades,
 )
 from services.crop_preview import load_crops_for_rows
+from services.feedback_renderer import draw_mark
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.layout_helpers import make_expanding
 from ui_qt.style import COLORS, set_variant
+
+
+def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
+    """判定色を白と混ぜた薄い背景色。"""
+    raw = str(hex_color or "").lstrip("#")
+    if len(raw) != 6:
+        return COLORS["surface"]
+    r, g, b = int(raw[0:2], 16), int(raw[2:4], 16), int(raw[4:6], 16)
+    w = max(0.0, min(1.0, white_ratio))
+    r = int(r + (255 - r) * w)
+    g = int(g + (255 - g) * w)
+    b = int(b + (255 - b) * w)
+    return f"#{r:02x}{g:02x}{b:02x}"
+
+
+def _normalize_judgment(value: Any) -> str:
+    """自動採点・手動採点で共通の判定記号に正規化（○△× / 空）。"""
+    j = str(value or "").strip()
+    if j in ("○", "〇", "◯"):
+        return "○"
+    if j == "△":
+        return "△"
+    if j in ("×", "x", "X", "✕", "✖"):
+        return "×"
+    return ""
 
 
 class StepManualPage(QWidget):
@@ -51,6 +80,8 @@ class StepManualPage(QWidget):
         self._tri_filter_btns: dict[str, QPushButton] = {}
         self._tri_filter_key = "all"
         self._sort_mode = "file"
+        self._print_mark_mode = False  # False=文字情報 / True=個票と同じ印字
+        self._feedback_style: dict[str, Any] = get_feedback_style()
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -66,8 +97,9 @@ class StepManualPage(QWidget):
         work_lay.addWidget(h.title_label("手動採点"))
         work_lay.addWidget(
             h.muted_label(
-                "② 配点決定のあと、記述欄ごとに解答画像を見ながら ○△× を付けます。"
-                "（③ テキスト化・④ 採点基準・⑤ 一括採点の代替フロー）"
+                "判定・得点は自動採点（③④⑤）と共通です。"
+                "⑤で付けた ○△× をフィルタで絞り、画像で確認・修正できます。"
+                "（画像の登録は③テキスト化が必要）"
             )
         )
 
@@ -88,10 +120,12 @@ class StepManualPage(QWidget):
         self.sort_combo.addItem("ID", "id")
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         top.addWidget(self.sort_combo)
+        top.addWidget(h.button("判定を再読込", self._reload_grades))
         top.addStretch()
         left_hdr.addLayout(top)
         self.selection_label = h.caption_label("0 件を選択中")
         left_hdr.addWidget(self.selection_label)
+        left_hdr.addWidget(self._build_mark_mode_switch())
         header.addLayout(left_hdr, 1)
         header.addWidget(self._build_filter_box(), 0)
         work_lay.addLayout(header)
@@ -116,6 +150,62 @@ class StepManualPage(QWidget):
 
         # --- 最下部固定オーバーレイ ---
         root.addWidget(self._build_footer_overlay())
+
+    def _build_mark_mode_switch(self) -> QWidget:
+        wrap = QWidget()
+        lay = QHBoxLayout(wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        lay.addWidget(h.caption_label("判定表示:"))
+        self._mode_lbl_text = QLabel("文字")
+        self._mode_lbl_print = QLabel("印字")
+        self.mark_mode_switch = QCheckBox()
+        self.mark_mode_switch.setObjectName("MarkModeSwitch")
+        self.mark_mode_switch.setCursor(Qt.PointingHandCursor)
+        self.mark_mode_switch.setToolTip(
+            "文字: 画像下に判定・得点を表示（タイル余白は⑩の判定色）\n"
+            "印字: ⑩個票プレビューと同じ ○△×・得点を画像上に重ねる"
+        )
+        self.mark_mode_switch.setStyleSheet(
+            f"""
+            QCheckBox#MarkModeSwitch {{
+                spacing: 0px;
+            }}
+            QCheckBox#MarkModeSwitch::indicator {{
+                width: 40px;
+                height: 22px;
+                border-radius: 11px;
+                border: 1px solid {COLORS["border_strong"]};
+                background: #e5e7eb;
+            }}
+            QCheckBox#MarkModeSwitch::indicator:checked {{
+                background: {COLORS["accent"]};
+                border-color: {COLORS["accent_hover"]};
+            }}
+            """
+        )
+        self.mark_mode_switch.toggled.connect(self._on_mark_mode_toggled)
+        lay.addWidget(self._mode_lbl_text)
+        lay.addWidget(self.mark_mode_switch)
+        lay.addWidget(self._mode_lbl_print)
+        lay.addStretch()
+        self._update_mode_labels()
+        return wrap
+
+    def _on_mark_mode_toggled(self, checked: bool) -> None:
+        self._print_mark_mode = bool(checked)
+        self._update_mode_labels()
+        self._render_grid()
+
+    def _update_mode_labels(self) -> None:
+        active = "font-weight: 700; color: #111827;"
+        idle = f"font-weight: 400; color: {COLORS['text_muted']};"
+        if self._print_mark_mode:
+            self._mode_lbl_text.setStyleSheet(idle)
+            self._mode_lbl_print.setStyleSheet(active)
+        else:
+            self._mode_lbl_text.setStyleSheet(active)
+            self._mode_lbl_print.setStyleSheet(idle)
 
     def _build_filter_box(self) -> QGroupBox:
         box = QGroupBox("表示フィルタ")
@@ -182,6 +272,7 @@ class StepManualPage(QWidget):
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
+        self._feedback_style = get_feedback_style()
         self._fields = get_answer_fields(self.app.active_test_id)
         current = self.field_combo.currentIndex()
         self.field_combo.blockSignals(True)
@@ -304,7 +395,7 @@ class StepManualPage(QWidget):
                 "fileId": r.get("sourcePath") or "",
                 "warpedPath": r.get("warpedPath") or "",
                 "answer_text": str(r.get("textMapping", {}).get(fid, "") or "").strip() or "なし",
-                "judgment": str(r.get("judgments", {}).get(fid, "") or "").strip(),
+                "judgment": _normalize_judgment(r.get("judgments", {}).get(fid, "")),
                 "score": r.get("scores", {}).get(fid),
             }
             for r in results
@@ -329,10 +420,48 @@ class StepManualPage(QWidget):
                 )
             self._sort_items()
             self._render_grid()
-            ok = sum(1 for i in self._items if i.get("ok"))
-            self.status_label.setText(f"{ok}/{len(self._items)} 枚を表示 — タップで選択し ○△× を反映")
+            self._update_status_summary()
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
+
+    def _reload_grades(self) -> None:
+        """DB の判定を再読込（⑤一括採点後の確認用。画像は再取得しない）。"""
+        fid = self._selected_field_id()
+        test_id = self.app.active_test_id
+        if not fid or not test_id or not self._items:
+            self._load_crops_async()
+            return
+        by_id = {r["id"]: r for r in get_all_results(test_id)}
+        for item in self._items:
+            rid = int(item.get("result_id") or 0)
+            row = by_id.get(rid)
+            if not row:
+                continue
+            item["judgment"] = _normalize_judgment(row.get("judgments", {}).get(fid, ""))
+            item["score"] = row.get("scores", {}).get(fid)
+            if item.get("row") is not None:
+                item["row"]["answer_text"] = (
+                    str(row.get("textMapping", {}).get(fid, "") or "").strip() or "なし"
+                )
+        self._selected_ids.clear()
+        self._render_grid()
+        self._update_status_summary()
+        h.info(self, "再読込", "自動採点・手動採点で共有している判定を DB から読み直しました。")
+
+    def _update_status_summary(self) -> None:
+        counts = {"○": 0, "△": 0, "×": 0, "未採点": 0}
+        for item in self._items:
+            j = _normalize_judgment(item.get("judgment"))
+            if j in counts:
+                counts[j] += 1
+            else:
+                counts["未採点"] += 1
+        visible = sum(1 for i in self._items if self._item_passes_filter(i))
+        ok = sum(1 for i in self._items if i.get("ok"))
+        self.status_label.setText(
+            f"{ok}/{len(self._items)} 枚（○{counts['○']} △{counts['△']} "
+            f"×{counts['×']} 未採点{counts['未採点']}）— 表示 {visible} 枚"
+        )
 
     def _sort_items(self) -> None:
         if self._sort_mode == "id":
@@ -348,11 +477,10 @@ class StepManualPage(QWidget):
             )
 
     def _item_passes_filter(self, item: dict[str, Any]) -> bool:
-        j = str(item.get("judgment") or "").strip()
+        j = _normalize_judgment(item.get("judgment"))
         sc = item.get("score")
-        has_j = j in ("○", "△", "×")
         tags: list[str] = []
-        if has_j:
+        if j:
             tags.append("採点済み")
             tags.append(j)
         else:
@@ -364,7 +492,7 @@ class StepManualPage(QWidget):
             return False
         if j == "△" and self._tri_filter_key != "all" and self._field_max_score() > 1:
             try:
-                return int(sc) == int(self._tri_filter_key)
+                return int(float(sc)) == int(self._tri_filter_key)
             except (TypeError, ValueError):
                 return False
         return True
@@ -418,13 +546,15 @@ class StepManualPage(QWidget):
             h.error(self, "保存エラー", str(e))
             return
         id_set = set(self._selected_ids)
+        nj = _normalize_judgment(judgment)
         for item in self._items:
             if item.get("result_id") in id_set:
-                item["judgment"] = judgment
+                item["judgment"] = nj
                 item["score"] = score
         self._selected_ids.clear()
         self._render_grid()
-        h.info(self, "反映完了", f"{n} 件に {judgment}（{score}点）を反映しました。")
+        self._update_status_summary()
+        h.info(self, "反映完了", f"{n} 件に {nj}（{score}点）を反映しました。")
 
     # --- グリッド ---
 
@@ -438,6 +568,8 @@ class StepManualPage(QWidget):
         self._clear_grid()
         visible = [i for i in self._items if self._item_passes_filter(i)]
         self.selection_label.setText(f"{len(self._selected_ids)} 件を選択中（表示 {len(visible)} 枚）")
+        if self._items:
+            self._update_status_summary()
         if not visible:
             self.crop_grid.addWidget(
                 h.muted_label("表示する画像がありません。フィルタまたは記述欄を確認してください。"),
@@ -458,14 +590,55 @@ class StepManualPage(QWidget):
                 row_idx += 1
         self.crop_grid.setColumnStretch(cols, 1)
 
+    def _judgment_stroke_color(self, judgment: str) -> str | None:
+        mark = (self._feedback_style or {}).get("mark") or {}
+        j = _normalize_judgment(judgment)
+        if j == "○":
+            return str((mark.get("maru") or {}).get("strokeColor") or "#dc2626")
+        if j == "△":
+            return str((mark.get("sankaku") or {}).get("strokeColor") or "#ea580c")
+        if j == "×":
+            return str((mark.get("batsu") or {}).get("strokeColor") or "#2563eb")
+        return None
+
+    def _tile_colors(self, judgment: str, *, selected: bool) -> tuple[str, str]:
+        """タイル余白の背景色・枠色（⑩の判定色ベース）。"""
+        stroke = self._judgment_stroke_color(judgment)
+        if stroke:
+            bg = _mix_hex_with_white(stroke, 0.82)
+            border = stroke
+        else:
+            bg = COLORS["surface"]
+            border = COLORS["border"]
+        if selected:
+            border = COLORS["accent"]
+        return bg, border
+
+    def _pil_with_mark(self, pil: Image.Image, judgment: str, score: Any) -> Image.Image:
+        """⑩個票プレビューと同じ判定マーク・得点を画像上に重ねる。"""
+        base = pil.convert("RGBA")
+        layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
+        draw_mark(
+            layer,
+            0,
+            0,
+            base.width,
+            base.height,
+            judgment,
+            score,
+            self._feedback_style,
+        )
+        return Image.alpha_composite(base, layer).convert("RGB")
+
     def _make_tile(self, item: dict[str, Any], zoom: float) -> QWidget:
         rid = int(item.get("result_id") or 0)
         selected = rid in self._selected_ids
-        j = str(item.get("judgment") or "").strip()
+        j = _normalize_judgment(item.get("judgment"))
         sc = item.get("score")
         tile = QFrame()
+        pad = 4 if self._print_mark_mode else 6
         lay = QVBoxLayout(tile)
-        lay.setContentsMargins(6, 6, 6, 6)
+        lay.setContentsMargins(pad, pad, pad, pad)
         lay.setSpacing(2)
 
         if not item.get("ok"):
@@ -478,49 +651,57 @@ class StepManualPage(QWidget):
             lay.addWidget(err)
             return tile
 
-        if selected:
-            border = COLORS["accent"]
-            bg = COLORS["accent_soft"]
-        else:
-            border = COLORS["border"]
-            bg = COLORS["surface"]
+        bg, border = self._tile_colors(j, selected=selected)
+        border_w = 3 if selected else 2
         tile.setStyleSheet(
-            f"QFrame {{ background: {bg}; border: 2px solid {border}; border-radius: 6px; }}"
+            f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
+            f" border-radius: 6px; }}"
         )
         tile.setCursor(Qt.PointingHandCursor)
 
         row = item["row"]
         pil = item["pil"]
+        if self._print_mark_mode and j:
+            pil = self._pil_with_mark(pil, j, sc)
         w = max(40, int(pil.width * zoom))
         pix: QPixmap = pil_to_qpixmap(pil).scaledToWidth(w, Qt.SmoothTransformation)
         img = QLabel()
         img.setPixmap(pix)
-        img.setStyleSheet("border: none;")
+        img.setStyleSheet("border: none; background: transparent;")
         lay.addWidget(img)
 
-        if j:
+        # 文字モードのみ、画像下に判定・得点を表示
+        if j and not self._print_mark_mode:
             try:
                 sc_txt = f" {int(sc)}点" if sc is not None and sc != "" else ""
             except (TypeError, ValueError):
                 sc_txt = ""
+            stroke = self._judgment_stroke_color(j) or COLORS["accent"]
             badge = QLabel(f"{j}{sc_txt}")
             badge.setStyleSheet(
-                f"border: none; font-size: 11px; font-weight: 700; color: {COLORS['accent']};"
+                f"border: none; font-size: 11px; font-weight: 700; color: {stroke};"
+                f" background: transparent;"
             )
             lay.addWidget(badge)
 
         if self.crop_controls.show_id():
-            lay.addWidget(QLabel(f"ID: {row.get('studentId') or '-'}"))
+            id_lbl = QLabel(f"ID: {row.get('studentId') or '-'}")
+            id_lbl.setStyleSheet("border: none; background: transparent;")
+            lay.addWidget(id_lbl)
         if self.crop_controls.show_file_name():
             fn = QLabel(str(row.get("fileName") or ""))
             fn.setWordWrap(True)
-            fn.setStyleSheet(f"font-size: 9px; color: {COLORS['text_secondary']}; border: none;")
+            fn.setStyleSheet(
+                f"font-size: 9px; color: {COLORS['text_secondary']};"
+                f" border: none; background: transparent;"
+            )
             lay.addWidget(fn)
         if self.crop_controls.show_ocr_text():
             ans = QLabel(str(row.get("answer_text") or ""))
             ans.setWordWrap(True)
             ans.setStyleSheet(
-                f"font-size: 10px; color: {COLORS['text_secondary']}; border: none;"
+                f"font-size: 10px; color: {COLORS['text_secondary']};"
+                f" border: none; background: transparent;"
             )
             lay.addWidget(ans)
 

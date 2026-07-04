@@ -27,14 +27,20 @@ def execute_grading(test_id: str) -> dict[str, Any]:
 
     with connect() as conn:
         for row in results:
-            judgments: dict[str, str] = {}
-            scores: dict[str, int] = {}
+            # 手動採点と共有する同一カラムへ、記述欄単位でマージ（他フィールドの手修正を消さない）
+            judgments = dict(row.get("judgments") or {})
+            scores = dict(row.get("scores") or {})
             for f in fields:
                 fid = f["id"]
                 answer = str(row.get("textMapping", {}).get(fid, "") or "").strip() or "なし"
                 rule = rule_map.get(fid, {}).get(answer)
                 if rule:
-                    judgments[fid] = rule["judgment"]
+                    j = str(rule["judgment"] or "").strip()
+                    if j in ("〇", "◯"):
+                        j = "○"
+                    elif j in ("x", "X", "✕", "✖"):
+                        j = "×"
+                    judgments[fid] = j or "×"
                     scores[fid] = int(rule["score"])
                 else:
                     judgments[fid] = "×"

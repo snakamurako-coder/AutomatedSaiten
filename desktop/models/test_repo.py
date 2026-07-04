@@ -448,6 +448,10 @@ def update_results_field_grades(
     if not fid:
         raise ValueError("記述欄IDが空です。")
     j = str(judgment or "").strip()
+    if j in ("〇", "◯"):
+        j = "○"
+    elif j in ("x", "X", "✕", "✖"):
+        j = "×"
     sc = int(score)
     updated = 0
     with connect() as conn:
