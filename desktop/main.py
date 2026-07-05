@@ -12,11 +12,13 @@ if str(DESKTOP_ROOT) not in sys.path:
 
 
 def main() -> None:
+    from PySide6.QtCore import Qt
     from PySide6.QtWidgets import QApplication
 
     from ui_qt.main_window import MainWindow
     from ui_qt.style import apply_style
 
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_CompressHighFrequencyEvents, True)
     app = QApplication(sys.argv)
     apply_style(app)
     window = MainWindow()

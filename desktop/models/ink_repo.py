@@ -71,3 +71,41 @@ def save_ink_strokes(
             (test_id, int(result_id), field_id, payload, _now_iso()),
         )
         conn.commit()
+
+
+def collect_warped_ink_strokes(
+    test_id: str,
+    result_id: int,
+    fields: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """記述欄ローカル座標の手書きを補正画像座標へ変換して結合。"""
+    warped: list[dict[str, Any]] = []
+    rid = int(result_id)
+    for f in fields:
+        local = get_ink_strokes(test_id, rid, f["id"])
+        if not local:
+            continue
+        ox = float(f.get("x") or 0)
+        oy = float(f.get("y") or 0)
+        for stroke in local:
+            pts = []
+            for p in stroke.get("points") or []:
+                pts.append(
+                    {
+                        "x": ox + float(p["x"]),
+                        "y": oy + float(p["y"]),
+                        "p": float(p.get("p", 1.0)),
+                    }
+                )
+            if not pts:
+                continue
+            warped.append(
+                {
+                    "fieldId": f["id"],
+                    "color": stroke.get("color") or "#111827",
+                    "alpha": float(stroke.get("alpha", 1.0)),
+                    "baseWidth": float(stroke.get("baseWidth") or 2.5),
+                    "points": pts,
+                }
+            )
+    return warped

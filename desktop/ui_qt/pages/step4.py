@@ -366,6 +366,7 @@ class Step4Page(QWidget):
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
+        self.crop_scroll.viewport().setAttribute(Qt.WA_TabletTracking, True)
         self.crop_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"

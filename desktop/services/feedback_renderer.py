@@ -1,10 +1,10 @@
 """⑩ 個票レンダラー（GAS FeedbackRenderer の PIL 移植）。
 
-合成レイヤーは 3 つのみ（GAS 互換）:
+合成レイヤー:
   1. 補正済み解答画像（フル解像度）
   2. 各記述欄の判定マーク ○/△/× + 小問得点
   3. 合計欄（出力欄設定の矩形）のテキスト
-記述欄の枠・コメント・氏名などは描画しない。
+  4. 手書きストローク（スタイラス層・最前面）
 """
 
 from __future__ import annotations
@@ -17,6 +17,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 from config import test_feedback
 from models.domain_repo import DOMAIN_KINDS, _domain_groups, get_domain_settings
+from models.ink_repo import collect_warped_ink_strokes
 from models.output_repo import get_feedback_style, get_output_slots
 from models.test_repo import get_all_results, get_answer_fields, get_test_info
 from services.compositor import hex_to_rgba
@@ -194,12 +195,13 @@ def render_feedback_image(
     field_marks: dict[str, dict[str, Any]],
     totals: dict[str, Any],
     style: dict[str, Any] | None = None,
+    ink_strokes: list[dict[str, Any]] | None = None,
 ) -> Image.Image:
     style = style or get_feedback_style()
     bgr = imread_bgr(warped_path)
     if bgr is None:
         raise ValueError(f"補正画像を読み込めません: {warped_path}")
-    from services.compositor import bgr_to_rgba_image
+    from services.compositor import bgr_to_rgba_image, render_ink_layer
 
     base = bgr_to_rgba_image(bgr)
     layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
@@ -219,7 +221,11 @@ def render_feedback_image(
     for slot in output_slots:
         draw_total(layer, slot, totals.get(slot["slotKey"]), style)
 
-    return Image.alpha_composite(base, layer).convert("RGB")
+    composite = Image.alpha_composite(base, layer)
+    if ink_strokes:
+        ink_layer = render_ink_layer(composite.size, ink_strokes, scale=1.0)
+        composite = Image.alpha_composite(composite, ink_layer)
+    return composite.convert("RGB")
 
 
 # ==================== ペイロード構築 ====================
@@ -313,12 +319,15 @@ def render_feedback_for_row(test_id: str, row: dict[str, Any]) -> Image.Image:
     warped = str(row.get("warpedPath") or "").strip()
     if not warped or not Path(warped).exists():
         raise FileNotFoundError(f"補正画像が見つかりません: {row.get('fileName')}")
+    result_id = int(row.get("id") or 0)
+    ink = collect_warped_ink_strokes(test_id, result_id, payload["fields"]) if result_id else []
     return render_feedback_image(
         warped,
         payload["fields"],
         payload["outputSlots"],
         payload["fieldMarks"],
         payload["totals"],
+        ink_strokes=ink,
     )
 
 
