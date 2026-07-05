@@ -30,6 +30,7 @@ from models.criteria_repo import (
     save_grading_criteria,
 )
 from models.ink_repo import get_ink_strokes_batch, save_ink_strokes
+from models.text_annotation_repo import get_text_annotations_batch, save_text_annotations
 from models.database import connect
 from models.test_repo import get_answer_fields, get_points_conn
 from models.text_processing import (
@@ -53,8 +54,6 @@ from ui_qt.criteria_widgets import (
     wrap_table_cell,
 )
 from ui_qt.crop_widgets import CropDisplayControls
-from ui_qt.stylus_controls import StylusControls
-from ui_qt.stylus_prefs import load_stylus_prefs
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.layout_helpers import (
     CollapsibleSection,
@@ -343,10 +342,6 @@ class Step4Page(QWidget):
         self.crop_controls.connect_meta_changed(self._render_crop_grid)
         zoom_row.addWidget(self.crop_controls, 1)
         lay.addLayout(zoom_row)
-
-        self.stylus_controls = StylusControls()
-        self.stylus_controls.settings_changed.connect(self._apply_stylus_settings)
-        lay.addWidget(self.stylus_controls)
 
         self.outlier_table = QTableWidget(0, 8)
         self.outlier_table.setHorizontalHeaderLabels(
@@ -938,25 +933,47 @@ class Step4Page(QWidget):
                 if r.get("row", {}).get("rowIndex")
             ]
             ink_map = get_ink_strokes_batch(test_id, fid, result_ids) if test_id else {}
+            text_map = get_text_annotations_batch(test_id, fid, result_ids) if test_id else {}
             for r in results:
                 row = r.get("row") or {}
                 rid = int(row.get("rowIndex") or 0)
                 r["ink_strokes"] = ink_map.get(rid, [])
+                r["text_annotations"] = text_map.get(rid, [])
             self._crop_grid_results = results
             self._render_crop_grid()
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
 
-    def _apply_stylus_settings(self) -> None:
-        if not hasattr(self, "stylus_controls"):
+    def viewer_scroll(self) -> QScrollArea:
+        return self.crop_scroll
+
+    def palette_ink_stacks(self) -> list[CropInkImageStack]:
+        return self._ink_stacks
+
+    def palette_field_id(self) -> str:
+        return self._selected_field_id() or ""
+
+    def palette_save_annotations(
+        self, result_id: int, field_id: str, items: list
+    ) -> None:
+        test_id = self.app.active_test_id
+        if not test_id or not field_id or not result_id:
             return
-        prefs = load_stylus_prefs()
-        show = self.stylus_controls.show_ink_layer()
-        mode = self.stylus_controls.eraser_mode()
-        for stack in self._ink_stacks:
-            stack.set_palm_rejection(prefs["palm_rejection"])
-            stack.set_show_ink(show)
-            stack.set_eraser_mode(mode)
+        try:
+            save_text_annotations(test_id, result_id, field_id, items)
+        except Exception as e:
+            h.error(self, "テキスト保存エラー", str(e))
+            return
+        for r in self._crop_grid_results:
+            row = r.get("row") or {}
+            if int(row.get("rowIndex") or 0) == int(result_id):
+                r["text_annotations"] = list(items)
+                break
+
+    def _apply_stylus_settings(self) -> None:
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.apply_config()
 
     def _save_ink_strokes(self, result_id: int, strokes: list) -> None:
         test_id = self.app.active_test_id
@@ -1043,15 +1060,20 @@ class Step4Page(QWidget):
         ink_stack = CropInkImageStack(
             pil_image=pil,
             field_id=fid,
+            result_id=row_index,
             strokes=item.get("ink_strokes") or [],
+            annotations=item.get("text_annotations") or [],
             zoom=zoom,
             on_strokes_changed=lambda s, rid=row_index: self._save_ink_strokes(rid, s),
+            on_annotations_changed=lambda s, rid=row_index, f=fid: self.palette_save_annotations(
+                rid, f, s
+            ),
         )
-        ink_stack.set_palm_rejection(load_stylus_prefs()["palm_rejection"])
-        ink_stack.set_show_ink(self.stylus_controls.show_ink_layer())
-        ink_stack.set_eraser_mode(self.stylus_controls.eraser_mode())
         ink_stack.image_clicked.connect(lambda a=ans: self._toggle_deemed(fid, a))
         self._ink_stacks.append(ink_stack)
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.register_stack(ink_stack)
         lay.addWidget(ink_stack)
 
         if self.crop_controls.show_id():

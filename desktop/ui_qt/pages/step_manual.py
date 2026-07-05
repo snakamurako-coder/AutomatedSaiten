@@ -33,6 +33,7 @@ from models.grading_status import (
     normalize_judgment,
 )
 from models.ink_repo import get_ink_strokes_batch, save_ink_strokes
+from models.text_annotation_repo import get_text_annotations_batch, save_text_annotations
 from models.output_repo import get_feedback_style
 from models.test_repo import (
     get_all_results,
@@ -46,8 +47,6 @@ from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.layout_helpers import make_expanding
-from ui_qt.stylus_controls import StylusControls
-from ui_qt.stylus_prefs import load_stylus_prefs
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.style import COLORS
 
@@ -392,9 +391,6 @@ class StepManualPage(QWidget):
         self.crop_controls.connect_meta_changed(self._render_grid)
         left_lay.addWidget(self.crop_controls)
         left_lay.addWidget(self._build_mark_mode_switch())
-        self.stylus_controls = StylusControls()
-        self.stylus_controls.settings_changed.connect(self._apply_stylus_settings)
-        left_lay.addWidget(self.stylus_controls)
         lay.addWidget(left, 0)
 
         # 右: 採点モードに応じて「選択への判定反映」または「判定パレット」
@@ -779,6 +775,7 @@ class StepManualPage(QWidget):
             test_id = self.app.active_test_id
             result_ids = [int(src["rowIndex"]) for src in rows if src.get("rowIndex")]
             ink_map = get_ink_strokes_batch(test_id, fid, result_ids) if test_id else {}
+            text_map = get_text_annotations_batch(test_id, fid, result_ids) if test_id else {}
             self._items = []
             for cr, src in zip(crop_results, rows, strict=False):
                 rid = int(src["rowIndex"])
@@ -789,6 +786,7 @@ class StepManualPage(QWidget):
                         "judgment": src["judgment"],
                         "score": src["score"],
                         "ink_strokes": ink_map.get(rid, []),
+                        "text_annotations": text_map.get(rid, []),
                     }
                 )
             self._sort_items()
@@ -797,16 +795,35 @@ class StepManualPage(QWidget):
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
 
-    def _apply_stylus_settings(self) -> None:
-        if not hasattr(self, "stylus_controls"):
+    def viewer_scroll(self) -> QScrollArea:
+        return self.crop_scroll
+
+    def palette_ink_stacks(self) -> list[CropInkImageStack]:
+        return self._ink_stacks
+
+    def palette_field_id(self) -> str:
+        return self._selected_field_id() or ""
+
+    def palette_save_annotations(
+        self, result_id: int, field_id: str, items: list
+    ) -> None:
+        test_id = self.app.active_test_id
+        if not test_id or not field_id or not result_id:
             return
-        prefs = load_stylus_prefs()
-        show = self.stylus_controls.show_ink_layer()
-        mode = self.stylus_controls.eraser_mode()
-        for stack in self._ink_stacks:
-            stack.set_palm_rejection(prefs["palm_rejection"])
-            stack.set_show_ink(show)
-            stack.set_eraser_mode(mode)
+        try:
+            save_text_annotations(test_id, result_id, field_id, items)
+        except Exception as e:
+            h.error(self, "テキスト保存エラー", str(e))
+            return
+        for item in self._items:
+            if int(item.get("result_id") or 0) == int(result_id):
+                item["text_annotations"] = list(items)
+                break
+
+    def _apply_stylus_settings(self) -> None:
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.apply_config()
 
     def _save_ink_strokes(self, result_id: int, strokes: list) -> None:
         test_id = self.app.active_test_id
@@ -1180,17 +1197,22 @@ class StepManualPage(QWidget):
         ink_stack = CropInkImageStack(
             pil_image=pil,
             field_id=fid,
+            result_id=rid,
             strokes=item.get("ink_strokes") or [],
+            annotations=item.get("text_annotations") or [],
             zoom=zoom,
             on_strokes_changed=lambda s, rid=rid: self._save_ink_strokes(rid, s),
+            on_annotations_changed=lambda s, rid=rid: self.palette_save_annotations(
+                rid, fid, s
+            ),
         )
-        ink_stack.set_palm_rejection(load_stylus_prefs()["palm_rejection"])
-        ink_stack.set_show_ink(self.stylus_controls.show_ink_layer())
-        ink_stack.set_eraser_mode(self.stylus_controls.eraser_mode())
         ink_stack.image_clicked.connect(
             lambda rid=rid: self._on_tile_image_clicked(rid)
         )
         self._ink_stacks.append(ink_stack)
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.register_stack(ink_stack)
         lay.addWidget(ink_stack)
 
         # 文字モードのみ、画像下に判定・得点を表示

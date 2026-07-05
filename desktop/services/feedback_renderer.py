@@ -18,6 +18,7 @@ from PIL import Image, ImageDraw, ImageFont
 from config import test_feedback
 from models.domain_repo import DOMAIN_KINDS, _domain_groups, get_domain_settings
 from models.ink_repo import collect_warped_ink_strokes
+from models.text_annotation_repo import collect_warped_text_annotations
 from models.output_repo import get_feedback_style, get_output_slots
 from models.test_repo import get_all_results, get_answer_fields, get_test_info
 from services.compositor import hex_to_rgba, render_supersampled_rgba
@@ -260,12 +261,13 @@ def render_feedback_image(
     totals: dict[str, Any],
     style: dict[str, Any] | None = None,
     ink_strokes: list[dict[str, Any]] | None = None,
+    text_annotations: list[dict[str, Any]] | None = None,
 ) -> Image.Image:
     style = style or get_feedback_style()
     bgr = imread_bgr(warped_path)
     if bgr is None:
         raise ValueError(f"補正画像を読み込めません: {warped_path}")
-    from services.compositor import bgr_to_rgba_image, render_ink_layer
+    from services.compositor import bgr_to_rgba_image, render_ink_layer, render_text_annotation_layer
 
     base = bgr_to_rgba_image(bgr)
     layer = render_feedback_overlay_layer(
@@ -276,6 +278,9 @@ def render_feedback_image(
     if ink_strokes:
         ink_layer = render_ink_layer(composite.size, ink_strokes, scale=1.0)
         composite = Image.alpha_composite(composite, ink_layer)
+    if text_annotations:
+        text_layer = render_text_annotation_layer(composite.size, text_annotations, scale=1.0)
+        composite = Image.alpha_composite(composite, text_layer)
     return composite.convert("RGB")
 
 
@@ -372,6 +377,11 @@ def render_feedback_for_row(test_id: str, row: dict[str, Any]) -> Image.Image:
         raise FileNotFoundError(f"補正画像が見つかりません: {row.get('fileName')}")
     result_id = int(row.get("id") or 0)
     ink = collect_warped_ink_strokes(test_id, result_id, payload["fields"]) if result_id else []
+    text_ann = (
+        collect_warped_text_annotations(test_id, result_id, payload["fields"])
+        if result_id
+        else []
+    )
     return render_feedback_image(
         warped,
         payload["fields"],
@@ -379,6 +389,7 @@ def render_feedback_for_row(test_id: str, row: dict[str, Any]) -> Image.Image:
         payload["fieldMarks"],
         payload["totals"],
         ink_strokes=ink,
+        text_annotations=text_ann,
     )
 
 

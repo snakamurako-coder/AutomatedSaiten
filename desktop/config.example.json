@@ -5,5 +5,17 @@
   "tesseract_cmd": "",
   "gemini_api_key": "",
   "stylus_palm_rejection": true,
-  "stylus_eraser_mode": "pixel"
+  "stylus_eraser_mode": "pixel",
+  "floating_palette": {
+    "x": 0,
+    "y": 0,
+    "minimized": false,
+    "view_mode": "simple",
+    "fab_x": null,
+    "fab_y": null,
+    "last_color": "#111827",
+    "last_width": 2.5,
+    "last_alpha": 1.0,
+    "last_tool": "pen"
+  }
 }

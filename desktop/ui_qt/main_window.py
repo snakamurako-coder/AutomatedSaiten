@@ -32,6 +32,7 @@ from ui_qt.pages.step8 import Step8Page
 from ui_qt.pages.step9 import Step9Page
 from ui_qt.pages.step10 import Step10Page
 from ui_qt.pages.step_manual import StepManualPage
+from ui_qt.floating_palette.palette_controller import PaletteController
 from ui_qt.settings_dialog import open_settings_dialog
 from ui_qt.style import set_variant
 
@@ -104,6 +105,8 @@ class MainWindow(QMainWindow):
         self._refresh_ocr_status()
         self.load_step(0)
         self.pages[0].refresh()  # type: ignore[attr-defined]
+
+        self.palette_controller = PaletteController(self)
 
     # --- サイドバー ---
 
@@ -243,10 +246,11 @@ class MainWindow(QMainWindow):
         self.ocr_status_label.setText(info.get("message", ""))
 
     def _refresh_stylus_prefs(self) -> None:
-        for sid in (4, MANUAL_GRADING_STEP_ID):
-            page = self.pages.get(sid)
-            if page is not None and hasattr(page, "_apply_stylus_settings"):
-                page._apply_stylus_settings()  # type: ignore[attr-defined]
+        self.palette_controller.apply_config()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.palette_controller.persist()
+        super().closeEvent(event)
 
     def _open_settings(self) -> None:
         def on_saved() -> None:
@@ -268,6 +272,16 @@ class MainWindow(QMainWindow):
             page.refresh()  # type: ignore[attr-defined]
         elif step_id == 0:
             page.refresh()  # type: ignore[attr-defined]
+        self._sync_palette(step_id)
+
+    def _sync_palette(self, step_id: int) -> None:
+        if step_id in PaletteController.ACTIVE_STEPS:
+            page = self.pages.get(step_id)
+            if page is not None and hasattr(page, "viewer_scroll"):
+                self.palette_controller.attach_page(page, step_id)  # type: ignore[arg-type]
+                self.palette_controller.show_for_step(step_id)
+            return
+        self.palette_controller.detach()
 
     def _sync_active_test(self) -> None:
         """DB のアクティブテストをメモリに同期する。"""

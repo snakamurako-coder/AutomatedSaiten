@@ -24,7 +24,7 @@ from typing import Any, Callable
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageFont
 
 # GAS 版 RegionEditor の rgba(…, 0.12〜0.15) に合わせたスタイル
 REGION_STROKE_NORMAL = "#16a34a"
@@ -154,6 +154,67 @@ def render_ink_layer(
         r0 = seg_width(float(p0.get("p", 1.0))) / 2
         x0, y0 = float(p0["x"]) * work_scale, float(p0["y"]) * work_scale
         draw.ellipse([x0 - r0, y0 - r0, x0 + r0, y0 + r0], fill=color)
+    if sf > 1:
+        return layer.resize(size, _RESAMPLE)
+    return layer
+
+
+def _load_annotation_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
+    names = ["meiryob.ttc", "meiryo.ttc", "YuGothM.ttc", "msgothic.ttc", "arial.ttf"]
+    if not bold:
+        names = ["meiryo.ttc", "YuGothM.ttc", "msgothic.ttc", "arial.ttf"]
+    for name in names:
+        try:
+            return ImageFont.truetype(name, max(8, int(size)))
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def render_text_annotation_layer(
+    size: tuple[int, int],
+    annotations: list[dict[str, Any]],
+    scale: float = 1.0,
+    supersample: int | None = None,
+) -> Image.Image:
+    """テキストボックス注釈を RGBA レイヤーとして描く。"""
+    sf = max(1, int(supersample or output_supersample_factor(size)))
+    work_scale = scale * sf
+    canvas_size = (int(size[0] * sf), int(size[1] * sf))
+    layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
+    draw = ImageDraw.Draw(layer)
+    pad = 4 * work_scale
+    for box in annotations or []:
+        st = box.get("style") or {}
+        x = float(box.get("x") or 0) * work_scale
+        y = float(box.get("y") or 0) * work_scale
+        w = max(20.0, float(box.get("width") or 120) * work_scale)
+        h = max(12.0, float(box.get("height") or 36) * work_scale)
+        fill = hex_to_rgba(st.get("fillColor") or "#ffffff", float(st.get("fillAlpha") or 0.85))
+        border = hex_to_rgba(st.get("borderColor") or "#2563eb", float(st.get("borderAlpha") or 1.0))
+        bw = max(1, round(float(st.get("borderWidth") or 2) * work_scale))
+        draw.rounded_rectangle(
+            [x, y, x + w, y + h],
+            radius=max(2, round(4 * work_scale)),
+            fill=fill,
+            outline=border,
+            width=bw,
+        )
+        text = str(box.get("text") or "").strip()
+        if not text:
+            continue
+        fs = max(8, int(float(st.get("fontSize") or 14) * work_scale))
+        font = _load_annotation_font(fs, bold=bool(st.get("bold")))
+        tc = hex_to_rgba(st.get("textColor") or "#111827", 1.0)
+        tx, ty = x + pad, y + pad
+        if st.get("vertical"):
+            cy = ty
+            for ch in text.replace("\n", ""):
+                draw.text((tx, cy), ch, font=font, fill=tc)
+                bbox = font.getbbox(ch)
+                cy += (bbox[3] - bbox[1]) + 2
+        else:
+            draw.text((tx, ty), text, font=font, fill=tc)
     if sf > 1:
         return layer.resize(size, _RESAMPLE)
     return layer

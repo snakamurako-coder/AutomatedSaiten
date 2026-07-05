@@ -26,6 +26,10 @@ DEFAULT_ERASER_RADIUS = 18.0
 ERASER_MODE_PIXEL = "pixel"
 ERASER_MODE_STROKE = "stroke"
 
+TOOL_PEN = "pen"
+TOOL_ERASER = "eraser"
+TOOL_TEXT = "text"
+
 # PySide6 では pointerType は QTabletEvent ではなく QPointingDevice 側の列挙
 _Pen = QPointingDevice.PointerType.Pen
 _Eraser = QPointingDevice.PointerType.Eraser
@@ -154,6 +158,11 @@ class InkOverlayWidget(QWidget):
         self._pen_active = False
         self._eraser_active = False
         self._eraser_mode = ERASER_MODE_PIXEL
+        self._tool_mode = TOOL_PEN
+        self._brush_color = DEFAULT_INK_COLOR
+        self._brush_width = DEFAULT_BASE_WIDTH
+        self._brush_alpha = 1.0
+        self._software_eraser = False
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setAttribute(Qt.WA_TabletTracking, True)
         self.setAutoFillBackground(False)
@@ -179,6 +188,19 @@ class InkOverlayWidget(QWidget):
     def set_eraser_mode(self, mode: str) -> None:
         m = str(mode or ERASER_MODE_PIXEL).strip().lower()
         self._eraser_mode = m if m in (ERASER_MODE_PIXEL, ERASER_MODE_STROKE) else ERASER_MODE_PIXEL
+
+    def set_tool_mode(self, mode: str) -> None:
+        m = str(mode or TOOL_PEN).strip().lower()
+        if m not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT):
+            m = TOOL_PEN
+        self._tool_mode = m
+        self._software_eraser = m == TOOL_ERASER
+        self._drawing_enabled = m in (TOOL_PEN, TOOL_ERASER)
+
+    def set_brush(self, color: str, width: float, alpha: float) -> None:
+        self._brush_color = str(color or DEFAULT_INK_COLOR)
+        self._brush_width = max(0.5, float(width))
+        self._brush_alpha = max(0.0, min(1.0, float(alpha)))
 
     def strokes(self) -> list[dict[str, Any]]:
         return list(self._strokes)
@@ -331,9 +353,9 @@ class InkOverlayWidget(QWidget):
         nx, ny = self._to_native(x, y)
         self._current = {
             "fieldId": self._field_id,
-            "color": DEFAULT_INK_COLOR,
-            "alpha": 1.0,
-            "baseWidth": DEFAULT_BASE_WIDTH,
+            "color": self._brush_color,
+            "alpha": self._brush_alpha,
+            "baseWidth": self._brush_width,
             "points": [{"x": nx, "y": ny, "p": pressure}],
         }
 
@@ -372,6 +394,8 @@ class InkOverlayWidget(QWidget):
         if not points:
             return
         color = QColor(stroke.get("color") or DEFAULT_INK_COLOR)
+        alpha = float(stroke.get("alpha", 1.0))
+        color.setAlphaF(max(0.0, min(1.0, alpha)))
         base_w = float(stroke.get("baseWidth") or DEFAULT_BASE_WIDTH)
         disp_scale = 1.0 / max(self._scale_x(), self._scale_y())
         if len(points) == 1:
@@ -406,28 +430,28 @@ class InkOverlayWidget(QWidget):
         return True
 
     def _should_draw_tablet(self, event: QTabletEvent) -> bool:
-        if is_eraser_tablet_event(event):
+        if is_eraser_tablet_event(event) or self._software_eraser:
             return False
         return self._should_handle_tablet(event)
 
     def _should_erase_tablet(self, event: QTabletEvent) -> bool:
-        if not self._drawing_enabled:
+        if not self._drawing_enabled and not self._software_eraser:
             return False
-        return is_eraser_tablet_event(event) or self._eraser_active
+        return is_eraser_tablet_event(event) or self._eraser_active or self._software_eraser
 
     def _should_draw_mouse(self, event: QMouseEvent) -> bool:
         if not self._drawing_enabled:
             return False
-        if is_eraser_mouse_event(event):
+        if is_eraser_mouse_event(event) or self._software_eraser:
             return False
         if self._palm_rejection:
             return is_pen_mouse_event(event) or self._pen_active
         return True
 
     def _should_erase_mouse(self, event: QMouseEvent) -> bool:
-        if not self._drawing_enabled:
+        if not self._drawing_enabled and not self._software_eraser:
             return False
-        return is_eraser_mouse_event(event) or self._eraser_active
+        return is_eraser_mouse_event(event) or self._eraser_active or self._software_eraser
 
     def _handle_tablet_eraser(self, event: QTabletEvent) -> None:
         pos = event.position()
@@ -618,7 +642,7 @@ class InkOverlayWidget(QWidget):
 
 
 class CropInkImageStack(QWidget):
-    """クロップ画像 + 手書き最前面レイヤー。"""
+    """クロップ画像 + 手書き + テキスト注釈レイヤー。"""
 
     image_clicked = Signal()
 
@@ -627,15 +651,22 @@ class CropInkImageStack(QWidget):
         *,
         pil_image,
         field_id: str,
+        result_id: int = 0,
         strokes: list[dict[str, Any]] | None = None,
+        annotations: list[dict[str, Any]] | None = None,
         zoom: float = 1.0,
         on_strokes_changed: Callable[[list[dict[str, Any]]], None] | None = None,
+        on_annotations_changed: Callable[[list[dict[str, Any]]], None] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self._result_id = int(result_id or 0)
+        self._field_id = field_id
         self._on_strokes_changed = on_strokes_changed
+        self._on_annotations_changed = on_annotations_changed
         self._palm_rejection = True
         self._show_ink = True
+        self._tool_mode = TOOL_PEN
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -667,20 +698,47 @@ class CropInkImageStack(QWidget):
         self.ink_overlay.strokes_changed.connect(self._emit_strokes_changed)
         self.ink_overlay.click_through.connect(self.image_clicked.emit)
 
-        container = QWidget()
-        container.setFixedSize(pix.size())
-        container.setAttribute(Qt.WA_TabletTracking, True)
-        self.image_label.setParent(container)
+        from ui_qt.floating_palette.text_box_layer import TextBoxLayer
+
+        self.text_layer = TextBoxLayer(
+            native_w=native_w,
+            native_h=native_h,
+            annotations=annotations,
+            on_changed=self._emit_annotations_changed,
+        )
+        self.text_layer.set_display_size(pix.width(), pix.height())
+
+        self.container = QWidget()
+        self.container.setFixedSize(pix.size())
+        self.container.setAttribute(Qt.WA_TabletTracking, True)
+        self.image_label.setParent(self.container)
         self.image_label.move(0, 0)
-        self.ink_overlay.setParent(container)
+        self.ink_overlay.setParent(self.container)
         self.ink_overlay.move(0, 0)
-        self.ink_overlay.raise_()
-        lay.addWidget(container)
-        self.setFixedSize(container.size())
+        self.text_layer.setParent(self.container)
+        self.text_layer.move(0, 0)
+        self._sync_layer_order()
+        lay.addWidget(self.container)
+        self.setFixedSize(self.container.size())
+
+    @property
+    def result_id(self) -> int:
+        return self._result_id
+
+    def _sync_layer_order(self) -> None:
+        if self._tool_mode == TOOL_TEXT:
+            self.text_layer.raise_()
+        else:
+            self.text_layer.lower()
+            self.ink_overlay.raise_()
 
     def _emit_strokes_changed(self) -> None:
         if self._on_strokes_changed:
             self._on_strokes_changed(self.ink_overlay.strokes())
+
+    def _emit_annotations_changed(self, items: list[dict[str, Any]]) -> None:
+        if self._on_annotations_changed:
+            self._on_annotations_changed(items)
 
     def set_palm_rejection(self, enabled: bool) -> None:
         self._palm_rejection = bool(enabled)
@@ -695,3 +753,12 @@ class CropInkImageStack(QWidget):
 
     def set_eraser_mode(self, mode: str) -> None:
         self.ink_overlay.set_eraser_mode(mode)
+
+    def set_tool_mode(self, mode: str) -> None:
+        self._tool_mode = mode
+        self.ink_overlay.set_tool_mode(mode)
+        self.text_layer.set_placement_mode(mode == TOOL_TEXT)
+        self._sync_layer_order()
+
+    def set_brush(self, color: str, width: float, alpha: float) -> None:
+        self.ink_overlay.set_brush(color, width, alpha)

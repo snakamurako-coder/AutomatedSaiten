@@ -32,6 +32,18 @@ def load_config() -> dict:
             "gemini_api_key": "",
             "stylus_palm_rejection": True,
             "stylus_eraser_mode": "pixel",
+            "floating_palette": {
+                "x": 0,
+                "y": 0,
+                "minimized": False,
+                "view_mode": "simple",
+                "fab_x": None,
+                "fab_y": None,
+                "last_color": "#111827",
+                "last_width": 2.5,
+                "last_alpha": 1.0,
+                "last_tool": "pen",
+            },
         }
     with path.open(encoding="utf-8") as f:
         return json.load(f)

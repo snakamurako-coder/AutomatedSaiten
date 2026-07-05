@@ -193,6 +193,16 @@ CREATE TABLE IF NOT EXISTS ink_strokes (
     PRIMARY KEY (test_id, result_id, field_id),
     FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
 );
+
+CREATE TABLE IF NOT EXISTS text_annotations (
+    test_id TEXT NOT NULL,
+    result_id INTEGER NOT NULL,
+    field_id TEXT NOT NULL,
+    annotations_json TEXT NOT NULL DEFAULT '[]',
+    updated_at TEXT NOT NULL,
+    PRIMARY KEY (test_id, result_id, field_id),
+    FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
+);
 """
 
 
