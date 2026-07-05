@@ -310,7 +310,7 @@ class TextBoxWidget(QFrame):
         block_fmt = QTextBlockFormat()
         block_fmt.setTopMargin(0)
         block_fmt.setBottomMargin(0)
-        block_fmt.setLineHeight(100, QTextBlockFormat.LineHeightTypes.ProportionalHeight)
+        block_fmt.setLineHeight(100.0, int(QTextBlockFormat.LineHeightTypes.ProportionalHeight.value))
         cursor.mergeBlockFormat(block_fmt)
         cursor.clearSelection()
 
