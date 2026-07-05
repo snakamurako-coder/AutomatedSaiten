@@ -149,7 +149,9 @@ class TextBoxLayer(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._placement_mode and event.button() == Qt.LeftButton:
             pos = event.position()
-            self.place_box_at(pos.x(), pos.y())
+            lx, ly = int(pos.x()), int(pos.y())
+            if self.childAt(lx, ly) is None:
+                self.place_box_at(pos.x(), pos.y())
             event.accept()
             return
         if event.button() == Qt.LeftButton:
@@ -161,7 +163,9 @@ class TextBoxLayer(QWidget):
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
         if self._placement_mode and event.type() == QEvent.Type.TabletPress:
             pos = event.position()
-            self.place_box_at(pos.x(), pos.y())
+            lx, ly = int(pos.x()), int(pos.y())
+            if self.childAt(lx, ly) is None:
+                self.place_box_at(pos.x(), pos.y())
             event.accept()
             return
         super().tabletEvent(event)

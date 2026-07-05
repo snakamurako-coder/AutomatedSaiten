@@ -11,11 +11,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
+from ui_qt.crop_widgets import SliderSpinControls
 from ui_qt.floating_palette.palette_prefs import (
     PALETTE_COLORS,
     TOOL_ERASER,
@@ -46,7 +46,7 @@ class ToolPaletteWindow(QWidget):
         )
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
-        self.resize(248, 300)
+        self.resize(280, 300)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 12)
@@ -115,16 +115,28 @@ class ToolPaletteWindow(QWidget):
         colors_row.addStretch()
         brush_lay.addLayout(colors_row)
 
-        width_row = QHBoxLayout()
-        width_lbl = QLabel("太さ")
-        width_lbl.setFixedWidth(36)
-        width_row.addWidget(width_lbl)
-        self._width_slider = QSlider(Qt.Orientation.Horizontal)
-        self._width_slider.setRange(1, 20)
-        self._width_slider.setValue(3)
-        self._width_slider.valueChanged.connect(self._emit_brush)
-        width_row.addWidget(self._width_slider, 1)
-        brush_lay.addLayout(width_row)
+        self._width_ctrl = SliderSpinControls(
+            label="太さ",
+            min_val=1,
+            max_val=20,
+            value=3,
+            label_width=36,
+            spin_width=52,
+        )
+        self._width_ctrl.valueChanged.connect(lambda _v: self._emit_brush())
+        brush_lay.addWidget(self._width_ctrl)
+
+        self._alpha_ctrl = SliderSpinControls(
+            label="透明度",
+            min_val=10,
+            max_val=100,
+            value=100,
+            suffix=" %",
+            label_width=48,
+            spin_width=64,
+        )
+        self._alpha_ctrl.valueChanged.connect(lambda _v: self._emit_brush())
+        brush_lay.addWidget(self._alpha_ctrl)
         root.addWidget(self._brush_frame)
 
         self._detail_frame = QFrame()
@@ -132,17 +144,6 @@ class ToolPaletteWindow(QWidget):
         detail_lay = QVBoxLayout(self._detail_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
         detail_lay.setSpacing(8)
-
-        alpha_row = QHBoxLayout()
-        alpha_lbl = QLabel("透明度")
-        alpha_lbl.setFixedWidth(48)
-        alpha_row.addWidget(alpha_lbl)
-        self._alpha_slider = QSlider(Qt.Orientation.Horizontal)
-        self._alpha_slider.setRange(10, 100)
-        self._alpha_slider.setValue(100)
-        self._alpha_slider.valueChanged.connect(self._emit_brush)
-        alpha_row.addWidget(self._alpha_slider, 1)
-        detail_lay.addLayout(alpha_row)
 
         eraser_row = QHBoxLayout()
         eraser_lbl = QLabel("消しゴム")
@@ -218,18 +219,22 @@ class ToolPaletteWindow(QWidget):
         self._emit_brush()
 
     def _emit_brush(self) -> None:
-        w = float(self._width_slider.value())
-        a = float(self._alpha_slider.value()) / 100.0
+        w = float(self._width_ctrl.value())
+        a = float(self._alpha_ctrl.value()) / 100.0
         self.brush_changed.emit(self._current_color, w, a)
 
     def set_brush(self, color: str, width: float, alpha: float) -> None:
         self._current_color = color
-        self._width_slider.blockSignals(True)
-        self._alpha_slider.blockSignals(True)
-        self._width_slider.setValue(max(1, min(20, int(round(width)))))
-        self._alpha_slider.setValue(max(10, min(100, int(round(alpha * 100)))))
-        self._width_slider.blockSignals(False)
-        self._alpha_slider.blockSignals(False)
+        self._width_ctrl.block_slider_signals(True)
+        self._width_ctrl.block_spin_signals(True)
+        self._alpha_ctrl.block_slider_signals(True)
+        self._alpha_ctrl.block_spin_signals(True)
+        self._width_ctrl.set_value(max(1, min(20, int(round(width)))))
+        self._alpha_ctrl.set_value(max(10, min(100, int(round(alpha * 100)))))
+        self._width_ctrl.block_slider_signals(False)
+        self._width_ctrl.block_spin_signals(False)
+        self._alpha_ctrl.block_slider_signals(False)
+        self._alpha_ctrl.block_spin_signals(False)
         for i, col in enumerate(PALETTE_COLORS):
             if col.lower() == color.lower():
                 self._color_btns[i].setChecked(True)
@@ -246,6 +251,6 @@ class ToolPaletteWindow(QWidget):
     def current_brush(self) -> tuple[str, float, float]:
         return (
             self._current_color,
-            float(self._width_slider.value()),
-            float(self._alpha_slider.value()) / 100.0,
+            float(self._width_ctrl.value()),
+            float(self._alpha_ctrl.value()) / 100.0,
         )

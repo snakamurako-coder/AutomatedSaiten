@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import QPointF, Qt, Signal, QEvent
+from PySide6.QtCore import QPoint, QPointF, Qt, Signal, QEvent
 from PySide6.QtGui import (
     QColor,
     QMouseEvent,
@@ -196,6 +196,11 @@ class InkOverlayWidget(QWidget):
         self._tool_mode = m
         self._software_eraser = m == TOOL_ERASER
         self._drawing_enabled = m in (TOOL_PEN, TOOL_ERASER)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, m == TOOL_TEXT)
+
+    def _emit_click_through(self) -> None:
+        if self._tool_mode != TOOL_TEXT:
+            self.click_through.emit()
 
     def set_brush(self, color: str, width: float, alpha: float) -> None:
         self._brush_color = str(color or DEFAULT_INK_COLOR)
@@ -527,7 +532,7 @@ class InkOverlayWidget(QWidget):
                 and t == QEvent.Type.TabletPress
                 and is_finger_tablet_event(event)
             ):
-                self.click_through.emit()
+                self._emit_click_through()
             event.accept()
             return
 
@@ -563,7 +568,7 @@ class InkOverlayWidget(QWidget):
             if self._palm_rejection:
                 points = event.points()
                 if points and points[0].state() == Qt.TouchPointState.TouchPointPressed:
-                    self.click_through.emit()
+                    self._emit_click_through()
             event.ignore()
             return
         points = event.points()
@@ -600,7 +605,7 @@ class InkOverlayWidget(QWidget):
             return
         if not self._should_draw_mouse(event):
             if self._tool_mode != TOOL_TEXT:
-                self.click_through.emit()
+                self._emit_click_through()
             event.ignore()
             return
         self._eraser_active = False
@@ -700,7 +705,7 @@ class CropInkImageStack(QWidget):
         if strokes:
             self.ink_overlay.set_strokes(strokes)
         self.ink_overlay.strokes_changed.connect(self._emit_strokes_changed)
-        self.ink_overlay.click_through.connect(self.image_clicked.emit)
+        self.ink_overlay.click_through.connect(self._on_ink_click_through)
 
         from ui_qt.floating_palette.text_box_layer import TextBoxLayer
 
@@ -721,6 +726,9 @@ class CropInkImageStack(QWidget):
         self.ink_overlay.move(0, 0)
         self.text_layer.setParent(self.container)
         self.text_layer.move(0, 0)
+        self.container.installEventFilter(self)
+        self.ink_overlay.installEventFilter(self)
+        self.text_layer.installEventFilter(self)
         self._sync_layer_order()
         lay.addWidget(self.container)
         self.setFixedSize(self.container.size())
@@ -728,6 +736,37 @@ class CropInkImageStack(QWidget):
     @property
     def result_id(self) -> int:
         return self._result_id
+
+    def _on_ink_click_through(self) -> None:
+        if self._tool_mode != TOOL_TEXT:
+            self.image_clicked.emit()
+
+    def _try_place_text_at(self, source: QWidget, pos) -> bool:
+        if self._tool_mode != TOOL_TEXT:
+            return False
+        gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
+        local = self.text_layer.mapFromGlobal(gp)
+        lx, ly = int(local.x()), int(local.y())
+        if self.text_layer.childAt(lx, ly) is not None:
+            return False
+        self.text_layer.place_box_at(float(lx), float(ly))
+        return True
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if self._tool_mode != TOOL_TEXT:
+            return super().eventFilter(watched, event)
+        et = event.type()
+        if et == QEvent.Type.MouseButtonPress:
+            if event.button() != Qt.LeftButton:
+                return super().eventFilter(watched, event)
+            if watched in (self.container, self.ink_overlay, self.text_layer):
+                if self._try_place_text_at(watched, event.position()):
+                    return True
+        elif et == QEvent.Type.TabletPress:
+            if watched in (self.container, self.ink_overlay, self.text_layer):
+                if self._try_place_text_at(watched, event.position()):
+                    return True
+        return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
         if self._tool_mode == TOOL_TEXT:

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QHBoxLayout,
@@ -99,6 +99,75 @@ class ZoomControls(QWidget):
             self.zoom_slider.blockSignals(True)
             self.zoom_slider.setValue(value)
             self.zoom_slider.blockSignals(False)
+
+
+class SliderSpinControls(QWidget):
+    """スライダー + 数値入力（表示倍率コントロールと同型）。"""
+
+    valueChanged = Signal(int)
+
+    def __init__(
+        self,
+        *,
+        label: str = "",
+        min_val: int = 0,
+        max_val: int = 100,
+        value: int = 0,
+        suffix: str = "",
+        label_width: int = 48,
+        spin_width: int = 64,
+        parent: QWidget | None = None,
+    ) -> None:
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        if label:
+            lbl = QLabel(label)
+            lbl.setFixedWidth(label_width)
+            lay.addWidget(lbl)
+        self.slider = QSlider(Qt.Horizontal)
+        self.slider.setObjectName("CropZoomSlider")
+        self.slider.setStyleSheet(_CROP_ZOOM_SLIDER_STYLE)
+        self.slider.setRange(min_val, max_val)
+        self.slider.setValue(value)
+        lay.addWidget(self.slider, 1)
+        self.spin = QSpinBox()
+        self.spin.setRange(min_val, max_val)
+        self.spin.setValue(value)
+        if suffix:
+            self.spin.setSuffix(suffix)
+        self.spin.setFixedWidth(spin_width)
+        self.spin.setKeyboardTracking(True)
+        lay.addWidget(self.spin)
+        self.slider.valueChanged.connect(self._sync_spin_from_slider)
+        self.spin.valueChanged.connect(self._sync_slider_from_spin)
+        self.slider.valueChanged.connect(self.valueChanged.emit)
+        self.spin.valueChanged.connect(self.valueChanged.emit)
+
+    def value(self) -> int:
+        return self.slider.value()
+
+    def set_value(self, value: int) -> None:
+        self.slider.setValue(value)
+
+    def block_spin_signals(self, block: bool) -> None:
+        self.spin.blockSignals(block)
+
+    def block_slider_signals(self, block: bool) -> None:
+        self.slider.blockSignals(block)
+
+    def _sync_spin_from_slider(self, value: int) -> None:
+        if self.spin.value() != value:
+            self.spin.blockSignals(True)
+            self.spin.setValue(value)
+            self.spin.blockSignals(False)
+
+    def _sync_slider_from_spin(self, value: int) -> None:
+        if self.slider.value() != value:
+            self.slider.blockSignals(True)
+            self.slider.setValue(value)
+            self.slider.blockSignals(False)
 
 
 class CropDisplayControls(QWidget):

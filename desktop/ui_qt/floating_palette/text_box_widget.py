@@ -203,13 +203,17 @@ class TextBoxWidget(QFrame):
         font.setUnderline(bool(st.get("underline")))
         self._editor.setFont(font)
         self._editor.setStyleSheet(f"color: {tc}; background: transparent; border: none;")
-        align = str(st.get("align") or "left")
+        self._set_editor_alignment(str(st.get("align") or "left"))
+
+    def _set_editor_alignment(self, align: str) -> None:
+        option = self._editor.document().defaultTextOption()
         if align == "center":
-            self._editor.setAlignment(Qt.AlignmentFlag.AlignHCenter)
+            option.setAlignment(Qt.AlignmentFlag.AlignHCenter)
         elif align == "right":
-            self._editor.setAlignment(Qt.AlignmentFlag.AlignRight)
+            option.setAlignment(Qt.AlignmentFlag.AlignRight)
         else:
-            self._editor.setAlignment(Qt.AlignmentFlag.AlignLeft)
+            option.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._editor.document().setDefaultTextOption(option)
 
     def apply_style_dict(self, style: dict[str, Any]) -> None:
         self._box["style"] = {**self._style(), **style}

@@ -11,12 +11,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
-    QSlider,
-    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
 
+from ui_qt.crop_widgets import SliderSpinControls
 from ui_qt.floating_palette.format_palette_placer import place_format_palette
 
 
@@ -37,7 +36,7 @@ class FormatPaletteWindow(QWidget):
         )
         self.setWindowTitle("テキスト書式")
         self.setObjectName("FormatPaletteWindow")
-        self.resize(232, 320)
+        self.resize(280, 340)
         self._pinned = False
         self._pinned_pos: QPoint | None = None
 
@@ -58,32 +57,51 @@ class FormatPaletteWindow(QWidget):
         header_row.addWidget(self._pin_btn)
         root.addLayout(header_row)
 
-        def add_slider(label: str) -> QSlider:
-            row = QHBoxLayout()
-            lbl = QLabel(label)
-            lbl.setFixedWidth(72)
-            row.addWidget(lbl)
-            s = QSlider(Qt.Orientation.Horizontal)
-            s.setRange(0, 100)
-            s.valueChanged.connect(self._emit_style)
-            row.addWidget(s, 1)
-            root.addLayout(row)
-            return s
+        self._border_w = SliderSpinControls(
+            label="枠太さ",
+            min_val=1,
+            max_val=10,
+            value=2,
+            label_width=72,
+            spin_width=52,
+        )
+        self._border_w.valueChanged.connect(lambda _v: self._emit_style())
+        root.addWidget(self._border_w)
 
-        self._border_w = add_slider("枠太さ")
-        self._border_a = add_slider("枠透明度")
-        self._fill_a = add_slider("背景透明度")
+        self._border_a = SliderSpinControls(
+            label="枠透明度",
+            min_val=0,
+            max_val=100,
+            value=100,
+            suffix=" %",
+            label_width=72,
+            spin_width=64,
+        )
+        self._border_a.valueChanged.connect(lambda _v: self._emit_style())
+        root.addWidget(self._border_a)
 
-        size_row = QHBoxLayout()
-        size_lbl = QLabel("文字サイズ")
-        size_lbl.setFixedWidth(72)
-        size_row.addWidget(size_lbl)
-        self._font_size = QSpinBox()
-        self._font_size.setRange(8, 48)
-        self._font_size.setValue(14)
-        self._font_size.valueChanged.connect(self._emit_style)
-        size_row.addWidget(self._font_size, 1)
-        root.addLayout(size_row)
+        self._fill_a = SliderSpinControls(
+            label="背景透明度",
+            min_val=0,
+            max_val=100,
+            value=85,
+            suffix=" %",
+            label_width=72,
+            spin_width=64,
+        )
+        self._fill_a.valueChanged.connect(lambda _v: self._emit_style())
+        root.addWidget(self._fill_a)
+
+        self._font_size = SliderSpinControls(
+            label="文字サイズ",
+            min_val=8,
+            max_val=48,
+            value=14,
+            label_width=72,
+            spin_width=52,
+        )
+        self._font_size.valueChanged.connect(lambda _v: self._emit_style())
+        root.addWidget(self._font_size)
 
         self._bold_check = QCheckBox("太字")
         self._bold_check.toggled.connect(self._emit_style)
@@ -127,13 +145,16 @@ class FormatPaletteWindow(QWidget):
 
     def load_style(self, style: dict[str, Any]) -> None:
         st = style or {}
-        self._border_w.blockSignals(True)
-        self._border_a.blockSignals(True)
-        self._fill_a.blockSignals(True)
-        self._border_w.setValue(int(float(st.get("borderWidth") or 2) * 10))
-        self._border_a.setValue(int(float(st.get("borderAlpha") or 1) * 100))
-        self._fill_a.setValue(int(float(st.get("fillAlpha") or 0.85) * 100))
-        self._font_size.setValue(int(st.get("fontSize") or 14))
+        for ctrl in (self._border_w, self._border_a, self._fill_a, self._font_size):
+            ctrl.block_slider_signals(True)
+            ctrl.block_spin_signals(True)
+        self._border_w.set_value(max(1, min(10, int(st.get("borderWidth") or 2))))
+        self._border_a.set_value(int(float(st.get("borderAlpha") or 1) * 100))
+        self._fill_a.set_value(int(float(st.get("fillAlpha") or 0.85) * 100))
+        self._font_size.set_value(int(st.get("fontSize") or 14))
+        for ctrl in (self._border_w, self._border_a, self._fill_a, self._font_size):
+            ctrl.block_slider_signals(False)
+            ctrl.block_spin_signals(False)
         self._bold_check.setChecked(bool(st.get("bold")))
         self._underline_check.setChecked(bool(st.get("underline")))
         self._vertical_check.setChecked(bool(st.get("vertical")))
@@ -141,14 +162,11 @@ class FormatPaletteWindow(QWidget):
         idx = self._align_combo.findText(align)
         if idx >= 0:
             self._align_combo.setCurrentIndex(idx)
-        self._border_w.blockSignals(False)
-        self._border_a.blockSignals(False)
-        self._fill_a.blockSignals(False)
 
     def _emit_style(self) -> None:
         self.style_changed.emit(
             {
-                "borderWidth": max(1, self._border_w.value() // 10),
+                "borderWidth": self._border_w.value(),
                 "borderAlpha": self._border_a.value() / 100.0,
                 "fillAlpha": self._fill_a.value() / 100.0,
                 "fontSize": self._font_size.value(),
