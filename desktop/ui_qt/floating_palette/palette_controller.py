@@ -268,7 +268,11 @@ class PaletteController:
             self.fab.hide()
         self.tool_window.show()
         self.tool_window.raise_()
-        self.tool_window.activateWindow()
+        editing = any(
+            stack.text_layer.has_editing_focus() for stack in self._stacks()
+        )
+        if not editing:
+            self.tool_window.activateWindow()
         self._clamp_tool_window()
 
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
@@ -285,8 +289,8 @@ class PaletteController:
     def _on_stack_image_clicked(self) -> None:
         if self._tool != TOOL_TEXT:
             return
-        self.tool_window.clear_text_tool()
         for stack in self._stacks():
+            stack.text_layer.finish_all_editing()
             stack.text_layer.clear_selection()
 
     def _on_brush_changed(self, color: str, width: float, alpha: float) -> None:

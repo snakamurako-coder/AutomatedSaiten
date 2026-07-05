@@ -140,6 +140,7 @@ class TextBoxWidget(QFrame):
         self._display_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._display_label.setContentsMargins(0, 0, 0, 0)
         self._display_label.setMouseTracking(True)
+        self._display_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._display_label.setStyleSheet(
             "background: transparent; border: none; padding: 0px; margin: 0px;"
         )
@@ -147,11 +148,13 @@ class TextBoxWidget(QFrame):
 
         self._text_stack = QStackedWidget()
         self._text_stack.setMouseTracking(True)
+        self._text_stack.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._text_stack.installEventFilter(self)
         self._text_stack.addWidget(self._display_label)
         self._text_stack.addWidget(self._editor)
         self._text_stack.setCurrentWidget(self._display_label)
         body_lay.addWidget(self._text_stack)
+        self._body.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._body.installEventFilter(self)
         root.addWidget(self._body)
 
@@ -238,6 +241,7 @@ class TextBoxWidget(QFrame):
 
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
+        self._text_stack.setAttribute(Qt.WA_TransparentForMouseEvents, not editing)
         if editing:
             self._text_stack.setCurrentWidget(self._editor)
             self._setup_tight_document()
@@ -274,28 +278,8 @@ class TextBoxWidget(QFrame):
 
         if watched in (self._body, self._display_label, self._text_stack):
             et = event.type()
-            if et == QEvent.Type.MouseButtonDblClick and isinstance(event, QMouseEvent):
-                if event.button() == Qt.LeftButton:
-                    self.selected.emit(self.box_id)
-                    self.start_editing()
-                    return True
-            if et == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
-                if event.button() == Qt.LeftButton:
-                    self._begin_pointer(event.globalPosition().toPoint())
-                    return True
             if et == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
-                if event.buttons() & Qt.LeftButton:
-                    gp = event.globalPosition().toPoint()
-                    self._update_move_drag(gp)
-                    return True
                 pos = self.mapFromGlobal(event.globalPosition().toPoint())
-                self._update_hover_cursor(pos)
-            if et == QEvent.Type.MouseButtonRelease and isinstance(event, QMouseEvent):
-                if event.button() == Qt.LeftButton:
-                    self._end_pointer()
-                    return True
-            if et == QEvent.Type.Enter:
-                pos = self.mapFromGlobal(QCursor.pos())
                 self._update_hover_cursor(pos)
         return super().eventFilter(watched, event)
 

@@ -827,11 +827,14 @@ class CropInkImageStack(QWidget):
         if self._tool_mode != TOOL_TEXT:
             return super().eventFilter(watched, event)
         et = event.type()
-        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
-            if watched in (self.container, self.ink_overlay, self.text_layer):
-                if self._is_text_placement_event(event):
-                    if self._try_place_text_at(watched, event.position()):
-                        return True
+        if et == QEvent.Type.TabletPress and watched in (
+            self.container,
+            self.ink_overlay,
+            self.text_layer,
+        ):
+            if isinstance(event, QTabletEvent) and self._is_text_placement_event(event):
+                if self._try_place_text_at(watched, event.position()):
+                    return True
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
@@ -855,10 +858,9 @@ class CropInkImageStack(QWidget):
         self._sync_input_routing()
 
     def _sync_input_routing(self) -> None:
-        """テキストモード時: パームリジェクション ON なら ink がペン入力を受ける。"""
+        """テキストモード: マウス/指は text_layer へ透過、スタイラス(tablet)は ink が受ける。"""
         is_text = self._tool_mode == TOOL_TEXT
-        ink_transparent = is_text and not self._palm_rejection
-        self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, ink_transparent)
+        self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, is_text)
         self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, not is_text)
 
     def set_show_ink(self, visible: bool) -> None:

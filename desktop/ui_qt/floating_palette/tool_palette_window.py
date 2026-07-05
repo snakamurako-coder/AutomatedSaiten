@@ -48,9 +48,7 @@ class ToolPaletteWindow(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
             parent,
-            Qt.WindowType.Window
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowStaysOnTopHint,
+            Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint,
         )
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
