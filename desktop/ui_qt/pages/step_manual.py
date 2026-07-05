@@ -47,6 +47,7 @@ from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.layout_helpers import make_expanding
 from ui_qt.stylus_controls import StylusControls
+from ui_qt.stylus_prefs import load_stylus_prefs
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.style import COLORS
 
@@ -799,11 +800,13 @@ class StepManualPage(QWidget):
     def _apply_stylus_settings(self) -> None:
         if not hasattr(self, "stylus_controls"):
             return
-        pr = self.stylus_controls.palm_rejection()
+        prefs = load_stylus_prefs()
         show = self.stylus_controls.show_ink_layer()
+        mode = self.stylus_controls.eraser_mode()
         for stack in self._ink_stacks:
-            stack.set_palm_rejection(pr)
+            stack.set_palm_rejection(prefs["palm_rejection"])
             stack.set_show_ink(show)
+            stack.set_eraser_mode(mode)
 
     def _save_ink_strokes(self, result_id: int, strokes: list) -> None:
         test_id = self.app.active_test_id
@@ -1181,8 +1184,9 @@ class StepManualPage(QWidget):
             zoom=zoom,
             on_strokes_changed=lambda s, rid=rid: self._save_ink_strokes(rid, s),
         )
-        ink_stack.set_palm_rejection(self.stylus_controls.palm_rejection())
+        ink_stack.set_palm_rejection(load_stylus_prefs()["palm_rejection"])
         ink_stack.set_show_ink(self.stylus_controls.show_ink_layer())
+        ink_stack.set_eraser_mode(self.stylus_controls.eraser_mode())
         ink_stack.image_clicked.connect(
             lambda rid=rid: self._on_tile_image_clicked(rid)
         )

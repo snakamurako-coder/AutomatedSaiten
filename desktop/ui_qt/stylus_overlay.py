@@ -23,6 +23,9 @@ DEFAULT_INK_COLOR = "#111827"
 DEFAULT_BASE_WIDTH = 2.5
 DEFAULT_ERASER_RADIUS = 18.0
 
+ERASER_MODE_PIXEL = "pixel"
+ERASER_MODE_STROKE = "stroke"
+
 # PySide6 では pointerType は QTabletEvent ではなく QPointingDevice 側の列挙
 _Pen = QPointingDevice.PointerType.Pen
 _Eraser = QPointingDevice.PointerType.Eraser
@@ -150,6 +153,7 @@ class InkOverlayWidget(QWidget):
         self._drawing_enabled = True
         self._pen_active = False
         self._eraser_active = False
+        self._eraser_mode = ERASER_MODE_PIXEL
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setAttribute(Qt.WA_TabletTracking, True)
         self.setAutoFillBackground(False)
@@ -171,6 +175,10 @@ class InkOverlayWidget(QWidget):
 
     def set_drawing_enabled(self, enabled: bool) -> None:
         self._drawing_enabled = bool(enabled)
+
+    def set_eraser_mode(self, mode: str) -> None:
+        m = str(mode or ERASER_MODE_PIXEL).strip().lower()
+        self._eraser_mode = m if m in (ERASER_MODE_PIXEL, ERASER_MODE_STROKE) else ERASER_MODE_PIXEL
 
     def strokes(self) -> list[dict[str, Any]]:
         return list(self._strokes)
@@ -199,7 +207,37 @@ class InkOverlayWidget(QWidget):
         base_w = float(stroke.get("baseWidth") or DEFAULT_BASE_WIDTH)
         return eraser_r + base_w * 0.5
 
-    def _erase_stroke(
+    def _stroke_touched_by_eraser(
+        self,
+        stroke: dict[str, Any],
+        cx: float,
+        cy: float,
+        eraser_r: float,
+    ) -> bool:
+        points = stroke.get("points") or []
+        if not points:
+            return False
+        hit_r = self._stroke_hit_radius(stroke, eraser_r)
+        hit_r_sq = hit_r * hit_r
+        for i, p in enumerate(points):
+            px, py = float(p["x"]), float(p["y"])
+            if (px - cx) ** 2 + (py - cy) ** 2 <= hit_r_sq:
+                return True
+            if i > 0:
+                ap = points[i - 1]
+                d = _dist_point_to_segment(
+                    cx,
+                    cy,
+                    float(ap["x"]),
+                    float(ap["y"]),
+                    px,
+                    py,
+                )
+                if d <= hit_r:
+                    return True
+        return False
+
+    def _erase_stroke_pixel(
         self,
         stroke: dict[str, Any],
         cx: float,
@@ -240,11 +278,29 @@ class InkOverlayWidget(QWidget):
     def _erase_at(self, x: float, y: float, pressure: float) -> bool:
         nx, ny = self._to_native(x, y)
         eraser_r = self._eraser_radius_native(pressure)
+        if self._eraser_mode == ERASER_MODE_STROKE:
+            return self._erase_at_stroke(nx, ny, eraser_r)
+        return self._erase_at_pixel(nx, ny, eraser_r)
+
+    def _erase_at_stroke(self, nx: float, ny: float, eraser_r: float) -> bool:
+        before_n = len(self._strokes)
+        new_strokes = [
+            s
+            for s in self._strokes
+            if not self._stroke_touched_by_eraser(s, nx, ny, eraser_r)
+        ]
+        if len(new_strokes) == before_n:
+            return False
+        self._strokes = new_strokes
+        self.strokes_changed.emit()
+        return True
+
+    def _erase_at_pixel(self, nx: float, ny: float, eraser_r: float) -> bool:
         before_pts = sum(len(s.get("points") or []) for s in self._strokes)
         before_n = len(self._strokes)
         new_strokes: list[dict[str, Any]] = []
         for stroke in self._strokes:
-            new_strokes.extend(self._erase_stroke(stroke, nx, ny, eraser_r))
+            new_strokes.extend(self._erase_stroke_pixel(stroke, nx, ny, eraser_r))
         after_pts = sum(len(s.get("points") or []) for s in new_strokes)
         if before_pts == after_pts and before_n == len(new_strokes):
             return False
@@ -636,3 +692,6 @@ class CropInkImageStack(QWidget):
 
     def set_drawing_enabled(self, enabled: bool) -> None:
         self.ink_overlay.set_drawing_enabled(enabled)
+
+    def set_eraser_mode(self, mode: str) -> None:
+        self.ink_overlay.set_eraser_mode(mode)

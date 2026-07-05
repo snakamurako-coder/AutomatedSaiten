@@ -3,5 +3,7 @@
   "ocr_engine": "tesseract",
   "default_orientation": "landscape",
   "tesseract_cmd": "",
-  "gemini_api_key": ""
+  "gemini_api_key": "",
+  "stylus_palm_rejection": true,
+  "stylus_eraser_mode": "pixel"
 }

@@ -6,6 +6,7 @@ from typing import Callable
 
 from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDialog,
     QFileDialog,
@@ -89,6 +90,18 @@ class SettingsDialog(QDialog):
         )
         root.addWidget(api_box)
 
+        # スタイラス
+        stylus_box = QGroupBox("スタイラス")
+        stylus_form = QFormLayout(stylus_box)
+        self.palm_rejection_check = QCheckBox("パームリジェクション（指・手のひらを無視）")
+        self.palm_rejection_check.setChecked(bool(cfg.get("stylus_palm_rejection", True)))
+        self.palm_rejection_check.setToolTip(
+            "ON: スタイラスペンのみ手書き（指・マウスは選択操作）\n"
+            "OFF: 指・タッチペン・マウスでも手書き可能"
+        )
+        stylus_form.addRow("", self.palm_rejection_check)
+        root.addWidget(stylus_box)
+
         # その他
         misc_box = QGroupBox("その他")
         misc_form = QFormLayout(misc_box)
@@ -125,7 +138,9 @@ class SettingsDialog(QDialog):
         }
 
     def _on_save(self) -> None:
-        cfg = self._collect()
+        cfg = load_config()
+        cfg.update(self._collect())
+        cfg["stylus_palm_rejection"] = self.palm_rejection_check.isChecked()
         if cfg["ocr_engine"] == "vision" and not cfg["vision_api_key"]:
             h.warn(self, "設定エラー", "OCR エンジンが Vision API の場合、Vision API キーを入力してください。")
             return

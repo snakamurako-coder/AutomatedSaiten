@@ -242,8 +242,18 @@ class MainWindow(QMainWindow):
         info = check_ocr_config()
         self.ocr_status_label.setText(info.get("message", ""))
 
+    def _refresh_stylus_prefs(self) -> None:
+        for sid in (4, MANUAL_GRADING_STEP_ID):
+            page = self.pages.get(sid)
+            if page is not None and hasattr(page, "_apply_stylus_settings"):
+                page._apply_stylus_settings()  # type: ignore[attr-defined]
+
     def _open_settings(self) -> None:
-        open_settings_dialog(self, on_saved=self._refresh_ocr_status)
+        def on_saved() -> None:
+            self._refresh_ocr_status()
+            self._refresh_stylus_prefs()
+
+        open_settings_dialog(self, on_saved=on_saved)
 
     def load_step(self, step_id: int) -> None:
         self._sync_active_test()

@@ -31,6 +31,9 @@ class SettingsDialog(tk.Toplevel):
         self.gemini_key_var = tk.StringVar(value=self._loaded.get("gemini_api_key") or "")
         self.tesseract_cmd_var = tk.StringVar(value=self._loaded.get("tesseract_cmd") or "")
         self.orientation_var = tk.StringVar(value=self._loaded.get("default_orientation") or "landscape")
+        self.palm_rejection_var = tk.BooleanVar(
+            value=bool(self._loaded.get("stylus_palm_rejection", True))
+        )
         self.status_var = tk.StringVar(value=f"設定ファイル: {CONFIG_PATH}")
 
         self._build_ui()
@@ -120,6 +123,14 @@ class SettingsDialog(tk.Toplevel):
             style="Caption.TLabel",
         ).grid(row=2, column=1, sticky="w")
 
+        stylus_frame = ttk.LabelFrame(body, text="スタイラス", padding=8)
+        stylus_frame.pack(fill="x", pady=(0, 8))
+        ttk.Checkbutton(
+            stylus_frame,
+            text="パームリジェクション（指・手のひらを無視）",
+            variable=self.palm_rejection_var,
+        ).pack(anchor="w")
+
         misc_frame = ttk.LabelFrame(body, text="その他", padding=8)
         misc_frame.pack(fill="x", pady=(0, 8))
         ttk.Label(misc_frame, text="用紙向き（デフォルト）").grid(row=0, column=0, sticky="w", pady=4)
@@ -166,7 +177,9 @@ class SettingsDialog(tk.Toplevel):
         }
 
     def _on_save(self) -> None:
-        cfg = self._collect_config()
+        cfg = load_config()
+        cfg.update(self._collect_config())
+        cfg["stylus_palm_rejection"] = bool(self.palm_rejection_var.get())
         if cfg["ocr_engine"] == "vision" and not cfg["vision_api_key"]:
             messagebox.showwarning(
                 "設定エラー",

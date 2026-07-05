@@ -30,6 +30,8 @@ def load_config() -> dict:
             "default_orientation": "landscape",
             "tesseract_cmd": "",
             "gemini_api_key": "",
+            "stylus_palm_rejection": True,
+            "stylus_eraser_mode": "pixel",
         }
     with path.open(encoding="utf-8") as f:
         return json.load(f)
