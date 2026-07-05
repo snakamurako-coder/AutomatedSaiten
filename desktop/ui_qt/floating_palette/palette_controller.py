@@ -18,6 +18,7 @@ from ui_qt.floating_palette.palette_prefs import (
     save_palette_prefs,
 )
 from ui_qt.floating_palette.tool_palette_window import ToolPaletteWindow
+from ui_qt.speech import SpeechEngine
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.stylus_prefs import load_stylus_prefs
 
@@ -77,7 +78,14 @@ class PaletteController:
         fp.edit_done_requested.connect(self._on_format_edit_done)
         fp.edit_requested.connect(self._on_format_edit)
         fp.delete_requested.connect(self._on_format_delete)
+        fp.speech_toggled.connect(self._on_format_speech_toggled)
         self.fab.clicked.connect(self._restore_from_fab)
+
+        self._speech = SpeechEngine(main_window)
+        self._speech.transcript_received.connect(self._on_speech_transcript)
+        self._speech.error.connect(self._on_speech_error)
+        self._speech.listening_changed.connect(self._on_speech_listening_changed)
+        fp.set_speech_available(SpeechEngine.is_available())
 
         self.tool_window.set_view_mode(str(prefs.get("view_mode") or "simple"))
         self.tool_window.set_brush(
@@ -131,6 +139,7 @@ class PaletteController:
                 self._clamp_tool_window()
 
     def detach(self) -> None:
+        self._stop_speech()
         self.tool_window.set_format_tab_available(False)
         self.tool_window.show_draw_tab()
         self._page = None
@@ -264,6 +273,7 @@ class PaletteController:
 
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
+            self._stop_speech()
             self.tool_window.set_format_tab_available(False)
             self.tool_window.show_draw_tab()
             return
@@ -307,6 +317,7 @@ class PaletteController:
                 stack.text_layer.update_selected_style(style)
 
     def _on_format_edit_done(self) -> None:
+        self._stop_speech()
         fw = QApplication.focusWidget()
         if fw is not None:
             fw.clearFocus()
@@ -324,6 +335,7 @@ class PaletteController:
                 return
 
     def _on_format_delete(self) -> None:
+        self._stop_speech()
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.delete_selected()
@@ -333,8 +345,50 @@ class PaletteController:
                 return
 
     def finish_all_text_editing(self) -> None:
+        if self._speech.is_listening():
+            self._stop_speech()
         for stack in self._stacks():
             stack.text_layer.finish_all_editing()
+
+    def _stop_speech(self) -> None:
+        self._speech.stop()
+        self.tool_window.format_panel.set_speech_active(False)
+
+    def _on_format_speech_toggled(self, on: bool) -> None:
+        if not on:
+            self._stop_speech()
+            return
+        if not any(stack.text_layer.selected_box() for stack in self._stacks()):
+            self.tool_window.format_panel.set_speech_active(False)
+            from ui_qt import helpers as h
+
+            h.warn(self._main, "音声入力", "テキストボックスを選択してください")
+            return
+        if not self._ensure_speech_target_editing():
+            self.tool_window.format_panel.set_speech_active(False)
+            return
+        self._speech.start()
+
+    def _ensure_speech_target_editing(self) -> bool:
+        for stack in self._stacks():
+            if stack.text_layer.selected_box():
+                stack.text_layer.edit_selected()
+                return True
+        return False
+
+    def _on_speech_transcript(self, text: str) -> None:
+        for stack in self._stacks():
+            if stack.text_layer.append_transcript_to_selected(text):
+                return
+
+    def _on_speech_error(self, message: str) -> None:
+        from ui_qt import helpers as h
+
+        self._stop_speech()
+        h.warn(self._main, "音声入力", message)
+
+    def _on_speech_listening_changed(self, on: bool) -> None:
+        self.tool_window.format_panel.set_speech_active(on)
 
     def register_stack(self, stack: CropInkImageStack) -> None:
         """新規タイル生成後に呼ぶ。"""

@@ -118,6 +118,15 @@ class TextBoxLayer(QWidget):
         for w in self._widgets.values():
             w.finish_editing()
 
+    def append_transcript_to_selected(self, text: str) -> bool:
+        if not self._selected_id:
+            return False
+        w = self._widgets.get(self._selected_id)
+        if w is None:
+            return False
+        w.append_transcript(text)
+        return True
+
     def delete_selected(self) -> None:
         if not self._selected_id:
             return

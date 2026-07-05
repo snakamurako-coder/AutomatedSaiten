@@ -221,6 +221,21 @@ class TextBoxWidget(QFrame):
     def is_editing(self) -> bool:
         return self._editing
 
+    def append_transcript(self, text: str) -> None:
+        chunk = str(text or "").strip()
+        if not chunk:
+            return
+        if not self._editing:
+            self.start_editing()
+        cur = self._editor.toPlainText()
+        new_text = (cur + chunk) if cur else chunk
+        self._editor.setPlainText(new_text)
+        cursor = self._editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self._editor.setTextCursor(cursor)
+        self._box["text"] = new_text
+        self.changed.emit()
+
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
         if editing:

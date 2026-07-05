@@ -31,6 +31,7 @@ class FormatPalettePanel(QWidget):
     edit_done_requested = Signal()
     edit_requested = Signal()
     delete_requested = Signal()
+    speech_toggled = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -136,11 +137,18 @@ class FormatPalettePanel(QWidget):
         done_btn.clicked.connect(self.edit_done_requested.emit)
         edit_btn = QPushButton("文字を編集")
         edit_btn.clicked.connect(self.edit_requested.emit)
+        self._speech_btn = QPushButton("音声入力")
+        self._speech_btn.setCheckable(True)
+        self._speech_btn.setToolTip(
+            "Web Speech API で音声をテキストに追加（要ネット・マイク・PySide6-Addons）"
+        )
+        self._speech_btn.toggled.connect(self._on_speech_toggled)
         del_btn = QPushButton("削除")
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self.delete_requested.emit)
         btn_row.addWidget(done_btn, 1)
         btn_row.addWidget(edit_btn, 1)
+        btn_row.addWidget(self._speech_btn, 1)
         btn_row.addWidget(del_btn, 1)
         root.addLayout(btn_row)
         root.addStretch()
@@ -278,3 +286,23 @@ class FormatPalettePanel(QWidget):
             }
         )
         self.style_changed.emit(resolved)
+
+    def _on_speech_toggled(self, on: bool) -> None:
+        self.speech_toggled.emit(bool(on))
+
+    def set_speech_available(self, available: bool) -> None:
+        self._speech_btn.setEnabled(bool(available))
+        if not available:
+            self.set_speech_active(False)
+
+    def set_speech_active(self, on: bool) -> None:
+        if self._speech_btn.isChecked() == on:
+            self._update_speech_label(on)
+            return
+        self._speech_btn.blockSignals(True)
+        self._speech_btn.setChecked(on)
+        self._speech_btn.blockSignals(False)
+        self._update_speech_label(on)
+
+    def _update_speech_label(self, on: bool) -> None:
+        self._speech_btn.setText("音声入力中…" if on else "音声入力")
