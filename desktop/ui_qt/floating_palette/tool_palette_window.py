@@ -72,27 +72,6 @@ class ToolPaletteWindow(QWidget):
         header_row.addWidget(self._view_btn)
         root.addLayout(header_row)
 
-        tools_row = QHBoxLayout()
-        tools_row.setSpacing(4)
-        self._tool_group = QButtonGroup(self)
-        self._tool_group.setExclusive(False)
-        self._pen_btn = self._make_tool_btn("ペン")
-        self._eraser_btn = self._make_tool_btn("消しゴム")
-        self._text_btn = self._make_tool_btn("テキスト")
-        self._pen_btn.toggled.connect(self._on_pen_toggled)
-        self._eraser_btn.toggled.connect(self._on_eraser_toggled)
-        self._text_btn.toggled.connect(self._on_text_toggled)
-        for i, btn in enumerate((self._pen_btn, self._eraser_btn, self._text_btn)):
-            self._tool_group.addButton(btn, i)
-            tools_row.addWidget(btn, 1)
-        root.addLayout(tools_row)
-
-        self._hint_label = QLabel("画像をクリックしてテキストボックスを配置")
-        self._hint_label.setObjectName("PaletteHintLabel")
-        self._hint_label.setWordWrap(True)
-        self._hint_label.hide()
-        root.addWidget(self._hint_label)
-
         self._brush_frame = QFrame()
         self._brush_frame.setObjectName("FloatingPaletteSection")
         brush_lay = QVBoxLayout(self._brush_frame)
@@ -143,6 +122,27 @@ class ToolPaletteWindow(QWidget):
         brush_lay.addWidget(self._alpha_ctrl)
         root.addWidget(self._brush_frame)
 
+        tools_row = QHBoxLayout()
+        tools_row.setSpacing(4)
+        self._tool_group = QButtonGroup(self)
+        self._tool_group.setExclusive(False)
+        self._pen_btn = self._make_tool_btn("ペン")
+        self._eraser_btn = self._make_tool_btn("消しゴム")
+        self._text_btn = self._make_tool_btn("テキスト")
+        self._pen_btn.toggled.connect(self._on_pen_toggled)
+        self._eraser_btn.toggled.connect(self._on_eraser_toggled)
+        self._text_btn.toggled.connect(self._on_text_toggled)
+        for i, btn in enumerate((self._pen_btn, self._eraser_btn, self._text_btn)):
+            self._tool_group.addButton(btn, i)
+            tools_row.addWidget(btn, 1)
+        root.addLayout(tools_row)
+
+        self._hint_label = QLabel("画像をクリックしてテキストボックスを配置")
+        self._hint_label.setObjectName("PaletteHintLabel")
+        self._hint_label.setWordWrap(True)
+        self._hint_label.hide()
+        root.addWidget(self._hint_label)
+
         self._detail_frame = QFrame()
         self._detail_frame.setObjectName("FloatingPaletteSection")
         detail_lay = QVBoxLayout(self._detail_frame)
@@ -174,6 +174,7 @@ class ToolPaletteWindow(QWidget):
         self._palm_rejection = True
         self._current_tool = TOOL_NONE
         self._current_color = PALETTE_COLORS[0]
+        self._pen_btn.setVisible(False)
         self._apply_view_mode()
         self._set_tool(TOOL_NONE, emit=False)
 
@@ -234,7 +235,6 @@ class ToolPaletteWindow(QWidget):
             self._pen_btn.blockSignals(False)
             if self._current_tool == TOOL_PEN:
                 self._maybe_clear_tool()
-        self._update_tool_ui(self._current_tool)
 
     def clear_text_tool(self) -> None:
         if not self._text_btn.isChecked():
@@ -255,10 +255,7 @@ class ToolPaletteWindow(QWidget):
         self._view_btn.setText("簡易" if detailed else "詳細")
 
     def _update_tool_ui(self, tool: str) -> None:
-        is_text = tool == TOOL_TEXT
-        is_draw = tool in (TOOL_PEN, TOOL_ERASER)
-        self._hint_label.setVisible(is_text)
-        self._brush_frame.setVisible(is_draw)
+        self._hint_label.setVisible(tool == TOOL_TEXT)
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
@@ -270,9 +267,14 @@ class ToolPaletteWindow(QWidget):
             TOOL_ERASER: self._eraser_btn,
             TOOL_TEXT: self._text_btn,
         }
-        for t, btn in mapping.items():
+        for btn in (self._pen_btn, self._eraser_btn, self._text_btn):
             btn.blockSignals(True)
-            btn.setChecked(tool == t)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+        btn = mapping.get(tool)
+        if btn:
+            btn.blockSignals(True)
+            btn.setChecked(True)
             btn.blockSignals(False)
 
     def _set_tool(self, tool: str, *, emit: bool = True) -> None:

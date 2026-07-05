@@ -92,6 +92,8 @@ class PaletteController:
     def _normalize_saved_tool(self, tool: str) -> str:
         if self._palm_rejection and tool == TOOL_PEN:
             return TOOL_NONE
+        if tool not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE):
+            return TOOL_NONE
         return tool
 
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
