@@ -7,7 +7,6 @@ from typing import Any, Protocol
 from PySide6.QtCore import QPoint, QRect, Qt
 from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QWidget
 
-from ui_qt.floating_palette.format_palette_placer import clamp_window_to_viewer
 from ui_qt.floating_palette.palette_prefs import (
     TOOL_ERASER,
     TOOL_NONE,
@@ -130,7 +129,6 @@ class PaletteController:
             self.tool_window.show()
             self.tool_window.raise_()
             self.tool_window.activateWindow()
-            self._clamp_tool_window()
 
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page
@@ -139,9 +137,6 @@ class PaletteController:
             self.tool_window.show_draw_mode()
         self._connect_stacks()
         self._apply_to_stacks()
-        if prefs := load_palette_prefs():
-            if not prefs.get("minimized"):
-                self._clamp_tool_window()
 
     def detach(self) -> None:
         self._stop_speech()
@@ -191,21 +186,6 @@ class PaletteController:
             self._tool = TOOL_NONE
         self._apply_to_stacks()
 
-    def _viewer_global_rect(self) -> QRect | None:
-        if not self._page:
-            return None
-        vp = self._page.viewer_scroll().viewport()
-        tl = vp.mapToGlobal(QPoint(0, 0))
-        return QRect(tl, vp.size())
-
-    def _clamp_tool_window(self) -> None:
-        vr = self._viewer_global_rect()
-        if vr is None:
-            return
-        geo = self.tool_window.frameGeometry()
-        pos = clamp_window_to_viewer(geo, vr)
-        self.tool_window.move(pos)
-
     def _position_fab(self) -> None:
         prefs = load_palette_prefs()
         fx, fy = prefs.get("fab_x"), prefs.get("fab_y")
@@ -218,6 +198,13 @@ class PaletteController:
             return
         self.fab.move(vr.right() - self.fab.width() - 16, vr.bottom() - self.fab.height() - 16)
 
+    def _viewer_global_rect(self) -> QRect | None:
+        if not self._page:
+            return None
+        vp = self._page.viewer_scroll().viewport()
+        tl = vp.mapToGlobal(QPoint(0, 0))
+        return QRect(tl, vp.size())
+
     def _minimize(self) -> None:
         self.tool_window.hide()
         self._position_fab()
@@ -228,7 +215,6 @@ class PaletteController:
         self.tool_window.show()
         self.tool_window.raise_()
         self.tool_window.activateWindow()
-        self._clamp_tool_window()
 
     def _connect_stacks(self) -> None:
         if not self._page:
@@ -270,25 +256,11 @@ class PaletteController:
                 stack.text_layer.clear_selection()
         self._apply_to_stacks()
 
-    def _ensure_tool_visible(self) -> None:
-        prefs = load_palette_prefs()
-        if prefs.get("minimized"):
-            self.fab.hide()
-        self.tool_window.show()
-        self.tool_window.raise_()
-        editing = any(
-            stack.text_layer.has_editing_focus() for stack in self._stacks()
-        )
-        if not editing:
-            self.tool_window.activateWindow()
-        self._clamp_tool_window()
-
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
             self._stop_speech()
             return
         self.tool_window.show_text_mode()
-        self._ensure_tool_visible()
         self.tool_window.format_panel.load_style(box.get("style") or {})
 
     def _on_stack_image_clicked(self) -> None:
@@ -327,12 +299,12 @@ class PaletteController:
 
     def _on_format_edit_done(self) -> None:
         self._stop_speech()
+        self.finish_all_text_editing()
         fw = QApplication.focusWidget()
         if fw is not None:
             fw.clearFocus()
         for stack in self._stacks():
             stack.text_layer.clear_selection()
-        self._ensure_tool_visible()
 
     def _on_format_edit(self) -> None:
         for stack in self._stacks():
@@ -345,7 +317,6 @@ class PaletteController:
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.delete_selected()
-                self._ensure_tool_visible()
                 return
 
     def finish_all_text_editing(self) -> None:

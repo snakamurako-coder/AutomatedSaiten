@@ -808,7 +808,7 @@ class StepManualPage(QWidget):
         self, result_id: int, field_id: str, items: list
     ) -> None:
         test_id = self.app.active_test_id
-        if not test_id or not field_id or not result_id:
+        if not test_id or not field_id:
             return
         try:
             save_text_annotations(test_id, result_id, field_id, items)
@@ -828,7 +828,7 @@ class StepManualPage(QWidget):
     def _save_ink_strokes(self, result_id: int, strokes: list) -> None:
         test_id = self.app.active_test_id
         fid = self._selected_field_id()
-        if not test_id or not fid or not result_id:
+        if not test_id or not fid or result_id is None:
             return
         try:
             save_ink_strokes(test_id, result_id, fid, strokes)

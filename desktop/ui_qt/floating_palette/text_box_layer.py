@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from typing import Any
 
@@ -75,11 +76,32 @@ class TextBoxLayer(QWidget):
         self.setVisible(self._show_text)
 
     def annotations(self) -> list[dict[str, Any]]:
-        return [w.box_data() for w in self._widgets.values()]
+        self._sync_annotations_from_widgets()
+        return copy.deepcopy(self._annotations)
 
     def set_annotations(self, items: list[dict[str, Any]]) -> None:
-        self._annotations = list(items or [])
+        self._annotations = copy.deepcopy(items or [])
         self._rebuild_widgets(from_widgets=False)
+
+    def _sync_annotations_from_widgets(self) -> None:
+        if not self._widgets:
+            return
+        order: list[str] = []
+        seen: set[str] = set()
+        for item in self._annotations:
+            bid = str(item.get("id") or "")
+            if bid and bid in self._widgets and bid not in seen:
+                order.append(bid)
+                seen.add(bid)
+        for bid in self._widgets:
+            if bid not in seen:
+                order.append(bid)
+                seen.add(bid)
+        self._annotations = [
+            copy.deepcopy(self._widgets[bid].box_data())
+            for bid in order
+            if bid in self._widgets
+        ]
 
     def selected_box(self) -> dict[str, Any] | None:
         if not self._selected_id:
@@ -128,34 +150,36 @@ class TextBoxLayer(QWidget):
         return True
 
     def delete_selected(self) -> None:
-        if not self._selected_id:
+        deleted_id = self._selected_id
+        if not deleted_id:
             return
-        if self._widgets:
-            self._annotations = self.annotations()
-        self._annotations = [a for a in self._annotations if str(a.get("id")) != self._selected_id]
+        self.finish_all_editing()
+        self._sync_annotations_from_widgets()
+        self._annotations = [
+            a for a in self._annotations if str(a.get("id") or "") != deleted_id
+        ]
         self._selected_id = None
         self._rebuild_widgets(from_widgets=False)
-        self._notify_changed()
+        self._persist_annotations()
         self.selection_changed.emit(None)
 
     def place_box_at(self, display_x: float, display_y: float) -> dict[str, Any]:
         nx = max(0.0, min(self._native_w, display_x * self._scale_x))
         ny = max(0.0, min(self._native_h, display_y * self._scale_y))
         box = new_text_box(nx, ny)
-        if self._widgets:
-            self._annotations = self.annotations()
-        self._annotations.append(box)
+        self._sync_annotations_from_widgets()
+        self._annotations.append(copy.deepcopy(box))
         self._rebuild_widgets(from_widgets=False)
         self.select_box(str(box["id"]))
         w = self._widgets.get(str(box["id"]))
         if w:
             QTimer.singleShot(0, w.start_editing)
-        self._notify_changed()
-        return box
+        self._persist_annotations()
+        return self._widgets[str(box["id"])].box_data() if str(box["id"]) in self._widgets else box
 
     def _rebuild_widgets(self, *, from_widgets: bool = True) -> None:
-        if from_widgets and self._widgets:
-            self._annotations = self.annotations()
+        if from_widgets:
+            self._sync_annotations_from_widgets()
         for w in list(self._widgets.values()):
             w.blockSignals(True)
             w.setParent(None)
@@ -166,7 +190,8 @@ class TextBoxLayer(QWidget):
             bid = str(item.get("id") or "")
             if not bid:
                 continue
-            w = TextBoxWidget(item, display_scale=scale, parent=self)
+            item_copy = copy.deepcopy(item)
+            w = TextBoxWidget(item_copy, display_scale=scale, parent=self)
             w.changed.connect(self._notify_changed)
             w.selected.connect(self._on_widget_selected)
             w.editing_finished.connect(self._on_widget_editing_finished)
@@ -181,10 +206,13 @@ class TextBoxLayer(QWidget):
             self.editing_finished.emit()
 
     def _notify_changed(self) -> None:
-        self._annotations = self.annotations()
+        self._sync_annotations_from_widgets()
+        self._persist_annotations()
+
+    def _persist_annotations(self) -> None:
         self.annotations_changed.emit()
         if self._on_changed:
-            self._on_changed(self._annotations)
+            self._on_changed(copy.deepcopy(self._annotations))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if self._palm_rejection and is_pen_mouse_event(event):

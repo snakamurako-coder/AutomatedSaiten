@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from PySide6.QtCore import QPoint, Qt, Signal, QTimer, QEvent
@@ -181,7 +182,10 @@ class TextBoxWidget(QFrame):
 
     def box_data(self) -> dict[str, Any]:
         self._box["text"] = self._editor.toPlainText()
-        return dict(self._box)
+        data = copy.deepcopy(self._box)
+        if isinstance(data.get("style"), dict):
+            data["style"] = resolve_text_style(data["style"])
+        return data
 
     def set_selected(self, on: bool) -> None:
         self._selected = bool(on)

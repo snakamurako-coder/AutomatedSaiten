@@ -140,7 +140,7 @@ def get_text_annotations_batch(
 ) -> dict[int, list[dict[str, Any]]]:
     if not result_ids:
         return {}
-    ids = [int(i) for i in result_ids if int(i)]
+    ids = [int(i) for i in result_ids]
     if not ids:
         return {}
     placeholders = ",".join("?" * len(ids))

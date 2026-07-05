@@ -928,9 +928,8 @@ class Step4Page(QWidget):
                 return
             test_id = self.app.active_test_id
             result_ids = [
-                int(r.get("row", {}).get("rowIndex") or 0)
+                int((r.get("row") or {}).get("rowIndex") or 0)
                 for r in results
-                if r.get("row", {}).get("rowIndex")
             ]
             ink_map = get_ink_strokes_batch(test_id, fid, result_ids) if test_id else {}
             text_map = get_text_annotations_batch(test_id, fid, result_ids) if test_id else {}
@@ -957,7 +956,7 @@ class Step4Page(QWidget):
         self, result_id: int, field_id: str, items: list
     ) -> None:
         test_id = self.app.active_test_id
-        if not test_id or not field_id or not result_id:
+        if not test_id or not field_id:
             return
         try:
             save_text_annotations(test_id, result_id, field_id, items)
@@ -978,7 +977,7 @@ class Step4Page(QWidget):
     def _save_ink_strokes(self, result_id: int, strokes: list) -> None:
         test_id = self.app.active_test_id
         fid = self._selected_field_id()
-        if not test_id or not fid or not result_id:
+        if not test_id or not fid or result_id is None:
             return
         try:
             save_ink_strokes(test_id, result_id, fid, strokes)
