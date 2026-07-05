@@ -11,6 +11,7 @@ from PySide6.QtWidgets import QWidget
 
 from models.text_annotation_repo import new_text_box
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
+from ui_qt.stylus_overlay import is_stylus_tablet_event
 
 
 class TextBoxLayer(QWidget):
@@ -42,6 +43,7 @@ class TextBoxLayer(QWidget):
         self._selected_id: str | None = None
         self._placement_mode = False
         self._show_text = True
+        self._palm_rejection = True
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TabletTracking, True)
         self.setMouseTracking(True)
@@ -64,6 +66,9 @@ class TextBoxLayer(QWidget):
             self.setCursor(Qt.CursorShape.CrossCursor)
         else:
             self.unsetCursor()
+
+    def set_palm_rejection(self, enabled: bool) -> None:
+        self._palm_rejection = bool(enabled)
 
     def set_show_text(self, visible: bool) -> None:
         self._show_text = bool(visible)
@@ -178,6 +183,9 @@ class TextBoxLayer(QWidget):
         super().mousePressEvent(event)
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
+        if self._palm_rejection and is_stylus_tablet_event(event):
+            event.ignore()
+            return
         if self._placement_mode and event.type() == QEvent.Type.TabletPress:
             pos = event.position()
             lx, ly = int(pos.x()), int(pos.y())

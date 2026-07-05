@@ -136,6 +136,7 @@ class TextBoxWidget(QFrame):
         body_lay.setContentsMargins(_INNER_PAD_PX, _INNER_PAD_PX, _INNER_PAD_PX, _INNER_PAD_PX)
         body_lay.setSpacing(0)
         self._editor = QPlainTextEdit(str(box.get("text") or ""))
+        self._editor.setObjectName("TextBoxEditor")
         self._editor.setFrameShape(QFrame.NoFrame)
         self._editor.setAutoFillBackground(False)
         self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -147,7 +148,9 @@ class TextBoxWidget(QFrame):
         self._editor.textChanged.connect(self._on_text_changed)
         self._editor.installEventFilter(self)
         self._display_label = QLabel(str(box.get("text") or ""))
+        self._display_label.setObjectName("TextBoxDisplayLabel")
         self._display_label.setWordWrap(True)
+        self._display_label.setAutoFillBackground(False)
         self._display_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._display_label.setContentsMargins(0, 0, 0, 0)
         self._display_label.setStyleSheet("background: transparent; border: none; padding: 0px; margin: 0px;")
@@ -213,6 +216,7 @@ class TextBoxWidget(QFrame):
             self._setup_tight_document()
         else:
             text = self._editor.toPlainText()
+            self._box["text"] = text
             self._display_label.setText(text)
             self._text_stack.setCurrentWidget(self._display_label)
         self._apply_style()
@@ -290,18 +294,29 @@ class TextBoxWidget(QFrame):
         pal.setColor(QPalette.ColorRole.Text, tc_color)
         pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
         self._editor.setPalette(pal)
-        self._editor.setStyleSheet(
-            f"QPlainTextEdit {{ color: {tc}; background: transparent; border: none; "
-            f"padding: 0px; margin: 0px; }}"
+        editor_css = (
+            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: transparent; "
+            f"border: none; padding: 0px; margin: 0px; }}"
         )
-        self._display_label.setStyleSheet(
-            f"color: {tc}; background: transparent; border: none; padding: 0px; margin: 0px;"
+        self._editor.setStyleSheet(editor_css)
+        self._editor.viewport().setStyleSheet("background: transparent; border: none;")
+        label_css = (
+            f"QLabel#TextBoxDisplayLabel {{ color: {tc}; background: transparent; "
+            f"border: none; padding: 0px; margin: 0px; }}"
         )
+        self._display_label.setStyleSheet(label_css)
+        label_pal = self._display_label.palette()
+        label_pal.setColor(QPalette.ColorRole.WindowText, tc_color)
+        self._display_label.setPalette(label_pal)
         align = str(st.get("align") or "left")
         self._set_editor_alignment(align)
         self._set_label_alignment(align)
+        self._sync_display_text()
+
+    def _sync_display_text(self) -> None:
+        text = str(self._box.get("text") if self._box.get("text") is not None else self._editor.toPlainText())
         if not self._editing:
-            self._display_label.setText(self._editor.toPlainText())
+            self._display_label.setText(text)
 
     def _setup_tight_document(self) -> None:
         """行間・余白を詰める（textChanged を発火させないよう blockSignals 使用）。"""

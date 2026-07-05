@@ -199,7 +199,7 @@ class InkOverlayWidget(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, m == TOOL_TEXT)
 
     def _stylus_may_draw(self) -> bool:
-        if self._tool_mode == TOOL_TEXT:
+        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
             return False
         if self._palm_rejection:
             return True
@@ -456,7 +456,7 @@ class InkOverlayWidget(QWidget):
         return self._should_handle_tablet(event)
 
     def _should_erase_tablet(self, event: QTabletEvent) -> bool:
-        if self._tool_mode == TOOL_TEXT:
+        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
             return False
         if not self._stylus_may_draw() and not self._software_eraser:
             return False
@@ -533,7 +533,7 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
-        if self._tool_mode == TOOL_TEXT:
+        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
             event.ignore()
             return
         if self._should_erase_tablet(event):
@@ -582,7 +582,7 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
-        if self._tool_mode == TOOL_TEXT:
+        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
             event.ignore()
             return
         points = event.points()
@@ -808,6 +808,7 @@ class CropInkImageStack(QWidget):
     def set_palm_rejection(self, enabled: bool) -> None:
         self._palm_rejection = bool(enabled)
         self.ink_overlay.set_palm_rejection(enabled)
+        self.text_layer.set_palm_rejection(enabled)
 
     def set_show_ink(self, visible: bool) -> None:
         self._show_ink = bool(visible)

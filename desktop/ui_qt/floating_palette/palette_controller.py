@@ -296,6 +296,7 @@ class PaletteController:
         fw = QApplication.focusWidget()
         if fw is not None:
             fw.clearFocus()
+        self.tool_window.clear_text_tool()
         for stack in self._stacks():
             stack.text_layer.clear_selection()
         self.tool_window.set_format_tab_available(False)
