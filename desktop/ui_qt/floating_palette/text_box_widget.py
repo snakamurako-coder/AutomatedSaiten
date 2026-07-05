@@ -123,6 +123,7 @@ class TextBoxWidget(QFrame):
         self._scale = max(0.01, float(display_scale))
         self._selected = False
         self._editing = False
+        self._syncing_text = False
         self._apply_geometry()
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
         outer = QVBoxLayout(self)
@@ -167,6 +168,7 @@ class TextBoxWidget(QFrame):
         self._resize.resized.connect(self._on_resize_drag)
         self._move_bar.hide()
         self._resize.hide()
+        self._setup_tight_document()
         self._apply_style()
         self._layout_handle()
 
@@ -208,7 +210,7 @@ class TextBoxWidget(QFrame):
         self._editing = bool(editing)
         if editing:
             self._text_stack.setCurrentWidget(self._editor)
-            self._apply_tight_block_format()
+            self._setup_tight_document()
         else:
             text = self._editor.toPlainText()
             self._display_label.setText(text)
@@ -298,21 +300,28 @@ class TextBoxWidget(QFrame):
         align = str(st.get("align") or "left")
         self._set_editor_alignment(align)
         self._set_label_alignment(align)
-        self._apply_tight_block_format()
         if not self._editing:
             self._display_label.setText(self._editor.toPlainText())
 
-    def _apply_tight_block_format(self) -> None:
+    def _setup_tight_document(self) -> None:
+        """行間・余白を詰める（textChanged を発火させないよう blockSignals 使用）。"""
         doc = self._editor.document()
         doc.setDocumentMargin(0)
-        cursor = QTextCursor(doc)
-        cursor.select(QTextCursor.SelectionType.Document)
         block_fmt = QTextBlockFormat()
         block_fmt.setTopMargin(0)
         block_fmt.setBottomMargin(0)
-        block_fmt.setLineHeight(100.0, int(QTextBlockFormat.LineHeightTypes.ProportionalHeight.value))
-        cursor.mergeBlockFormat(block_fmt)
-        cursor.clearSelection()
+        block_fmt.setLineHeight(
+            100.0, int(QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+        )
+        self._editor.blockSignals(True)
+        try:
+            block = doc.firstBlock()
+            while block.isValid():
+                cursor = QTextCursor(block)
+                cursor.mergeBlockFormat(block_fmt)
+                block = block.next()
+        finally:
+            self._editor.blockSignals(False)
 
     def _set_label_alignment(self, align: str) -> None:
         if align == "center":
@@ -338,8 +347,9 @@ class TextBoxWidget(QFrame):
         self._apply_style()
 
     def _on_text_changed(self) -> None:
+        if self._syncing_text:
+            return
         self._box["text"] = self._editor.toPlainText()
-        self._apply_tight_block_format()
         self.changed.emit()
 
     def _on_move_drag(self, delta: QPoint) -> None:
