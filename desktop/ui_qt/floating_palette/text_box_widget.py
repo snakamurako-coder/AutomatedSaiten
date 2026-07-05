@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import QPoint, Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import QColor, QFont, QMouseEvent
 from PySide6.QtWidgets import (
     QFrame,
@@ -104,6 +104,7 @@ class TextBoxWidget(QFrame):
 
     changed = Signal()
     selected = Signal(str)
+    editing_finished = Signal(str)
     request_edit = Signal(str)
     request_delete = Signal(str)
 
@@ -131,6 +132,7 @@ class TextBoxWidget(QFrame):
         self._editor = QPlainTextEdit(str(box.get("text") or ""))
         self._editor.setFrameShape(QFrame.NoFrame)
         self._editor.textChanged.connect(self._on_text_changed)
+        self._editor.installEventFilter(self)
         body_lay.addWidget(self._editor)
         outer.addWidget(self._body, 1)
 
@@ -165,7 +167,20 @@ class TextBoxWidget(QFrame):
         return self.frameGeometry().translated(self.mapToGlobal(QPoint(0, 0)).toPoint())
 
     def start_editing(self) -> None:
-        self._editor.setFocus()
+        self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
+        QTimer.singleShot(0, self._editor.setFocus)
+
+    def is_editing(self) -> bool:
+        return self._editor.hasFocus()
+
+    def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if watched is self._editor and event.type() == QEvent.Type.FocusOut:
+            QTimer.singleShot(0, self._check_editing_finished)
+        return super().eventFilter(watched, event)
+
+    def _check_editing_finished(self) -> None:
+        if not self._editor.hasFocus():
+            self.editing_finished.emit(self.box_id)
 
     def _style(self) -> dict[str, Any]:
         st = self._box.get("style") or {}

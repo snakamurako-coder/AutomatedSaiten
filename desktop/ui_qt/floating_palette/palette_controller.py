@@ -203,11 +203,11 @@ class PaletteController:
             except (RuntimeError, TypeError):
                 pass
             try:
-                stack.text_layer.box_placed.disconnect(self._on_text_box_placed)
+                stack.image_clicked.disconnect(self._on_stack_image_clicked)
             except (RuntimeError, TypeError):
                 pass
             stack.text_layer.selection_changed.connect(self._on_text_selection)
-            stack.text_layer.box_placed.connect(self._on_text_box_placed)
+            stack.image_clicked.connect(self._on_stack_image_clicked)
 
     def _stacks(self) -> list[CropInkImageStack]:
         if not self._page:
@@ -229,29 +229,11 @@ class PaletteController:
         if tool != TOOL_TEXT:
             self.format_window.hide_palette()
 
-    def _on_text_box_placed(self) -> None:
-        self.tool_window.clear_text_tool()
-
-    def _on_brush_changed(self, color: str, width: float, alpha: float) -> None:
-        for stack in self._stacks():
-            stack.set_brush(color, width, alpha)
-
-    def _on_eraser_mode_changed(self, mode: str) -> None:
-        self._eraser_mode = str(mode)
-        from ui_qt.stylus_prefs import save_stylus_eraser_mode
-
-        save_stylus_eraser_mode(self._eraser_mode)
-        for stack in self._stacks():
-            stack.set_eraser_mode(mode)
-
-    def _on_show_ink_changed(self, visible: bool) -> None:
-        self._show_ink = bool(visible)
-        for stack in self._stacks():
-            stack.set_show_ink(visible)
-
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
             self.format_window.hide_palette()
+            if self._tool == TOOL_TEXT:
+                self.tool_window.clear_text_tool()
             return
         st = box.get("style") or {}
         self.format_window.load_style(st)
@@ -271,6 +253,30 @@ class PaletteController:
                         )
                         break
                 break
+
+    def _on_stack_image_clicked(self) -> None:
+        if self._tool != TOOL_TEXT:
+            return
+        self.tool_window.clear_text_tool()
+        for stack in self._stacks():
+            stack.text_layer.clear_selection()
+
+    def _on_brush_changed(self, color: str, width: float, alpha: float) -> None:
+        for stack in self._stacks():
+            stack.set_brush(color, width, alpha)
+
+    def _on_eraser_mode_changed(self, mode: str) -> None:
+        self._eraser_mode = str(mode)
+        from ui_qt.stylus_prefs import save_stylus_eraser_mode
+
+        save_stylus_eraser_mode(self._eraser_mode)
+        for stack in self._stacks():
+            stack.set_eraser_mode(mode)
+
+    def _on_show_ink_changed(self, visible: bool) -> None:
+        self._show_ink = bool(visible)
+        for stack in self._stacks():
+            stack.set_show_ink(visible)
 
     def _on_format_style(self, style: dict[str, Any]) -> None:
         for stack in self._stacks():
@@ -293,7 +299,7 @@ class PaletteController:
     def register_stack(self, stack: CropInkImageStack) -> None:
         """新規タイル生成後に呼ぶ。"""
         stack.text_layer.selection_changed.connect(self._on_text_selection)
-        stack.text_layer.box_placed.connect(self._on_text_box_placed)
+        stack.image_clicked.connect(self._on_stack_image_clicked)
         color, width, alpha = self.tool_window.current_brush()
         stack.set_palm_rejection(self._palm_rejection)
         stack.set_show_ink(self._show_ink)

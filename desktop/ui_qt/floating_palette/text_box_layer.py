@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal, QEvent
+from PySide6.QtCore import Qt, Signal, QEvent, QTimer
 from PySide6.QtGui import QMouseEvent, QTabletEvent
 from PySide6.QtWidgets import QWidget
 
@@ -18,7 +18,7 @@ class TextBoxLayer(QWidget):
 
     annotations_changed = Signal()
     selection_changed = Signal(object)  # box dict | None
-    box_placed = Signal()
+    editing_finished = Signal()
 
     def __init__(
         self,
@@ -77,6 +77,12 @@ class TextBoxLayer(QWidget):
         w = self._widgets.get(self._selected_id)
         return w.box_data() if w else None
 
+    def has_editing_focus(self) -> bool:
+        return any(w.is_editing() for w in self._widgets.values())
+
+    def point_on_any_box(self, display_x: int, display_y: int) -> bool:
+        return self.childAt(display_x, display_y) is not None
+
     def select_box(self, box_id: str | None) -> None:
         self._selected_id = box_id or None
         for bid, w in self._widgets.items():
@@ -116,9 +122,8 @@ class TextBoxLayer(QWidget):
         self.select_box(str(box["id"]))
         w = self._widgets.get(str(box["id"]))
         if w:
-            w.start_editing()
+            QTimer.singleShot(0, w.start_editing)
         self._notify_changed()
-        self.box_placed.emit()
         return box
 
     def _rebuild_widgets(self) -> None:
@@ -136,11 +141,16 @@ class TextBoxLayer(QWidget):
             w = TextBoxWidget(item, display_scale=scale, parent=self)
             w.changed.connect(self._notify_changed)
             w.selected.connect(self._on_widget_selected)
+            w.editing_finished.connect(self._on_widget_editing_finished)
             w.set_selected(bid == self._selected_id)
             self._widgets[bid] = w
 
     def _on_widget_selected(self, box_id: str) -> None:
         self.select_box(box_id)
+
+    def _on_widget_editing_finished(self, _box_id: str) -> None:
+        if not self.has_editing_focus():
+            self.editing_finished.emit()
 
     def _notify_changed(self) -> None:
         self._annotations = self.annotations()

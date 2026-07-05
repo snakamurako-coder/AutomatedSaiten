@@ -769,7 +769,7 @@ class CropInkImageStack(QWidget):
         gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
         local = self.text_layer.mapFromGlobal(gp)
         lx, ly = int(local.x()), int(local.y())
-        if self.text_layer.childAt(lx, ly) is not None:
+        if self.text_layer.point_on_any_box(lx, ly):
             return False
         self.text_layer.place_box_at(float(lx), float(ly))
         return True
