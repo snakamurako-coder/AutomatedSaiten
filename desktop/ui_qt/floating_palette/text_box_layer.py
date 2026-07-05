@@ -18,6 +18,7 @@ class TextBoxLayer(QWidget):
 
     annotations_changed = Signal()
     selection_changed = Signal(object)  # box dict | None
+    box_placed = Signal()
 
     def __init__(
         self,
@@ -117,6 +118,7 @@ class TextBoxLayer(QWidget):
         if w:
             w.start_editing()
         self._notify_changed()
+        self.box_placed.emit()
         return box
 
     def _rebuild_widgets(self) -> None:

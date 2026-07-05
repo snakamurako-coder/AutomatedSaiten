@@ -11,6 +11,7 @@ from ui_qt.floating_palette.format_palette_placer import clamp_window_to_viewer
 from ui_qt.floating_palette.format_palette_window import FormatPaletteWindow
 from ui_qt.floating_palette.palette_prefs import (
     TOOL_ERASER,
+    TOOL_NONE,
     TOOL_PEN,
     TOOL_TEXT,
     load_palette_prefs,
@@ -52,15 +53,18 @@ class PaletteController:
         self._main = main_window
         self._page: AnnotationPage | None = None
         self._step_id: int | None = None
-        self._tool = TOOL_PEN
+        self._tool = TOOL_NONE
         self._show_ink = True
-        self._eraser_mode = load_stylus_prefs()["eraser_mode"]
+        stylus = load_stylus_prefs()
+        self._palm_rejection = stylus["palm_rejection"]
+        self._eraser_mode = stylus["eraser_mode"]
         prefs = load_palette_prefs()
 
         self.tool_window = ToolPaletteWindow(main_window)
         self.format_window = FormatPaletteWindow(main_window)
         self.fab = PaletteFabButton(main_window)
         self.tool_window.set_eraser_mode(self._eraser_mode)
+        self.tool_window.set_palm_rejection(self._palm_rejection)
 
         self.tool_window.tool_changed.connect(self._on_tool_changed)
         self.tool_window.brush_changed.connect(self._on_brush_changed)
@@ -78,12 +82,17 @@ class PaletteController:
             float(prefs.get("last_width") or 2.5),
             float(prefs.get("last_alpha") or 1.0),
         )
-        self.tool_window.set_tool(str(prefs.get("last_tool") or TOOL_PEN))
+        self.tool_window.set_tool(self._normalize_saved_tool(str(prefs.get("last_tool") or TOOL_NONE)))
         if prefs.get("minimized"):
             self._minimize()
         else:
             x, y = int(prefs.get("x") or 100), int(prefs.get("y") or 100)
             self.tool_window.move(x, y)
+
+    def _normalize_saved_tool(self, tool: str) -> str:
+        if self._palm_rejection and tool == TOOL_PEN:
+            return TOOL_NONE
+        return tool
 
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page
@@ -136,6 +145,13 @@ class PaletteController:
         )
 
     def apply_config(self) -> None:
+        stylus = load_stylus_prefs()
+        self._palm_rejection = stylus["palm_rejection"]
+        self._eraser_mode = stylus["eraser_mode"]
+        self.tool_window.set_palm_rejection(self._palm_rejection)
+        self.tool_window.set_eraser_mode(self._eraser_mode)
+        if self._palm_rejection and self._tool == TOOL_PEN:
+            self.tool_window.set_tool(TOOL_NONE)
         self._apply_to_stacks()
 
     def _viewer_global_rect(self) -> QRect | None:
@@ -184,7 +200,12 @@ class PaletteController:
                 stack.text_layer.selection_changed.disconnect(self._on_text_selection)
             except (RuntimeError, TypeError):
                 pass
+            try:
+                stack.text_layer.box_placed.disconnect(self._on_text_box_placed)
+            except (RuntimeError, TypeError):
+                pass
             stack.text_layer.selection_changed.connect(self._on_text_selection)
+            stack.text_layer.box_placed.connect(self._on_text_box_placed)
 
     def _stacks(self) -> list[CropInkImageStack]:
         if not self._page:
@@ -192,21 +213,22 @@ class PaletteController:
         return self._page.palette_ink_stacks()
 
     def _apply_to_stacks(self) -> None:
-        stylus = load_stylus_prefs()
         color, width, alpha = self.tool_window.current_brush()
         for stack in self._stacks():
-            stack.set_palm_rejection(stylus["palm_rejection"])
+            stack.set_palm_rejection(self._palm_rejection)
             stack.set_show_ink(self._show_ink)
             stack.set_eraser_mode(self._eraser_mode)
             stack.set_tool_mode(self._tool)
             stack.set_brush(color, width, alpha)
-            stack.text_layer.set_placement_mode(self._tool == TOOL_TEXT)
 
     def _on_tool_changed(self, tool: str) -> None:
         self._tool = tool
         self._apply_to_stacks()
         if tool != TOOL_TEXT:
             self.format_window.hide_palette()
+
+    def _on_text_box_placed(self) -> None:
+        self.tool_window.clear_text_tool()
 
     def _on_brush_changed(self, color: str, width: float, alpha: float) -> None:
         for stack in self._stacks():
@@ -269,11 +291,10 @@ class PaletteController:
     def register_stack(self, stack: CropInkImageStack) -> None:
         """新規タイル生成後に呼ぶ。"""
         stack.text_layer.selection_changed.connect(self._on_text_selection)
-        stylus = load_stylus_prefs()
+        stack.text_layer.box_placed.connect(self._on_text_box_placed)
         color, width, alpha = self.tool_window.current_brush()
-        stack.set_palm_rejection(stylus["palm_rejection"])
+        stack.set_palm_rejection(self._palm_rejection)
         stack.set_show_ink(self._show_ink)
         stack.set_eraser_mode(self._eraser_mode)
         stack.set_tool_mode(self._tool)
         stack.set_brush(color, width, alpha)
-        stack.text_layer.set_placement_mode(self._tool == TOOL_TEXT)

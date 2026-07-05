@@ -29,6 +29,7 @@ ERASER_MODE_STROKE = "stroke"
 TOOL_PEN = "pen"
 TOOL_ERASER = "eraser"
 TOOL_TEXT = "text"
+TOOL_NONE = "none"
 
 # PySide6 では pointerType は QTabletEvent ではなく QPointingDevice 側の列挙
 _Pen = QPointingDevice.PointerType.Pen
@@ -158,7 +159,7 @@ class InkOverlayWidget(QWidget):
         self._pen_active = False
         self._eraser_active = False
         self._eraser_mode = ERASER_MODE_PIXEL
-        self._tool_mode = TOOL_PEN
+        self._tool_mode = TOOL_NONE
         self._brush_color = DEFAULT_INK_COLOR
         self._brush_width = DEFAULT_BASE_WIDTH
         self._brush_alpha = 1.0
@@ -190,13 +191,26 @@ class InkOverlayWidget(QWidget):
         self._eraser_mode = m if m in (ERASER_MODE_PIXEL, ERASER_MODE_STROKE) else ERASER_MODE_PIXEL
 
     def set_tool_mode(self, mode: str) -> None:
-        m = str(mode or TOOL_PEN).strip().lower()
-        if m not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT):
-            m = TOOL_PEN
+        m = str(mode or TOOL_NONE).strip().lower()
+        if m not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE):
+            m = TOOL_NONE
         self._tool_mode = m
         self._software_eraser = m == TOOL_ERASER
-        self._drawing_enabled = m in (TOOL_PEN, TOOL_ERASER)
         self.setAttribute(Qt.WA_TransparentForMouseEvents, m == TOOL_TEXT)
+
+    def _stylus_may_draw(self) -> bool:
+        if self._tool_mode == TOOL_TEXT:
+            return False
+        if self._palm_rejection:
+            return True
+        return self._tool_mode in (TOOL_PEN, TOOL_ERASER)
+
+    def _pointer_may_draw(self) -> bool:
+        if self._tool_mode == TOOL_TEXT:
+            return False
+        if self._palm_rejection:
+            return False
+        return self._tool_mode in (TOOL_PEN, TOOL_ERASER)
 
     def _emit_click_through(self) -> None:
         if self._tool_mode != TOOL_TEXT:
@@ -424,7 +438,7 @@ class InkOverlayWidget(QWidget):
             painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
 
     def _should_handle_tablet(self, event: QTabletEvent) -> bool:
-        if not self._drawing_enabled:
+        if not self._stylus_may_draw():
             return False
         if is_eraser_tablet_event(event):
             return True
@@ -432,6 +446,8 @@ class InkOverlayWidget(QWidget):
             if is_finger_tablet_event(event):
                 return False
             return is_stylus_tablet_event(event)
+        if self._tool_mode not in (TOOL_PEN, TOOL_ERASER):
+            return False
         return True
 
     def _should_draw_tablet(self, event: QTabletEvent) -> bool:
@@ -440,21 +456,23 @@ class InkOverlayWidget(QWidget):
         return self._should_handle_tablet(event)
 
     def _should_erase_tablet(self, event: QTabletEvent) -> bool:
-        if not self._drawing_enabled and not self._software_eraser:
+        if self._tool_mode == TOOL_TEXT:
+            return False
+        if not self._stylus_may_draw() and not self._software_eraser:
             return False
         return is_eraser_tablet_event(event) or self._eraser_active or self._software_eraser
 
     def _should_draw_mouse(self, event: QMouseEvent) -> bool:
-        if not self._drawing_enabled:
+        if not self._pointer_may_draw():
             return False
         if is_eraser_mouse_event(event) or self._software_eraser:
             return False
-        if self._palm_rejection:
-            return is_pen_mouse_event(event) or self._pen_active
         return True
 
     def _should_erase_mouse(self, event: QMouseEvent) -> bool:
-        if not self._drawing_enabled and not self._software_eraser:
+        if self._tool_mode == TOOL_TEXT:
+            return False
+        if not self._pointer_may_draw() and not self._software_eraser:
             return False
         return is_eraser_mouse_event(event) or self._eraser_active or self._software_eraser
 
@@ -564,14 +582,19 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
-        if self._palm_rejection or not self._drawing_enabled:
-            if self._palm_rejection:
-                points = event.points()
-                if points and points[0].state() == Qt.TouchPointState.TouchPointPressed:
-                    self._emit_click_through()
+        if self._tool_mode == TOOL_TEXT:
             event.ignore()
             return
         points = event.points()
+        pressed = (
+            points
+            and points[0].state() == Qt.TouchPointState.TouchPointPressed
+        )
+        if self._palm_rejection or not self._pointer_may_draw():
+            if pressed:
+                self._emit_click_through()
+            event.ignore()
+            return
         if not points:
             event.ignore()
             return
@@ -604,12 +627,11 @@ class InkOverlayWidget(QWidget):
             self._handle_mouse_eraser(event)
             return
         if not self._should_draw_mouse(event):
-            if self._tool_mode != TOOL_TEXT:
-                self._emit_click_through()
+            self._emit_click_through()
             event.ignore()
             return
         self._eraser_active = False
-        self._pen_active = is_pen_mouse_event(event) or not self._palm_rejection
+        self._pen_active = True
         self._start_stroke(event.position().x(), event.position().y(), _event_pressure(event))
         self.update()
         event.accept()
@@ -675,7 +697,7 @@ class CropInkImageStack(QWidget):
         self._on_annotations_changed = on_annotations_changed
         self._palm_rejection = True
         self._show_ink = True
-        self._tool_mode = TOOL_PEN
+        self._tool_mode = TOOL_NONE
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)

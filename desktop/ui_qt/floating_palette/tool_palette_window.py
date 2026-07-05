@@ -19,6 +19,7 @@ from ui_qt.crop_widgets import SliderSpinControls
 from ui_qt.floating_palette.palette_prefs import (
     PALETTE_COLORS,
     TOOL_ERASER,
+    TOOL_NONE,
     TOOL_PEN,
     TOOL_TEXT,
     VIEW_DETAILED,
@@ -74,13 +75,16 @@ class ToolPaletteWindow(QWidget):
         tools_row = QHBoxLayout()
         tools_row.setSpacing(4)
         self._tool_group = QButtonGroup(self)
+        self._tool_group.setExclusive(False)
         self._pen_btn = self._make_tool_btn("ペン")
         self._eraser_btn = self._make_tool_btn("消しゴム")
         self._text_btn = self._make_tool_btn("テキスト")
+        self._pen_btn.toggled.connect(self._on_pen_toggled)
+        self._eraser_btn.toggled.connect(self._on_eraser_toggled)
+        self._text_btn.toggled.connect(self._on_text_toggled)
         for i, btn in enumerate((self._pen_btn, self._eraser_btn, self._text_btn)):
             self._tool_group.addButton(btn, i)
             tools_row.addWidget(btn, 1)
-        self._tool_group.idClicked.connect(self._on_tool_id)
         root.addLayout(tools_row)
 
         self._hint_label = QLabel("画像をクリックしてテキストボックスを配置")
@@ -167,16 +171,78 @@ class ToolPaletteWindow(QWidget):
         root.addStretch()
 
         self._view_mode = VIEW_SIMPLE
-        self._current_tool = TOOL_PEN
+        self._palm_rejection = True
+        self._current_tool = TOOL_NONE
         self._current_color = PALETTE_COLORS[0]
         self._apply_view_mode()
-        self._set_tool(TOOL_PEN)
+        self._set_tool(TOOL_NONE, emit=False)
 
     def _make_tool_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)
         btn.setObjectName("ToolSegmentBtn")
         btn.setCheckable(True)
         return btn
+
+    def _tool_toggle_buttons(self) -> tuple[QPushButton, ...]:
+        if self._palm_rejection:
+            return (self._eraser_btn, self._text_btn)
+        return (self._pen_btn, self._eraser_btn, self._text_btn)
+
+    def _uncheck_other_tools(self, active: QPushButton) -> None:
+        for btn in self._tool_toggle_buttons():
+            if btn is active:
+                continue
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+
+    def _on_pen_toggled(self, checked: bool) -> None:
+        if checked:
+            self._uncheck_other_tools(self._pen_btn)
+            self._set_tool(TOOL_PEN)
+        else:
+            self._maybe_clear_tool()
+
+    def _on_eraser_toggled(self, checked: bool) -> None:
+        if checked:
+            self._uncheck_other_tools(self._eraser_btn)
+            self._set_tool(TOOL_ERASER)
+        else:
+            self._maybe_clear_tool()
+
+    def _on_text_toggled(self, checked: bool) -> None:
+        if checked:
+            self._uncheck_other_tools(self._text_btn)
+            self._set_tool(TOOL_TEXT)
+        else:
+            self._maybe_clear_tool()
+
+    def _maybe_clear_tool(self) -> None:
+        if any(btn.isChecked() for btn in self._tool_toggle_buttons()):
+            return
+        self._set_tool(TOOL_NONE)
+
+    def set_palm_rejection(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self._palm_rejection == enabled:
+            return
+        self._palm_rejection = enabled
+        self._pen_btn.setVisible(not enabled)
+        if enabled:
+            self._pen_btn.blockSignals(True)
+            self._pen_btn.setChecked(False)
+            self._pen_btn.blockSignals(False)
+            if self._current_tool == TOOL_PEN:
+                self._maybe_clear_tool()
+        self._update_tool_ui(self._current_tool)
+
+    def clear_text_tool(self) -> None:
+        if not self._text_btn.isChecked():
+            return
+        self._text_btn.blockSignals(True)
+        self._text_btn.setChecked(False)
+        self._text_btn.blockSignals(False)
+        self._maybe_clear_tool()
 
     def _toggle_view(self) -> None:
         self._view_mode = VIEW_DETAILED if self._view_mode == VIEW_SIMPLE else VIEW_SIMPLE
@@ -190,26 +256,34 @@ class ToolPaletteWindow(QWidget):
 
     def _update_tool_ui(self, tool: str) -> None:
         is_text = tool == TOOL_TEXT
+        is_draw = tool in (TOOL_PEN, TOOL_ERASER)
         self._hint_label.setVisible(is_text)
-        self._brush_frame.setVisible(not is_text)
+        self._brush_frame.setVisible(is_draw)
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
         self._apply_view_mode()
 
-    def _on_tool_id(self, tool_id: int) -> None:
-        tools = (TOOL_PEN, TOOL_ERASER, TOOL_TEXT)
-        if 0 <= tool_id < len(tools):
-            self._set_tool(tools[tool_id])
+    def _sync_tool_buttons(self, tool: str) -> None:
+        mapping = {
+            TOOL_PEN: self._pen_btn,
+            TOOL_ERASER: self._eraser_btn,
+            TOOL_TEXT: self._text_btn,
+        }
+        for t, btn in mapping.items():
+            btn.blockSignals(True)
+            btn.setChecked(tool == t)
+            btn.blockSignals(False)
 
-    def _set_tool(self, tool: str) -> None:
+    def _set_tool(self, tool: str, *, emit: bool = True) -> None:
+        tool = tool if tool in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE) else TOOL_NONE
+        if self._palm_rejection and tool == TOOL_PEN:
+            tool = TOOL_NONE
         self._current_tool = tool
-        mapping = {TOOL_PEN: self._pen_btn, TOOL_ERASER: self._eraser_btn, TOOL_TEXT: self._text_btn}
-        btn = mapping.get(tool)
-        if btn:
-            btn.setChecked(True)
+        self._sync_tool_buttons(tool)
         self._update_tool_ui(tool)
-        self.tool_changed.emit(tool)
+        if emit:
+            self.tool_changed.emit(tool)
 
     def set_tool(self, tool: str) -> None:
         self._set_tool(tool)
@@ -254,3 +328,6 @@ class ToolPaletteWindow(QWidget):
             float(self._width_ctrl.value()),
             float(self._alpha_ctrl.value()) / 100.0,
         )
+
+    def current_tool(self) -> str:
+        return self._current_tool

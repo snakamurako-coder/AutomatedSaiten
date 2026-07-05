@@ -12,6 +12,7 @@ VIEW_DETAILED = "detailed"
 TOOL_PEN = "pen"
 TOOL_ERASER = "eraser"
 TOOL_TEXT = "text"
+TOOL_NONE = "none"
 
 PALETTE_COLORS = ("#111827", "#dc2626", "#2563eb", "#16a34a", "#ea580c", "#9333ea")
 
@@ -25,7 +26,7 @@ _DEFAULTS: dict[str, Any] = {
     "last_color": "#111827",
     "last_width": 2.5,
     "last_alpha": 1.0,
-    "last_tool": TOOL_PEN,
+    "last_tool": TOOL_NONE,
 }
 
 
@@ -37,8 +38,8 @@ def load_palette_prefs() -> dict[str, Any]:
         out.update(raw)
     vm = str(out.get("view_mode") or VIEW_SIMPLE)
     out["view_mode"] = vm if vm in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
-    lt = str(out.get("last_tool") or TOOL_PEN)
-    out["last_tool"] = lt if lt in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT) else TOOL_PEN
+    lt = str(out.get("last_tool") or TOOL_NONE)
+    out["last_tool"] = lt if lt in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE) else TOOL_NONE
     return out
 
 
