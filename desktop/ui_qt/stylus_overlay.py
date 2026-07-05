@@ -164,6 +164,7 @@ class InkOverlayWidget(QWidget):
         self._brush_width = DEFAULT_BASE_WIDTH
         self._brush_alpha = 1.0
         self._software_eraser = False
+        self._before_draw_cb: Callable[[], None] | None = None
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setAttribute(Qt.WA_TabletTracking, True)
         self.setAutoFillBackground(False)
@@ -222,6 +223,13 @@ class InkOverlayWidget(QWidget):
         self._brush_color = str(color or DEFAULT_INK_COLOR)
         self._brush_width = max(0.5, float(width))
         self._brush_alpha = max(0.0, min(1.0, float(alpha)))
+
+    def set_before_draw_callback(self, cb: Callable[[], None] | None) -> None:
+        self._before_draw_cb = cb
+
+    def _notify_before_draw(self) -> None:
+        if self._before_draw_cb:
+            self._before_draw_cb()
 
     def strokes(self) -> list[dict[str, Any]]:
         return list(self._strokes)
@@ -371,6 +379,8 @@ class InkOverlayWidget(QWidget):
         return x / sx, y / sy
 
     def _start_stroke(self, x: float, y: float, pressure: float) -> None:
+        if self._current is None:
+            self._notify_before_draw()
         nx, ny = self._to_native(x, y)
         self._current = {
             "fieldId": self._field_id,
@@ -485,6 +495,7 @@ class InkOverlayWidget(QWidget):
         pressure = _event_pressure(event)
         t = event.type()
         if t == QEvent.Type.TabletPress:
+            self._notify_before_draw()
             self._eraser_active = True
             self._cancel_current_stroke()
             self._erase_at(pos.x(), pos.y(), pressure)
@@ -518,6 +529,7 @@ class InkOverlayWidget(QWidget):
         pos = event.position()
         t = event.type()
         if t == QEvent.Type.MouseButtonPress:
+            self._notify_before_draw()
             self._eraser_active = True
             self._cancel_current_stroke()
             self._erase_at(pos.x(), pos.y(), pressure)
@@ -703,6 +715,7 @@ class CropInkImageStack(QWidget):
         self._show_ink = True
         self._show_text = True
         self._tool_mode = TOOL_NONE
+        self._before_ink_draw: Callable[[], None] | None = None
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -733,6 +746,7 @@ class CropInkImageStack(QWidget):
             self.ink_overlay.set_strokes(strokes)
         self.ink_overlay.strokes_changed.connect(self._emit_strokes_changed)
         self.ink_overlay.click_through.connect(self._on_ink_click_through)
+        self.ink_overlay.set_before_draw_callback(self._before_ink_stroke)
 
         from ui_qt.floating_palette.text_box_layer import TextBoxLayer
 
@@ -764,6 +778,15 @@ class CropInkImageStack(QWidget):
     def result_id(self) -> int:
         return self._result_id
 
+    def _before_ink_stroke(self) -> None:
+        if self._before_ink_draw:
+            self._before_ink_draw()
+        else:
+            self.text_layer.finish_all_editing()
+
+    def set_before_ink_draw(self, cb: Callable[[], None] | None) -> None:
+        self._before_ink_draw = cb
+
     def _on_ink_click_through(self) -> None:
         if self._tool_mode != TOOL_TEXT:
             self.image_clicked.emit()
@@ -771,6 +794,10 @@ class CropInkImageStack(QWidget):
     def _try_place_text_at(self, source: QWidget, pos) -> bool:
         if self._tool_mode != TOOL_TEXT:
             return False
+        if self._before_ink_draw:
+            self._before_ink_draw()
+        else:
+            self.text_layer.finish_all_editing()
         gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
         local = self.text_layer.mapFromGlobal(gp)
         lx, ly = int(local.x()), int(local.y())
@@ -791,6 +818,8 @@ class CropInkImageStack(QWidget):
                     return True
         elif et == QEvent.Type.TabletPress:
             if watched in (self.container, self.ink_overlay, self.text_layer):
+                if isinstance(event, QTabletEvent) and self._palm_rejection and is_stylus_tablet_event(event):
+                    return super().eventFilter(watched, event)
                 if self._try_place_text_at(watched, event.position()):
                     return True
         return super().eventFilter(watched, event)

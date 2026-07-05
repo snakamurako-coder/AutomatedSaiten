@@ -332,8 +332,13 @@ class PaletteController:
                 self._ensure_tool_visible()
                 return
 
+    def finish_all_text_editing(self) -> None:
+        for stack in self._stacks():
+            stack.text_layer.finish_all_editing()
+
     def register_stack(self, stack: CropInkImageStack) -> None:
         """新規タイル生成後に呼ぶ。"""
+        stack.set_before_ink_draw(self.finish_all_text_editing)
         stack.text_layer.selection_changed.connect(self._on_text_selection)
         stack.image_clicked.connect(self._on_stack_image_clicked)
         color, width, alpha = self.tool_window.current_brush()

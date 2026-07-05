@@ -15,6 +15,7 @@ from PySide6.QtGui import (
     QTextCursor,
 )
 from PySide6.QtWidgets import (
+    QApplication,
     QFrame,
     QLabel,
     QPlainTextEdit,
@@ -28,6 +29,7 @@ from models.text_annotation_repo import DEFAULT_TEXT_STYLE, resolve_text_style
 
 _INNER_PAD_PX = 1
 _HANDLE_PX = 12
+_DRAG_THRESHOLD_PX = 4
 _CORNER_CURSORS = {
     "tl": Qt.CursorShape.SizeFDiagCursor,
     "tr": Qt.CursorShape.SizeBDiagCursor,
@@ -98,6 +100,10 @@ class TextBoxWidget(QFrame):
         self._syncing_text = False
         self._moving = False
         self._move_origin = QPoint()
+        self._press_origin: QPoint | None = None
+        self._press_moved = False
+        self._suppress_focus_check = False
+        self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self._apply_geometry()
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
@@ -115,6 +121,7 @@ class TextBoxWidget(QFrame):
 
         self._editor = QPlainTextEdit(str(box.get("text") or ""))
         self._editor.setObjectName("TextBoxEditor")
+        self._editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._editor.setFrameShape(QFrame.NoFrame)
         self._editor.setAutoFillBackground(False)
         self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
@@ -172,7 +179,7 @@ class TextBoxWidget(QFrame):
         for handle in self._resize_handles.values():
             handle.setVisible(self._selected)
         if not self._selected and self._editing:
-            self._set_editing_mode(False)
+            self.finish_editing()
         self._apply_geometry()
         self._apply_style()
         self._layout_handles()
@@ -188,12 +195,31 @@ class TextBoxWidget(QFrame):
         return self.frameGeometry().translated(self.mapToGlobal(QPoint(0, 0)).toPoint())
 
     def start_editing(self) -> None:
+        if not self._selected:
+            self.selected.emit(self.box_id)
         self._set_editing_mode(True)
+        QTimer.singleShot(0, self._focus_editor)
+
+    def finish_editing(self) -> None:
+        if not self._editing:
+            return
+        self._suppress_focus_check = True
+        self._editor.clearFocus()
+        self._press_origin = None
+        self._moving = False
+        self._set_editing_mode(False)
+        self._suppress_focus_check = False
+        self.changed.emit()
+        self.editing_finished.emit(self.box_id)
+
+    def _focus_editor(self) -> None:
+        if not self._editing:
+            return
         self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
-        QTimer.singleShot(0, self._editor.setFocus)
+        self._editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     def is_editing(self) -> bool:
-        return self._editing and self._editor.hasFocus()
+        return self._editing
 
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
@@ -224,9 +250,7 @@ class TextBoxWidget(QFrame):
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if watched is self._editor:
-            if event.type() == QEvent.Type.FocusIn:
-                self.selected.emit(self.box_id)
-            elif event.type() == QEvent.Type.FocusOut:
+            if event.type() == QEvent.Type.FocusOut:
                 QTimer.singleShot(0, self._check_editing_finished)
             return super().eventFilter(watched, event)
 
@@ -240,18 +264,71 @@ class TextBoxWidget(QFrame):
                     self.selected.emit(self.box_id)
                     self.start_editing()
                     return True
+            if et == QEvent.Type.MouseButtonPress and isinstance(event, QMouseEvent):
+                if event.button() == Qt.LeftButton:
+                    self._begin_pointer(event.globalPosition().toPoint())
+                    return True
             if et == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
+                if event.buttons() & Qt.LeftButton:
+                    gp = event.globalPosition().toPoint()
+                    self._update_move_drag(gp)
+                    return True
                 pos = self.mapFromGlobal(event.globalPosition().toPoint())
                 self._update_hover_cursor(pos)
+            if et == QEvent.Type.MouseButtonRelease and isinstance(event, QMouseEvent):
+                if event.button() == Qt.LeftButton:
+                    self._end_pointer()
+                    return True
             if et == QEvent.Type.Enter:
                 pos = self.mapFromGlobal(QCursor.pos())
                 self._update_hover_cursor(pos)
         return super().eventFilter(watched, event)
 
+    def _begin_pointer(self, global_pos: QPoint) -> None:
+        if not self._selected:
+            self.selected.emit(self.box_id)
+        self._press_origin = global_pos
+        self._press_moved = False
+        self._moving = False
+
+    def _update_move_drag(self, global_pos: QPoint) -> None:
+        if self._press_origin is None or self._editing:
+            return
+        if not self._press_moved:
+            delta = global_pos - self._press_origin
+            if (
+                abs(delta.x()) <= _DRAG_THRESHOLD_PX
+                and abs(delta.y()) <= _DRAG_THRESHOLD_PX
+            ):
+                return
+            self._press_moved = True
+            self._moving = True
+            self._move_origin = global_pos
+            return
+        if self._moving:
+            delta = global_pos - self._move_origin
+            self._move_origin = global_pos
+            self._on_move_drag(delta)
+
+    def _end_pointer(self) -> None:
+        if self._press_moved:
+            self.changed.emit()
+        self._press_origin = None
+        self._press_moved = False
+        self._moving = False
+
     def _check_editing_finished(self) -> None:
-        if self._editing and not self._editor.hasFocus():
-            self._set_editing_mode(False)
-            self.editing_finished.emit(self.box_id)
+        if self._suppress_focus_check or not self._editing:
+            return
+        fw = QApplication.focusWidget()
+        w: QWidget | None = fw
+        while w is not None:
+            if w is self._editor:
+                return
+            w = w.parentWidget()
+        self._set_editing_mode(False)
+        self.changed.emit()
+        self.editing_finished.emit(self.box_id)
 
     def _style(self) -> dict[str, Any]:
         st = self._box.get("style") or {}
@@ -433,28 +510,23 @@ class TextBoxWidget(QFrame):
             if self._point_on_handle(event.position().toPoint()):
                 super().mousePressEvent(event)
                 return
-            self._moving = True
-            self._move_origin = event.globalPosition().toPoint()
-            self.selected.emit(self.box_id)
+            self._begin_pointer(event.globalPosition().toPoint())
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        local = event.position().toPoint()
-        if self._moving and event.buttons() & Qt.LeftButton:
-            delta = event.globalPosition().toPoint() - self._move_origin
-            self._move_origin = event.globalPosition().toPoint()
-            self._on_move_drag(delta)
-            event.accept()
-            return
-        self._update_hover_cursor(local)
+        if event.buttons() & Qt.LeftButton:
+            self._update_move_drag(event.globalPosition().toPoint())
+            if self._moving:
+                event.accept()
+                return
+        self._update_hover_cursor(event.position().toPoint())
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._moving:
-            self._moving = False
-            self.changed.emit()
+        if event.button() == Qt.LeftButton:
+            self._end_pointer()
             self._update_hover_cursor(event.position().toPoint())
             event.accept()
             return
@@ -462,6 +534,8 @@ class TextBoxWidget(QFrame):
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton and not self._point_on_handle(event.position().toPoint()):
+            self._press_origin = None
+            self._moving = False
             self.selected.emit(self.box_id)
             self.start_editing()
             event.accept()

@@ -114,6 +114,10 @@ class TextBoxLayer(QWidget):
         if self._selected_id and self._selected_id in self._widgets:
             self._widgets[self._selected_id].start_editing()
 
+    def finish_all_editing(self) -> None:
+        for w in self._widgets.values():
+            w.finish_editing()
+
     def delete_selected(self) -> None:
         if not self._selected_id:
             return
@@ -177,6 +181,7 @@ class TextBoxLayer(QWidget):
             event.accept()
             return
         if event.button() == Qt.LeftButton:
+            self.finish_all_editing()
             self.clear_selection()
             event.accept()
             return
