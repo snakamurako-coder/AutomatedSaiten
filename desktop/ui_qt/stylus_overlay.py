@@ -197,7 +197,6 @@ class InkOverlayWidget(QWidget):
             m = TOOL_NONE
         self._tool_mode = m
         self._software_eraser = m == TOOL_ERASER
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, m == TOOL_TEXT)
 
     def _stylus_may_draw(self) -> bool:
         if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
@@ -477,9 +476,11 @@ class InkOverlayWidget(QWidget):
         return is_eraser_tablet_event(event) or self._eraser_active or self._software_eraser
 
     def _should_draw_mouse(self, event: QMouseEvent) -> bool:
-        if not self._pointer_may_draw():
-            return False
         if is_eraser_mouse_event(event) or self._software_eraser:
+            return False
+        if self._tool_mode == TOOL_TEXT:
+            return self._palm_rejection and is_pen_mouse_event(event)
+        if not self._pointer_may_draw():
             return False
         return True
 
@@ -646,6 +647,9 @@ class InkOverlayWidget(QWidget):
             self._emit_click_through()
             event.ignore()
             return
+        if self._current and is_pen_mouse_event(event) and _mouse_synthesized_by_system(event):
+            event.accept()
+            return
         self._eraser_active = False
         self._pen_active = True
         self._start_stroke(event.position().x(), event.position().y(), _event_pressure(event))
@@ -806,22 +810,28 @@ class CropInkImageStack(QWidget):
         self.text_layer.place_box_at(float(lx), float(ly))
         return True
 
+    def _is_text_placement_event(self, event) -> bool:
+        if isinstance(event, QTabletEvent):
+            if self._palm_rejection and is_stylus_tablet_event(event):
+                return False
+            return True
+        if isinstance(event, QMouseEvent):
+            if event.button() != Qt.LeftButton:
+                return False
+            if self._palm_rejection and is_pen_mouse_event(event):
+                return False
+            return True
+        return False
+
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if self._tool_mode != TOOL_TEXT:
             return super().eventFilter(watched, event)
         et = event.type()
-        if et == QEvent.Type.MouseButtonPress:
-            if event.button() != Qt.LeftButton:
-                return super().eventFilter(watched, event)
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
             if watched in (self.container, self.ink_overlay, self.text_layer):
-                if self._try_place_text_at(watched, event.position()):
-                    return True
-        elif et == QEvent.Type.TabletPress:
-            if watched in (self.container, self.ink_overlay, self.text_layer):
-                if isinstance(event, QTabletEvent) and self._palm_rejection and is_stylus_tablet_event(event):
-                    return super().eventFilter(watched, event)
-                if self._try_place_text_at(watched, event.position()):
-                    return True
+                if self._is_text_placement_event(event):
+                    if self._try_place_text_at(watched, event.position()):
+                        return True
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
@@ -842,6 +852,14 @@ class CropInkImageStack(QWidget):
         self._palm_rejection = bool(enabled)
         self.ink_overlay.set_palm_rejection(enabled)
         self.text_layer.set_palm_rejection(enabled)
+        self._sync_input_routing()
+
+    def _sync_input_routing(self) -> None:
+        """テキストモード時: パームリジェクション ON なら ink がペン入力を受ける。"""
+        is_text = self._tool_mode == TOOL_TEXT
+        ink_transparent = is_text and not self._palm_rejection
+        self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, ink_transparent)
+        self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, not is_text)
 
     def set_show_ink(self, visible: bool) -> None:
         self._show_ink = bool(visible)
@@ -861,9 +879,8 @@ class CropInkImageStack(QWidget):
         self._tool_mode = mode
         is_text = mode == TOOL_TEXT
         self.ink_overlay.set_tool_mode(mode)
-        self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, is_text)
-        self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, not is_text)
         self.text_layer.set_placement_mode(is_text)
+        self._sync_input_routing()
         self._sync_layer_order()
 
     def set_brush(self, color: str, width: float, alpha: float) -> None:

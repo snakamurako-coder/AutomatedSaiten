@@ -11,7 +11,7 @@ from PySide6.QtWidgets import QWidget
 
 from models.text_annotation_repo import new_text_box
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
-from ui_qt.stylus_overlay import is_stylus_tablet_event
+from ui_qt.stylus_overlay import is_pen_mouse_event, is_stylus_tablet_event
 
 
 class TextBoxLayer(QWidget):
@@ -79,7 +79,7 @@ class TextBoxLayer(QWidget):
 
     def set_annotations(self, items: list[dict[str, Any]]) -> None:
         self._annotations = list(items or [])
-        self._rebuild_widgets()
+        self._rebuild_widgets(from_widgets=False)
 
     def selected_box(self) -> dict[str, Any] | None:
         if not self._selected_id:
@@ -121,9 +121,11 @@ class TextBoxLayer(QWidget):
     def delete_selected(self) -> None:
         if not self._selected_id:
             return
+        if self._widgets:
+            self._annotations = self.annotations()
         self._annotations = [a for a in self._annotations if str(a.get("id")) != self._selected_id]
         self._selected_id = None
-        self._rebuild_widgets()
+        self._rebuild_widgets(from_widgets=False)
         self._notify_changed()
         self.selection_changed.emit(None)
 
@@ -131,8 +133,10 @@ class TextBoxLayer(QWidget):
         nx = max(0.0, min(self._native_w, display_x * self._scale_x))
         ny = max(0.0, min(self._native_h, display_y * self._scale_y))
         box = new_text_box(nx, ny)
+        if self._widgets:
+            self._annotations = self.annotations()
         self._annotations.append(box)
-        self._rebuild_widgets()
+        self._rebuild_widgets(from_widgets=False)
         self.select_box(str(box["id"]))
         w = self._widgets.get(str(box["id"]))
         if w:
@@ -140,10 +144,11 @@ class TextBoxLayer(QWidget):
         self._notify_changed()
         return box
 
-    def _rebuild_widgets(self) -> None:
-        if self._widgets:
+    def _rebuild_widgets(self, *, from_widgets: bool = True) -> None:
+        if from_widgets and self._widgets:
             self._annotations = self.annotations()
         for w in list(self._widgets.values()):
+            w.blockSignals(True)
             w.setParent(None)
             w.deleteLater()
         self._widgets.clear()
@@ -173,6 +178,9 @@ class TextBoxLayer(QWidget):
             self._on_changed(self._annotations)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._palm_rejection and is_pen_mouse_event(event):
+            event.ignore()
+            return
         if self._placement_mode and event.button() == Qt.LeftButton:
             pos = event.position()
             lx, ly = int(pos.x()), int(pos.y())
