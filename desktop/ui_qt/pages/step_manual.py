@@ -1130,6 +1130,9 @@ class StepManualPage(QWidget):
                 col_idx = 0
                 row_idx += 1
         self.crop_grid.setColumnStretch(cols, 1)
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.ensure_palette_visible()
 
     def _judgment_stroke_color(self, judgment: str) -> str | None:
         mark = (self._feedback_style or {}).get("mark") or {}

@@ -61,8 +61,8 @@ class PaletteController:
         self._eraser_mode = stylus["eraser_mode"]
         prefs = load_palette_prefs()
 
-        self.tool_window = ToolPaletteWindow(main_window)
-        self.fab = PaletteFabButton(main_window)
+        self.tool_window = ToolPaletteWindow(None)
+        self.fab = PaletteFabButton(None)
         self.tool_window.set_eraser_mode(self._eraser_mode)
         self.tool_window.set_palm_rejection(self._palm_rejection)
 
@@ -96,13 +96,34 @@ class PaletteController:
     def _normalize_saved_tool(self, tool: str) -> str:
         if self._palm_rejection and tool == TOOL_PEN:
             return TOOL_NONE
+        if tool == TOOL_TEXT:
+            return TOOL_NONE
         if tool not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE):
             return TOOL_NONE
         return tool
 
+    def ensure_palette_visible(self) -> None:
+        """描画ツールまたは FAB を前面表示（グリッド描画後などに呼ぶ）。"""
+        if self._step_id not in self.ACTIVE_STEPS:
+            return
+        prefs = load_palette_prefs()
+        if prefs.get("minimized"):
+            self.tool_window.hide()
+            self._position_fab()
+            self.fab.show()
+            self.fab.raise_()
+        else:
+            self.fab.hide()
+            self.tool_window.show()
+            self.tool_window.raise_()
+            self.tool_window.activateWindow()
+            self._clamp_tool_window()
+
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page
         self._step_id = step_id
+        if self.tool_window.current_tool() == TOOL_TEXT:
+            self.tool_window.clear_text_tool()
         self._connect_stacks()
         self._apply_to_stacks()
         if prefs := load_palette_prefs():
@@ -121,16 +142,7 @@ class PaletteController:
         if step_id not in self.ACTIVE_STEPS:
             self.detach()
             return
-        prefs = load_palette_prefs()
-        if prefs.get("minimized"):
-            self.tool_window.hide()
-            self._position_fab()
-            self.fab.show()
-        else:
-            self.fab.hide()
-            self.tool_window.show()
-            self.tool_window.raise_()
-            self._clamp_tool_window()
+        self.ensure_palette_visible()
 
     def persist(self) -> None:
         pos = self.tool_window.pos()
@@ -201,6 +213,7 @@ class PaletteController:
         self.fab.hide()
         self.tool_window.show()
         self.tool_window.raise_()
+        self.tool_window.activateWindow()
         self._clamp_tool_window()
 
     def _connect_stacks(self) -> None:
@@ -246,6 +259,7 @@ class PaletteController:
             self.fab.hide()
         self.tool_window.show()
         self.tool_window.raise_()
+        self.tool_window.activateWindow()
         self._clamp_tool_window()
 
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:

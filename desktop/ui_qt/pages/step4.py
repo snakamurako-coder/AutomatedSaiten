@@ -1008,6 +1008,9 @@ class Step4Page(QWidget):
                 0,
                 0,
             )
+            ctrl = getattr(self.app, "palette_controller", None)
+            if ctrl is not None:
+                ctrl.ensure_palette_visible()
             return
 
         fid = self._selected_field_id() or ""
@@ -1019,6 +1022,9 @@ class Step4Page(QWidget):
             self.crop_grid.addWidget(tile, r, c, Qt.AlignTop | Qt.AlignLeft)
         # 余白を埋めるダミー
         self.crop_grid.setColumnStretch(cols, 1)
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.ensure_palette_visible()
 
     def _make_crop_tile(self, item: dict[str, Any], fid: str, zoom: float) -> QWidget:
         tile = QFrame()

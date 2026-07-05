@@ -201,9 +201,11 @@ class InkOverlayWidget(QWidget):
     def _stylus_may_draw(self) -> bool:
         if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
             return False
+        if self._tool_mode == TOOL_ERASER:
+            return False
         if self._palm_rejection:
             return True
-        return self._tool_mode in (TOOL_PEN, TOOL_ERASER)
+        return self._tool_mode in (TOOL_PEN, TOOL_NONE)
 
     def _pointer_may_draw(self) -> bool:
         if self._tool_mode == TOOL_TEXT:
@@ -445,6 +447,8 @@ class InkOverlayWidget(QWidget):
         if self._palm_rejection:
             if is_finger_tablet_event(event):
                 return False
+            return is_stylus_tablet_event(event)
+        if self._tool_mode == TOOL_NONE:
             return is_stylus_tablet_event(event)
         if self._tool_mode not in (TOOL_PEN, TOOL_ERASER):
             return False
