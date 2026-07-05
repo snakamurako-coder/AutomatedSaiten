@@ -103,10 +103,8 @@ class MainWindow(QMainWindow):
             self.stack.addWidget(page)
 
         self._refresh_ocr_status()
-        self.load_step(0)
-        self.pages[0].refresh()  # type: ignore[attr-defined]
-
         self.palette_controller = PaletteController(self)
+        self.load_step(0)
 
     # --- サイドバー ---
 
