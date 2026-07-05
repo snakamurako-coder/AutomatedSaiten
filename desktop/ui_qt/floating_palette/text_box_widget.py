@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.text_annotation_repo import DEFAULT_TEXT_STYLE
+from models.text_annotation_repo import DEFAULT_TEXT_STYLE, resolve_text_style
 
 
 class _MoveBar(QFrame):
@@ -138,6 +138,7 @@ class TextBoxWidget(QFrame):
 
         self._move_bar = _MoveBar(self)
         outer.addWidget(self._move_bar)
+        self._move_bar.drag_started.connect(self._on_select_requested)
         self._move_bar.dragged.connect(self._on_move_drag)
         self._move_bar.drag_finished.connect(self._emit_changed)
 
@@ -174,9 +175,15 @@ class TextBoxWidget(QFrame):
         return self._editor.hasFocus()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if watched is self._editor and event.type() == QEvent.Type.FocusOut:
-            QTimer.singleShot(0, self._check_editing_finished)
+        if watched is self._editor:
+            if event.type() == QEvent.Type.FocusIn:
+                self.selected.emit(self.box_id)
+            elif event.type() == QEvent.Type.FocusOut:
+                QTimer.singleShot(0, self._check_editing_finished)
         return super().eventFilter(watched, event)
+
+    def _on_select_requested(self) -> None:
+        self.selected.emit(self.box_id)
 
     def _check_editing_finished(self) -> None:
         if not self._editor.hasFocus():
@@ -187,7 +194,7 @@ class TextBoxWidget(QFrame):
         merged = dict(DEFAULT_TEXT_STYLE)
         if isinstance(st, dict):
             merged.update(st)
-        return merged
+        return resolve_text_style(merged)
 
     def _apply_geometry(self) -> None:
         x = int(float(self._box.get("x") or 0) / self._scale)
@@ -202,18 +209,27 @@ class TextBoxWidget(QFrame):
     def _apply_style(self) -> None:
         st = self._style()
         border = st.get("borderColor") or "#2563eb"
-        bw = int(st.get("borderWidth") or 2)
+        bw = int(st.get("borderWidth", 2))
+        ba = float(st.get("borderAlpha", 1.0))
         fill = st.get("fillColor") or "#ffffff"
-        fa = float(st.get("fillAlpha") or 0.85)
+        fa = float(st.get("fillAlpha", 0.85))
         tc = st.get("textColor") or "#111827"
         fs = int(st.get("fontSize") or 14)
-        sel = "2px solid #2563eb" if self._selected else f"{bw}px solid {border}"
+
+        bg = "transparent" if fa <= 0 else f"rgba({_hex_rgb(fill)}, {fa})"
+        if self._selected:
+            border_css = "2px solid #2563eb"
+        elif bw > 0 and ba > 0:
+            border_css = f"{bw}px solid rgba({_hex_rgb(border)}, {ba})"
+        else:
+            border_css = "none"
+
         self._body.setStyleSheet(
-            f"QFrame {{ background: rgba({_hex_rgb(fill)}, {fa});"
-            f" border: {sel}; border-radius: 4px; }}"
+            f"QFrame {{ background: {bg}; border: {border_css}; border-radius: 4px; }}"
         )
         font = QFont()
-        font.setPointSize(max(8, int(fs / max(1.0, self._scale * 0.5))))
+        disp_pt = max(8, int(round(fs / self._scale)))
+        font.setPointSize(disp_pt)
         font.setBold(bool(st.get("bold")))
         font.setUnderline(bool(st.get("underline")))
         self._editor.setFont(font)
@@ -231,7 +247,8 @@ class TextBoxWidget(QFrame):
         self._editor.document().setDefaultTextOption(option)
 
     def apply_style_dict(self, style: dict[str, Any]) -> None:
-        self._box["style"] = {**self._style(), **style}
+        merged = {**dict(self._box.get("style") or {}), **style}
+        self._box["style"] = resolve_text_style(merged)
         self._apply_style()
 
     def _on_text_changed(self) -> None:

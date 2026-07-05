@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QFrame,
     QHBoxLayout,
@@ -20,6 +22,7 @@ from ui_qt.crop_widgets import SliderSpinControls
 from ui_qt.floating_palette.format_palette_panel import FormatPalettePanel
 from ui_qt.floating_palette.palette_prefs import (
     PALETTE_COLORS,
+    TEXT_PALETTE_COLORS_DEFAULT,
     TOOL_ERASER,
     TOOL_NONE,
     TOOL_PEN,
@@ -42,6 +45,7 @@ class ToolPaletteWindow(QWidget):
     show_ink_changed = Signal(bool)
     show_text_changed = Signal(bool)
     view_mode_changed = Signal(str)
+    text_palette_colors_changed = Signal(list)
     minimize_requested = Signal()
     tab_changed = Signal(str)
 
@@ -195,6 +199,31 @@ class ToolPaletteWindow(QWidget):
         self._show_text_check.setChecked(True)
         self._show_text_check.toggled.connect(self.show_text_changed.emit)
         detail_lay.addWidget(self._show_text_check)
+
+        text_palette_lbl = QLabel("テンプレート文字色")
+        text_palette_lbl.setObjectName("PaletteHintLabel")
+        detail_lay.addWidget(text_palette_lbl)
+
+        text_palette_row = QHBoxLayout()
+        text_palette_row.setSpacing(6)
+        self._text_palette_colors: list[str] = list(TEXT_PALETTE_COLORS_DEFAULT)
+        self._text_palette_btns: list[QPushButton] = []
+        for i in range(6):
+            b = QPushButton()
+            b.setObjectName("ColorSwatchBtn")
+            b.setFixedSize(28, 28)
+            b.setToolTip("クリックで色を変更（書式タブの6色に反映）")
+            b.clicked.connect(lambda _c=False, idx=i: self._pick_text_palette_color(idx))
+            text_palette_row.addWidget(b)
+            self._text_palette_btns.append(b)
+        reset_palette_btn = QPushButton("初期化")
+        reset_palette_btn.setToolTip("テンプレート文字色6色をデフォルトに戻す")
+        reset_palette_btn.clicked.connect(self._reset_text_palette_colors)
+        text_palette_row.addWidget(reset_palette_btn)
+        text_palette_row.addStretch()
+        detail_lay.addLayout(text_palette_row)
+        self._refresh_text_palette_btns()
+
         draw_lay.addWidget(self._detail_frame)
         draw_lay.addStretch()
 
@@ -365,6 +394,39 @@ class ToolPaletteWindow(QWidget):
     def _pick_color(self, color: str) -> None:
         self._current_color = color
         self._emit_brush()
+
+    def _refresh_text_palette_btns(self) -> None:
+        for i, btn in enumerate(self._text_palette_btns):
+            col = self._text_palette_colors[i]
+            btn.setStyleSheet(
+                f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 14px; }}"
+            )
+
+    def _pick_text_palette_color(self, index: int) -> None:
+        if index < 0 or index >= len(self._text_palette_colors):
+            return
+        current = QColor(self._text_palette_colors[index])
+        picked = QColorDialog.getColor(current, self, "テンプレート文字色")
+        if not picked.isValid():
+            return
+        self._text_palette_colors[index] = picked.name()
+        self._refresh_text_palette_btns()
+        self.text_palette_colors_changed.emit(list(self._text_palette_colors))
+
+    def _reset_text_palette_colors(self) -> None:
+        self._text_palette_colors = list(TEXT_PALETTE_COLORS_DEFAULT)
+        self._refresh_text_palette_btns()
+        self.text_palette_colors_changed.emit(list(self._text_palette_colors))
+
+    def set_text_palette_colors(self, colors: list[str] | tuple[str, ...]) -> None:
+        if len(colors) != 6:
+            return
+        self._text_palette_colors = [str(c) for c in colors]
+        self._refresh_text_palette_btns()
+        self._format_panel.set_text_palette_colors(self._text_palette_colors)
+
+    def text_palette_colors(self) -> list[str]:
+        return list(self._text_palette_colors)
 
     def _emit_brush(self) -> None:
         w = float(self._width_ctrl.value())

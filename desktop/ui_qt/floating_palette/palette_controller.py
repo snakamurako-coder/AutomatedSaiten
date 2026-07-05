@@ -14,7 +14,9 @@ from ui_qt.floating_palette.palette_prefs import (
     TOOL_PEN,
     TOOL_TEXT,
     load_palette_prefs,
+    load_text_palette_colors,
     save_palette_prefs,
+    save_text_palette_colors,
 )
 from ui_qt.floating_palette.tool_palette_window import ToolPaletteWindow
 from ui_qt.stylus_overlay import CropInkImageStack
@@ -71,6 +73,7 @@ class PaletteController:
         self.tool_window.eraser_mode_changed.connect(self._on_eraser_mode_changed)
         self.tool_window.show_ink_changed.connect(self._on_show_ink_changed)
         self.tool_window.show_text_changed.connect(self._on_show_text_changed)
+        self.tool_window.text_palette_colors_changed.connect(self._on_text_palette_colors_changed)
         self.tool_window.minimize_requested.connect(self._minimize)
         fp.style_changed.connect(self._on_format_style)
         fp.edit_done_requested.connect(self._on_format_edit_done)
@@ -85,6 +88,7 @@ class PaletteController:
             float(prefs.get("last_alpha") or 1.0),
         )
         self.tool_window.set_tool(self._normalize_saved_tool(str(prefs.get("last_tool") or TOOL_NONE)))
+        self.tool_window.set_text_palette_colors(load_text_palette_colors())
         if prefs.get("minimized"):
             self._minimize()
         else:
@@ -146,8 +150,13 @@ class PaletteController:
                 "last_alpha": alpha,
                 "last_tool": self._tool,
                 "view_mode": self.tool_window._view_mode,
+                "text_palette_colors": self.tool_window.text_palette_colors(),
             }
         )
+
+    def _on_text_palette_colors_changed(self, colors: list[str]) -> None:
+        save_text_palette_colors(colors)
+        self.tool_window.format_panel.set_text_palette_colors(colors)
 
     def apply_config(self) -> None:
         stylus = load_stylus_prefs()
@@ -234,13 +243,20 @@ class PaletteController:
             for stack in self._stacks():
                 stack.text_layer.clear_selection()
 
+    def _ensure_tool_visible(self) -> None:
+        prefs = load_palette_prefs()
+        if prefs.get("minimized"):
+            self.fab.hide()
+        self.tool_window.show()
+        self.tool_window.raise_()
+        self._clamp_tool_window()
+
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
             self.tool_window.set_format_tab_available(False)
             self.tool_window.show_draw_tab()
-            if self._tool == TOOL_TEXT:
-                self.tool_window.clear_text_tool()
             return
+        self._ensure_tool_visible()
         self.tool_window.format_panel.load_style(box.get("style") or {})
         self.tool_window.set_format_tab_available(True)
         self.tool_window.show_format_tab()
@@ -285,9 +301,9 @@ class PaletteController:
             fw.clearFocus()
         for stack in self._stacks():
             stack.text_layer.clear_selection()
-        self.tool_window.clear_text_tool()
         self.tool_window.set_format_tab_available(False)
         self.tool_window.show_draw_tab()
+        self._ensure_tool_visible()
 
     def _on_format_edit(self) -> None:
         for stack in self._stacks():
@@ -301,6 +317,7 @@ class PaletteController:
                 stack.text_layer.delete_selected()
                 self.tool_window.set_format_tab_available(False)
                 self.tool_window.show_draw_tab()
+                self._ensure_tool_visible()
                 return
 
     def register_stack(self, stack: CropInkImageStack) -> None:

@@ -22,7 +22,82 @@ DEFAULT_TEXT_STYLE: dict[str, Any] = {
     "underline": False,
     "vertical": False,
     "align": "left",
+    "templateId": "",
 }
+
+TEXT_PALETTE_COLORS: tuple[str, ...] = (
+    "#111827",
+    "#dc2626",
+    "#2563eb",
+    "#16a34a",
+    "#ea580c",
+    "#9333ea",
+)
+
+# パターンA: 背景・枠なし（文字のみ、不透明）
+TEXT_STYLE_TEMPLATE_A: dict[str, Any] = {
+    "templateId": "A",
+    "borderWidth": 0,
+    "borderAlpha": 0.0,
+    "fillAlpha": 0.0,
+    "textColor": TEXT_PALETTE_COLORS[0],
+    "fontSize": 14,
+    "bold": False,
+    "underline": False,
+    "vertical": False,
+    "align": "left",
+}
+
+# パターンB: 文字色の補色を半透明背景に（fillColor は resolve で決定）
+TEXT_STYLE_TEMPLATE_B: dict[str, Any] = {
+    "templateId": "B",
+    "borderWidth": 1,
+    "borderAlpha": 0.55,
+    "fillAlpha": 0.7,
+    "textColor": TEXT_PALETTE_COLORS[0],
+    "fontSize": 14,
+    "bold": False,
+    "underline": False,
+    "vertical": False,
+    "align": "left",
+}
+
+TEXT_STYLE_TEMPLATES: dict[str, dict[str, Any]] = {
+    "A": TEXT_STYLE_TEMPLATE_A,
+    "B": TEXT_STYLE_TEMPLATE_B,
+}
+
+
+def complementary_hex(hex_color: str) -> str:
+    """RGB 補色 (#rrggbb)。"""
+    h = str(hex_color or "#000000").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return "#ffffff"
+    r = int(h[0:2], 16)
+    g = int(h[2:4], 16)
+    b = int(h[4:6], 16)
+    return f"#{255 - r:02x}{255 - g:02x}{255 - b:02x}"
+
+
+def resolve_text_style(style: dict[str, Any] | None) -> dict[str, Any]:
+    """templateId に応じて fillColor / borderColor 等を確定する。"""
+    merged = dict(DEFAULT_TEXT_STYLE)
+    if isinstance(style, dict):
+        merged.update(style)
+    tid = str(merged.get("templateId") or "").upper()
+    tc = str(merged.get("textColor") or TEXT_PALETTE_COLORS[0])
+    if tid == "A":
+        merged["borderWidth"] = 0
+        merged["borderAlpha"] = 0.0
+        merged["fillAlpha"] = 0.0
+        merged["textColor"] = tc
+    elif tid == "B":
+        merged["textColor"] = tc
+        merged["fillColor"] = complementary_hex(tc)
+        merged["borderColor"] = tc
+    return merged
 
 
 def _now_iso() -> str:

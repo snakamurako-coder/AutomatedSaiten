@@ -26,6 +26,8 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
+from models.text_annotation_repo import resolve_text_style
+
 # GAS 版 RegionEditor の rgba(…, 0.12〜0.15) に合わせたスタイル
 REGION_STROKE_NORMAL = "#16a34a"
 REGION_STROKE_SELECTED = "#2563eb"
@@ -185,21 +187,23 @@ def render_text_annotation_layer(
     draw = ImageDraw.Draw(layer)
     pad = 4 * work_scale
     for box in annotations or []:
-        st = box.get("style") or {}
+        st = resolve_text_style(box.get("style") or {})
         x = float(box.get("x") or 0) * work_scale
         y = float(box.get("y") or 0) * work_scale
         w = max(20.0, float(box.get("width") or 120) * work_scale)
         h = max(12.0, float(box.get("height") or 36) * work_scale)
         fill = hex_to_rgba(st.get("fillColor") or "#ffffff", float(st.get("fillAlpha") or 0.85))
         border = hex_to_rgba(st.get("borderColor") or "#2563eb", float(st.get("borderAlpha") or 1.0))
-        bw = max(1, round(float(st.get("borderWidth") or 2) * work_scale))
-        draw.rounded_rectangle(
-            [x, y, x + w, y + h],
-            radius=max(2, round(4 * work_scale)),
-            fill=fill,
-            outline=border,
-            width=bw,
-        )
+        bw = max(0, round(float(st.get("borderWidth") or 2) * work_scale))
+        rect = [x, y, x + w, y + h]
+        radius = max(2, round(4 * work_scale))
+        if float(st.get("fillAlpha") or 0) > 0:
+            if bw > 0 and float(st.get("borderAlpha") or 0) > 0:
+                draw.rounded_rectangle(rect, radius=radius, fill=fill, outline=border, width=bw)
+            else:
+                draw.rounded_rectangle(rect, radius=radius, fill=fill)
+        elif bw > 0 and float(st.get("borderAlpha") or 0) > 0:
+            draw.rounded_rectangle(rect, radius=radius, outline=border, width=bw)
         text = str(box.get("text") or "").strip()
         if not text:
             continue
