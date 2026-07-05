@@ -41,7 +41,7 @@ from models.test_repo import (
     update_results_field_grades,
 )
 from services.crop_preview import load_crops_for_rows
-from services.feedback_renderer import draw_mark
+from services.feedback_renderer import composite_mark_on_image
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
@@ -1135,19 +1135,9 @@ class StepManualPage(QWidget):
 
     def _pil_with_mark(self, pil: Image.Image, judgment: str, score: Any) -> Image.Image:
         """⑩個票プレビューと同じ判定マーク・得点を画像上に重ねる。"""
-        base = pil.convert("RGBA")
-        layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-        draw_mark(
-            layer,
-            0,
-            0,
-            base.width,
-            base.height,
-            judgment,
-            score,
-            self._feedback_style,
+        return composite_mark_on_image(
+            pil, judgment, score, self._feedback_style, supersample=4
         )
-        return Image.alpha_composite(base, layer).convert("RGB")
 
     def _make_tile(self, item: dict[str, Any], zoom: float) -> QWidget:
         rid = int(item.get("result_id") or 0)

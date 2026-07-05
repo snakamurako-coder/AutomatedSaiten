@@ -20,7 +20,7 @@ from models.domain_repo import DOMAIN_KINDS, _domain_groups, get_domain_settings
 from models.ink_repo import collect_warped_ink_strokes
 from models.output_repo import get_feedback_style, get_output_slots
 from models.test_repo import get_all_results, get_answer_fields, get_test_info
-from services.compositor import hex_to_rgba
+from services.compositor import hex_to_rgba, render_supersampled_rgba
 from services.image_loader import imread_bgr
 
 _FONT_CANDIDATES_BOLD = ["meiryob.ttc", "YuGothB.ttc", "msgothic.ttc", "arialbd.ttf"]
@@ -121,22 +121,25 @@ def draw_mark(
 
     if kind == "maru":
         st = mark_style["maru"]
-        line_w = max(2, round(min_dim * float(st.get("lineWidthRatio", 0.06))))
+        line_w = max(2.0, min_dim * float(st.get("lineWidthRatio", 0.06)))
         fill = hex_to_rgba(st["strokeColor"], float(st.get("fillOpacity", 0.12)))
         outline = hex_to_rgba(st["strokeColor"], float(st.get("strokeOpacity", 1.0)))
-        draw.ellipse([ix, iy, ix + iw, iy + ih], fill=fill, outline=outline, width=line_w)
+        box = [ix, iy, ix + iw, iy + ih]
+        draw.ellipse(box, fill=fill)
+        draw.ellipse(box, outline=outline, width=max(1, round(line_w)))
     elif kind == "sankaku":
         st = mark_style["sankaku"]
-        line_w = max(2, round(min_dim * float(st.get("lineWidthRatio", 0.06))))
+        line_w = max(2.0, min_dim * float(st.get("lineWidthRatio", 0.06)))
         color = hex_to_rgba(st["strokeColor"], float(st.get("strokeOpacity", 1.0)))
         points = [(ix + iw / 2, iy), (ix + iw, iy + ih), (ix, iy + ih)]
-        draw.line([*points, points[0]], fill=color, width=line_w, joint="curve")
+        draw.polygon(points, outline=color, width=max(1, round(line_w)))
     else:  # batsu
         st = mark_style["batsu"]
-        line_w = max(2, round(min_dim * float(st.get("lineWidthRatio", 0.08))))
+        line_w = max(2.0, min_dim * float(st.get("lineWidthRatio", 0.08)))
         color = hex_to_rgba(st["strokeColor"], float(st.get("strokeOpacity", 1.0)))
-        draw.line([ix, iy, ix + iw, iy + ih], fill=color, width=line_w)
-        draw.line([ix + iw, iy, ix, iy + ih], fill=color, width=line_w)
+        lw = max(1, round(line_w))
+        draw.line([ix, iy, ix + iw, iy + ih], fill=color, width=lw, joint="curve")
+        draw.line([ix + iw, iy, ix, iy + ih], fill=color, width=lw, joint="curve")
 
     # 小問得点（× かつ 0 点は非表示 — GAS 互換）
     score_text = "" if score is None else str(score).strip()
@@ -186,6 +189,67 @@ def draw_total(layer: Image.Image, slot: dict[str, Any], value: Any, style: dict
     )
 
 
+def _scale_slot(slot: dict[str, Any], sf: float) -> dict[str, Any]:
+    if sf == 1.0:
+        return slot
+    return {
+        **slot,
+        "x": float(slot["x"]) * sf,
+        "y": float(slot["y"]) * sf,
+        "width": float(slot["width"]) * sf,
+        "height": float(slot["height"]) * sf,
+    }
+
+
+def composite_mark_on_image(
+    image: Image.Image,
+    judgment: str,
+    score: Any,
+    style: dict[str, Any] | None = None,
+    *,
+    supersample: int = 4,
+) -> Image.Image:
+    """クロップ画像へ判定マーク・得点を滑らかに重ねる（手動採点プレビュー用）。"""
+    style = style or get_feedback_style()
+    base = image.convert("RGBA")
+    w, h = base.size
+
+    def paint(layer: Image.Image, sf: float) -> None:
+        draw_mark(layer, 0, 0, w * sf, h * sf, judgment, score, style)
+
+    overlay = render_supersampled_rgba(base.size, paint, supersample)
+    return Image.alpha_composite(base, overlay).convert("RGB")
+
+
+def render_feedback_overlay_layer(
+    size: tuple[int, int],
+    fields: list[dict[str, Any]],
+    output_slots: list[dict[str, Any]],
+    field_marks: dict[str, dict[str, Any]],
+    totals: dict[str, Any],
+    style: dict[str, Any],
+) -> Image.Image:
+    """判定マーク・合計欄をスーパーサンプリングで描いた RGBA レイヤー。"""
+
+    def paint(layer: Image.Image, sf: float) -> None:
+        for f in fields:
+            marks = field_marks.get(f["id"]) or field_marks.get(f.get("displayName") or "") or {}
+            draw_mark(
+                layer,
+                float(f["x"]) * sf,
+                float(f["y"]) * sf,
+                float(f["width"]) * sf,
+                float(f["height"]) * sf,
+                str(marks.get("judgment") or ""),
+                marks.get("score"),
+                style,
+            )
+        for slot in output_slots:
+            draw_total(layer, _scale_slot(slot, sf), totals.get(slot["slotKey"]), style)
+
+    return render_supersampled_rgba(size, paint)
+
+
 # ==================== 合成本体 ====================
 
 def render_feedback_image(
@@ -204,22 +268,9 @@ def render_feedback_image(
     from services.compositor import bgr_to_rgba_image, render_ink_layer
 
     base = bgr_to_rgba_image(bgr)
-    layer = Image.new("RGBA", base.size, (0, 0, 0, 0))
-
-    for f in fields:
-        marks = field_marks.get(f["id"]) or field_marks.get(f.get("displayName") or "") or {}
-        draw_mark(
-            layer,
-            float(f["x"]),
-            float(f["y"]),
-            float(f["width"]),
-            float(f["height"]),
-            str(marks.get("judgment") or ""),
-            marks.get("score"),
-            style,
-        )
-    for slot in output_slots:
-        draw_total(layer, slot, totals.get(slot["slotKey"]), style)
+    layer = render_feedback_overlay_layer(
+        base.size, fields, output_slots, field_marks, totals, style
+    )
 
     composite = Image.alpha_composite(base, layer)
     if ink_strokes:

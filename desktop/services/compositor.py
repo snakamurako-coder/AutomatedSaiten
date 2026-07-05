@@ -20,7 +20,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import cv2
 import numpy as np
@@ -33,6 +33,33 @@ REGION_FILL_ALPHA = 0.12
 REGION_FILL_ALPHA_SELECTED = 0.18
 
 _RESAMPLE = Image.Resampling.LANCZOS if hasattr(Image, "Resampling") else Image.LANCZOS
+
+
+def output_supersample_factor(size: tuple[int, int]) -> int:
+    """個票・手書き出力のスーパーサンプル倍率（メモリに応じて 2〜4）。"""
+    pixels = int(size[0]) * int(size[1])
+    if pixels <= 4_000_000:
+        return 4
+    if pixels <= 12_000_000:
+        return 3
+    return 2
+
+
+def render_supersampled_rgba(
+    size: tuple[int, int],
+    paint: Callable[[Image.Image, float], None],
+    supersample: int | None = None,
+) -> Image.Image:
+    """高解像度で描画してから LANCZOS 縮小し、線・文字を滑らかにする。"""
+    sf = max(1, int(supersample or output_supersample_factor(size)))
+    if sf == 1:
+        layer = Image.new("RGBA", size, (0, 0, 0, 0))
+        paint(layer, 1.0)
+        return layer
+    big_size = (size[0] * sf, size[1] * sf)
+    layer = Image.new("RGBA", big_size, (0, 0, 0, 0))
+    paint(layer, float(sf))
+    return layer.resize(size, _RESAMPLE)
 
 
 def hex_to_rgba(hex_color: str, alpha: float = 1.0) -> tuple[int, int, int, int]:
@@ -89,16 +116,20 @@ def render_ink_layer(
     size: tuple[int, int],
     strokes: list[dict[str, Any]],
     scale: float = 1.0,
+    supersample: int | None = None,
 ) -> Image.Image:
     """手書きストローク（筆圧付き）を RGBA レイヤーとして描く。"""
-    layer = Image.new("RGBA", size, (0, 0, 0, 0))
+    sf = max(1, int(supersample or output_supersample_factor(size)))
+    work_scale = scale * sf
+    canvas_size = (int(size[0] * sf), int(size[1] * sf))
+    layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
     for stroke in strokes or []:
         points = stroke.get("points") or []
         if not points:
             continue
         color = hex_to_rgba(stroke.get("color") or "#111827", float(stroke.get("alpha", 1.0)))
-        base_width = float(stroke.get("baseWidth") or 2.0) * scale
+        base_width = float(stroke.get("baseWidth") or 2.0) * work_scale
 
         def seg_width(pressure: float) -> float:
             # 筆圧 0..1 → 線幅 50%〜100%
@@ -107,22 +138,24 @@ def render_ink_layer(
         if len(points) == 1:
             p = points[0]
             r = seg_width(float(p.get("p", 1.0))) / 2
-            cx, cy = float(p["x"]) * scale, float(p["y"]) * scale
+            cx, cy = float(p["x"]) * work_scale, float(p["y"]) * work_scale
             draw.ellipse([cx - r, cy - r, cx + r, cy + r], fill=color)
             continue
 
         for a, b in zip(points, points[1:]):
-            ax, ay = float(a["x"]) * scale, float(a["y"]) * scale
-            bx, by = float(b["x"]) * scale, float(b["y"]) * scale
+            ax, ay = float(a["x"]) * work_scale, float(a["y"]) * work_scale
+            bx, by = float(b["x"]) * work_scale, float(b["y"]) * work_scale
             w = seg_width(float(b.get("p", 1.0)))
-            draw.line([ax, ay, bx, by], fill=color, width=round(w))
+            draw.line([ax, ay, bx, by], fill=color, width=max(1, round(w)), joint="curve")
             # 継ぎ目を丸めて折れ線のギャップを消す
             r = w / 2
             draw.ellipse([bx - r, by - r, bx + r, by + r], fill=color)
         p0 = points[0]
         r0 = seg_width(float(p0.get("p", 1.0))) / 2
-        x0, y0 = float(p0["x"]) * scale, float(p0["y"]) * scale
+        x0, y0 = float(p0["x"]) * work_scale, float(p0["y"]) * work_scale
         draw.ellipse([x0 - r0, y0 - r0, x0 + r0, y0 + r0], fill=color)
+    if sf > 1:
+        return layer.resize(size, _RESAMPLE)
     return layer
 
 
