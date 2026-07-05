@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import Qt, Signal, QEvent
+from PySide6.QtGui import QMouseEvent, QTabletEvent
 from PySide6.QtWidgets import QWidget
 
 from models.text_annotation_repo import new_text_box
@@ -41,6 +41,7 @@ class TextBoxLayer(QWidget):
         self._selected_id: str | None = None
         self._placement_mode = False
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
+        self.setAttribute(Qt.WA_TabletTracking, True)
         self.setMouseTracking(True)
         self.setFixedSize(self._display_w, self._display_h)
         self._rebuild_widgets()
@@ -112,6 +113,9 @@ class TextBoxLayer(QWidget):
         self._annotations.append(box)
         self._rebuild_widgets()
         self.select_box(str(box["id"]))
+        w = self._widgets.get(str(box["id"]))
+        if w:
+            w.start_editing()
         self._notify_changed()
         return box
 
@@ -153,3 +157,11 @@ class TextBoxLayer(QWidget):
             event.accept()
             return
         super().mousePressEvent(event)
+
+    def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
+        if self._placement_mode and event.type() == QEvent.Type.TabletPress:
+            pos = event.position()
+            self.place_box_at(pos.x(), pos.y())
+            event.accept()
+            return
+        super().tabletEvent(event)

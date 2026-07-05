@@ -5,11 +5,9 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QMouseEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
-    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -20,7 +18,6 @@ from PySide6.QtWidgets import (
 )
 
 from ui_qt.floating_palette.format_palette_placer import place_format_palette
-from ui_qt.floating_palette.tool_palette_window import _DragHeader
 
 
 class FormatPaletteWindow(QWidget):
@@ -29,7 +26,6 @@ class FormatPaletteWindow(QWidget):
     style_changed = Signal(dict)
     edit_requested = Signal()
     delete_requested = Signal()
-    drag_moved = Signal(QPoint)
     pin_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -39,19 +35,34 @@ class FormatPaletteWindow(QWidget):
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint,
         )
-        self.setWindowTitle("⋮⋮ 書式")
-        self.resize(220, 300)
+        self.setWindowTitle("テキスト書式")
+        self.setObjectName("FormatPaletteWindow")
+        self.resize(232, 320)
         self._pinned = False
         self._pinned_pos: QPoint | None = None
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        self._header = _DragHeader()
-        self._header.moved.connect(self._on_header_drag)
-        root.addWidget(self._header)
+        root.setContentsMargins(12, 10, 12, 12)
+        root.setSpacing(8)
+
+        header_row = QHBoxLayout()
+        title = QLabel("テキスト書式")
+        title.setObjectName("FloatingPaletteTitle")
+        header_row.addWidget(title)
+        header_row.addStretch()
+        self._pin_btn = QPushButton("📌")
+        self._pin_btn.setObjectName("PaletteIconBtn")
+        self._pin_btn.setCheckable(True)
+        self._pin_btn.setToolTip("位置を固定")
+        self._pin_btn.toggled.connect(self._on_pin_toggled)
+        header_row.addWidget(self._pin_btn)
+        root.addLayout(header_row)
 
         def add_slider(label: str) -> QSlider:
             row = QHBoxLayout()
-            row.addWidget(QLabel(label))
+            lbl = QLabel(label)
+            lbl.setFixedWidth(72)
+            row.addWidget(lbl)
             s = QSlider(Qt.Orientation.Horizontal)
             s.setRange(0, 100)
             s.valueChanged.connect(self._emit_style)
@@ -62,13 +73,16 @@ class FormatPaletteWindow(QWidget):
         self._border_w = add_slider("枠太さ")
         self._border_a = add_slider("枠透明度")
         self._fill_a = add_slider("背景透明度")
+
         size_row = QHBoxLayout()
-        size_row.addWidget(QLabel("文字サイズ"))
+        size_lbl = QLabel("文字サイズ")
+        size_lbl.setFixedWidth(72)
+        size_row.addWidget(size_lbl)
         self._font_size = QSpinBox()
         self._font_size.setRange(8, 48)
         self._font_size.setValue(14)
         self._font_size.valueChanged.connect(self._emit_style)
-        size_row.addWidget(self._font_size)
+        size_row.addWidget(self._font_size, 1)
         root.addLayout(size_row)
 
         self._bold_check = QCheckBox("太字")
@@ -79,7 +93,9 @@ class FormatPaletteWindow(QWidget):
         root.addWidget(self._underline_check)
 
         align_row = QHBoxLayout()
-        align_row.addWidget(QLabel("揃え"))
+        align_lbl = QLabel("揃え")
+        align_lbl.setFixedWidth(72)
+        align_row.addWidget(align_lbl)
         self._align_combo = QComboBox()
         self._align_combo.addItems(["left", "center", "right"])
         self._align_combo.currentTextChanged.connect(self._emit_style)
@@ -91,20 +107,23 @@ class FormatPaletteWindow(QWidget):
         root.addWidget(self._vertical_check)
 
         btn_row = QHBoxLayout()
+        btn_row.setSpacing(6)
         edit_btn = QPushButton("文字を編集")
         edit_btn.clicked.connect(self.edit_requested.emit)
         del_btn = QPushButton("削除")
+        del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self.delete_requested.emit)
-        btn_row.addWidget(edit_btn)
-        btn_row.addWidget(del_btn)
+        btn_row.addWidget(edit_btn, 1)
+        btn_row.addWidget(del_btn, 1)
         root.addLayout(btn_row)
 
-    def _on_header_drag(self, delta: QPoint) -> None:
-        self._pinned = True
-        self._pinned_pos = self.pos() + delta
-        self.move(self._pinned_pos)
-        self.pin_changed.emit(True)
-        self.drag_moved.emit(delta)
+    def _on_pin_toggled(self, pinned: bool) -> None:
+        self._pinned = bool(pinned)
+        if self._pinned:
+            self._pinned_pos = self.pos()
+        else:
+            self._pinned_pos = None
+        self.pin_changed.emit(self._pinned)
 
     def load_style(self, style: dict[str, Any]) -> None:
         st = style or {}
@@ -146,17 +165,22 @@ class FormatPaletteWindow(QWidget):
         *,
         viewer_global=None,
     ) -> None:
+        if self._pinned and self._pinned_pos is not None:
+            return
         pos = place_format_palette(
             box_global_rect,
             (self.width(), self.height()),
             viewer_global=viewer_global,
-            pinned_pos=self._pinned_pos if self._pinned else None,
+            pinned_pos=None,
         )
         self.move(pos)
 
     def clear_pin(self) -> None:
         self._pinned = False
         self._pinned_pos = None
+        self._pin_btn.blockSignals(True)
+        self._pin_btn.setChecked(False)
+        self._pin_btn.blockSignals(False)
         self.pin_changed.emit(False)
 
     def hide_palette(self) -> None:

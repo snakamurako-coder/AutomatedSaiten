@@ -366,6 +366,77 @@ QStatusBar {{
     font-size: 11px;
     color: {COLORS["text_secondary"]};
 }}
+
+/* --- フローティングパレット --- */
+#ToolPaletteWindow, #FormatPaletteWindow {{
+    background: {COLORS["surface"]};
+}}
+#FloatingPaletteTitle {{
+    font-size: 12px;
+    font-weight: 600;
+    color: {COLORS["text_secondary"]};
+}}
+#PaletteHintLabel {{
+    font-size: 11px;
+    color: {COLORS["text_muted"]};
+    padding: 2px 4px;
+    background: {COLORS["accent_soft"]};
+    border-radius: 6px;
+}}
+QPushButton#PaletteIconBtn {{
+    background: transparent;
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    min-width: 28px;
+    max-width: 28px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0;
+    color: {COLORS["text_secondary"]};
+}}
+QPushButton#PaletteIconBtn:hover {{
+    background: {COLORS["bg"]};
+    border-color: {COLORS["border_strong"]};
+}}
+QPushButton#PaletteIconBtn:checked {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+}}
+QPushButton#ToolSegmentBtn {{
+    background: {COLORS["bg"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    padding: 7px 8px;
+    font-size: 12px;
+}}
+QPushButton#ToolSegmentBtn:hover {{
+    border-color: {COLORS["border_strong"]};
+}}
+QPushButton#ToolSegmentBtn:checked {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+    font-weight: 600;
+}}
+QPushButton#ColorSwatchBtn {{
+    border: 2px solid transparent;
+}}
+QPushButton#ColorSwatchBtn:checked {{
+    border-color: {COLORS["accent"]};
+}}
+#PaletteFabButton {{
+    background: {COLORS["accent"]};
+    color: #ffffff;
+    border: none;
+    border-radius: 18px;
+    font-weight: 600;
+    font-size: 12px;
+    padding: 6px 14px;
+}}
+#PaletteFabButton:hover {{
+    background: {COLORS["accent_hover"]};
+}}
 """
 
 

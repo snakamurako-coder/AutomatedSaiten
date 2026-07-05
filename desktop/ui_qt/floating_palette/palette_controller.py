@@ -32,19 +32,15 @@ class PaletteFabButton(QPushButton):
     """最小化時の復元 FAB。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__("🎨 ツール", parent)
+        super().__init__("描画ツール", parent)
+        self.setObjectName("PaletteFabButton")
         self.setWindowFlags(
             Qt.WindowType.Window
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint
             | Qt.WindowType.FramelessWindowHint,
         )
-        self.setFixedSize(88, 36)
-        self.setStyleSheet(
-            "QPushButton { background: #2563eb; color: white; border-radius: 18px;"
-            " font-weight: bold; padding: 4px 10px; }"
-            "QPushButton:hover { background: #1d4ed8; }"
-        )
+        self.setFixedSize(96, 36)
 
 
 class PaletteController:
@@ -71,7 +67,6 @@ class PaletteController:
         self.tool_window.eraser_mode_changed.connect(self._on_eraser_mode_changed)
         self.tool_window.show_ink_changed.connect(self._on_show_ink_changed)
         self.tool_window.minimize_requested.connect(self._minimize)
-        self.tool_window.drag_moved.connect(self._on_tool_palette_drag)
         self.format_window.style_changed.connect(self._on_format_style)
         self.format_window.edit_requested.connect(self._on_format_edit)
         self.format_window.delete_requested.connect(self._on_format_delete)
@@ -179,10 +174,6 @@ class PaletteController:
         self.fab.hide()
         self.tool_window.show()
         self.tool_window.raise_()
-        self._clamp_tool_window()
-
-    def _on_tool_palette_drag(self, delta: QPoint) -> None:
-        self.tool_window.move(self.tool_window.pos() + delta)
         self._clamp_tool_window()
 
     def _connect_stacks(self) -> None:

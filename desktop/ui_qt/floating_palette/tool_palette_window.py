@@ -2,8 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QPoint, Qt, Signal
-from PySide6.QtGui import QMouseEvent
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -28,45 +27,6 @@ from ui_qt.floating_palette.palette_prefs import (
 from ui_qt.stylus_overlay import ERASER_MODE_PIXEL, ERASER_MODE_STROKE
 
 
-class _DragHeader(QFrame):
-    moved = Signal(QPoint)
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self.setFixedHeight(28)
-        self.setCursor(Qt.CursorShape.SizeAllCursor)
-        self.setStyleSheet("background: #f3f4f6; border-radius: 4px;")
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(6, 2, 6, 2)
-        self._grip = QLabel("⋮⋮")
-        self._grip.setStyleSheet("border: none; color: #6b7280;")
-        lay.addWidget(self._grip)
-        lay.addStretch()
-        self._origin = QPoint()
-        self._dragging = False
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            self._dragging = True
-            self._origin = event.globalPosition().toPoint()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._dragging and event.buttons() & Qt.LeftButton:
-            delta = event.globalPosition().toPoint() - self._origin
-            self._origin = event.globalPosition().toPoint()
-            self.moved.emit(delta)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        self._dragging = False
-        event.accept()
-
-
 class ToolPaletteWindow(QWidget):
     """別ウィンドウ型描画ツールパレット。"""
 
@@ -76,7 +36,6 @@ class ToolPaletteWindow(QWidget):
     show_ink_changed = Signal(bool)
     view_mode_changed = Signal(str)
     minimize_requested = Signal()
-    drag_moved = Signal(QPoint)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -85,81 +44,110 @@ class ToolPaletteWindow(QWidget):
             | Qt.WindowType.Tool
             | Qt.WindowType.WindowStaysOnTopHint,
         )
-        self.setWindowTitle("🎨 ツール")
+        self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
-        self.resize(240, 320)
+        self.resize(248, 300)
+
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(12, 10, 12, 12)
+        root.setSpacing(8)
 
         header_row = QHBoxLayout()
-        self._header = _DragHeader()
-        self._header.moved.connect(self.drag_moved.emit)
-        header_row.addWidget(self._header, 1)
+        header_row.setSpacing(6)
+        title = QLabel("描画ツール")
+        title.setObjectName("FloatingPaletteTitle")
+        header_row.addWidget(title)
+        header_row.addStretch()
         self._min_btn = QPushButton("−")
-        self._min_btn.setFixedSize(24, 24)
+        self._min_btn.setObjectName("PaletteIconBtn")
+        self._min_btn.setToolTip("最小化")
         self._min_btn.clicked.connect(self.minimize_requested.emit)
         header_row.addWidget(self._min_btn)
         self._view_btn = QPushButton("詳細")
-        self._view_btn.setFixedHeight(24)
+        self._view_btn.setObjectName("PaletteIconBtn")
+        self._view_btn.setFixedWidth(44)
+        self._view_btn.setToolTip("表示切替")
         self._view_btn.clicked.connect(self._toggle_view)
         header_row.addWidget(self._view_btn)
         root.addLayout(header_row)
 
         tools_row = QHBoxLayout()
+        tools_row.setSpacing(4)
         self._tool_group = QButtonGroup(self)
-        self._pen_btn = QPushButton("ペン")
-        self._pen_btn.setCheckable(True)
-        self._eraser_btn = QPushButton("消しゴム")
-        self._eraser_btn.setCheckable(True)
-        self._text_btn = QPushButton("テキスト")
-        self._text_btn.setCheckable(True)
+        self._pen_btn = self._make_tool_btn("ペン")
+        self._eraser_btn = self._make_tool_btn("消しゴム")
+        self._text_btn = self._make_tool_btn("テキスト")
         for i, btn in enumerate((self._pen_btn, self._eraser_btn, self._text_btn)):
             self._tool_group.addButton(btn, i)
-            tools_row.addWidget(btn)
+            tools_row.addWidget(btn, 1)
         self._tool_group.idClicked.connect(self._on_tool_id)
         root.addLayout(tools_row)
 
-        self._text_place_btn = QPushButton("テキストボックスを配置")
-        self._text_place_btn.clicked.connect(lambda: self._set_tool(TOOL_TEXT))
-        root.addWidget(self._text_place_btn)
+        self._hint_label = QLabel("画像をクリックしてテキストボックスを配置")
+        self._hint_label.setObjectName("PaletteHintLabel")
+        self._hint_label.setWordWrap(True)
+        self._hint_label.hide()
+        root.addWidget(self._hint_label)
+
+        self._brush_frame = QFrame()
+        self._brush_frame.setObjectName("FloatingPaletteSection")
+        brush_lay = QVBoxLayout(self._brush_frame)
+        brush_lay.setContentsMargins(0, 0, 0, 0)
+        brush_lay.setSpacing(8)
 
         colors_row = QHBoxLayout()
+        colors_row.setSpacing(6)
         self._color_btns: list[QPushButton] = []
         self._color_group = QButtonGroup(self)
         for i, col in enumerate(PALETTE_COLORS):
             b = QPushButton()
-            b.setFixedSize(24, 24)
+            b.setObjectName("ColorSwatchBtn")
+            b.setFixedSize(28, 28)
             b.setCheckable(True)
-            b.setStyleSheet(f"background: {col}; border: 1px solid #ccc; border-radius: 12px;")
+            b.setProperty("swatchColor", col)
+            b.setStyleSheet(
+                f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 14px; }}"
+            )
             b.clicked.connect(lambda _c=False, c=col: self._pick_color(c))
             self._color_group.addButton(b, i)
             colors_row.addWidget(b)
             self._color_btns.append(b)
-        root.addLayout(colors_row)
+        colors_row.addStretch()
+        brush_lay.addLayout(colors_row)
 
         width_row = QHBoxLayout()
-        width_row.addWidget(QLabel("太さ"))
+        width_lbl = QLabel("太さ")
+        width_lbl.setFixedWidth(36)
+        width_row.addWidget(width_lbl)
         self._width_slider = QSlider(Qt.Orientation.Horizontal)
         self._width_slider.setRange(1, 20)
         self._width_slider.setValue(3)
         self._width_slider.valueChanged.connect(self._emit_brush)
         width_row.addWidget(self._width_slider, 1)
-        root.addLayout(width_row)
+        brush_lay.addLayout(width_row)
+        root.addWidget(self._brush_frame)
 
         self._detail_frame = QFrame()
+        self._detail_frame.setObjectName("FloatingPaletteSection")
         detail_lay = QVBoxLayout(self._detail_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
+        detail_lay.setSpacing(8)
+
         alpha_row = QHBoxLayout()
-        alpha_row.addWidget(QLabel("透明度"))
+        alpha_lbl = QLabel("透明度")
+        alpha_lbl.setFixedWidth(48)
+        alpha_row.addWidget(alpha_lbl)
         self._alpha_slider = QSlider(Qt.Orientation.Horizontal)
         self._alpha_slider.setRange(10, 100)
         self._alpha_slider.setValue(100)
         self._alpha_slider.valueChanged.connect(self._emit_brush)
         alpha_row.addWidget(self._alpha_slider, 1)
         detail_lay.addLayout(alpha_row)
+
         eraser_row = QHBoxLayout()
-        eraser_row.addWidget(QLabel("消しゴム"))
+        eraser_lbl = QLabel("消しゴム")
+        eraser_lbl.setFixedWidth(48)
+        eraser_row.addWidget(eraser_lbl)
         self._eraser_combo = QComboBox()
         self._eraser_combo.addItem("ピクセル", ERASER_MODE_PIXEL)
         self._eraser_combo.addItem("ストローク", ERASER_MODE_STROKE)
@@ -168,16 +156,26 @@ class ToolPaletteWindow(QWidget):
         )
         eraser_row.addWidget(self._eraser_combo, 1)
         detail_lay.addLayout(eraser_row)
+
         self._show_ink_check = QCheckBox("手書きレイヤー表示")
         self._show_ink_check.setChecked(True)
         self._show_ink_check.toggled.connect(self.show_ink_changed.emit)
         detail_lay.addWidget(self._show_ink_check)
         root.addWidget(self._detail_frame)
 
+        root.addStretch()
+
         self._view_mode = VIEW_SIMPLE
+        self._current_tool = TOOL_PEN
         self._current_color = PALETTE_COLORS[0]
         self._apply_view_mode()
         self._set_tool(TOOL_PEN)
+
+    def _make_tool_btn(self, label: str) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setObjectName("ToolSegmentBtn")
+        btn.setCheckable(True)
+        return btn
 
     def _toggle_view(self) -> None:
         self._view_mode = VIEW_DETAILED if self._view_mode == VIEW_SIMPLE else VIEW_SIMPLE
@@ -189,6 +187,11 @@ class ToolPaletteWindow(QWidget):
         self._detail_frame.setVisible(detailed)
         self._view_btn.setText("簡易" if detailed else "詳細")
 
+    def _update_tool_ui(self, tool: str) -> None:
+        is_text = tool == TOOL_TEXT
+        self._hint_label.setVisible(is_text)
+        self._brush_frame.setVisible(not is_text)
+
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
         self._apply_view_mode()
@@ -199,10 +202,12 @@ class ToolPaletteWindow(QWidget):
             self._set_tool(tools[tool_id])
 
     def _set_tool(self, tool: str) -> None:
+        self._current_tool = tool
         mapping = {TOOL_PEN: self._pen_btn, TOOL_ERASER: self._eraser_btn, TOOL_TEXT: self._text_btn}
         btn = mapping.get(tool)
         if btn:
             btn.setChecked(True)
+        self._update_tool_ui(tool)
         self.tool_changed.emit(tool)
 
     def set_tool(self, tool: str) -> None:

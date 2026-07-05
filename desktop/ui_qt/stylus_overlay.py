@@ -510,6 +510,9 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
+        if self._tool_mode == TOOL_TEXT:
+            event.ignore()
+            return
         if self._should_erase_tablet(event):
             self._handle_tablet_eraser(event)
             return
@@ -596,8 +599,9 @@ class InkOverlayWidget(QWidget):
             self._handle_mouse_eraser(event)
             return
         if not self._should_draw_mouse(event):
-            self.click_through.emit()
-            event.accept()
+            if self._tool_mode != TOOL_TEXT:
+                self.click_through.emit()
+            event.ignore()
             return
         self._eraser_active = False
         self._pen_active = is_pen_mouse_event(event) or not self._palm_rejection
@@ -727,6 +731,7 @@ class CropInkImageStack(QWidget):
 
     def _sync_layer_order(self) -> None:
         if self._tool_mode == TOOL_TEXT:
+            self.ink_overlay.lower()
             self.text_layer.raise_()
         else:
             self.text_layer.lower()
@@ -756,8 +761,11 @@ class CropInkImageStack(QWidget):
 
     def set_tool_mode(self, mode: str) -> None:
         self._tool_mode = mode
+        is_text = mode == TOOL_TEXT
         self.ink_overlay.set_tool_mode(mode)
-        self.text_layer.set_placement_mode(mode == TOOL_TEXT)
+        self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, is_text)
+        self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, not is_text)
+        self.text_layer.set_placement_mode(is_text)
         self._sync_layer_order()
 
     def set_brush(self, color: str, width: float, alpha: float) -> None:
