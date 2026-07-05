@@ -21,6 +21,7 @@ from ui_qt.helpers import pil_to_qpixmap
 
 DEFAULT_INK_COLOR = "#111827"
 DEFAULT_BASE_WIDTH = 2.5
+DEFAULT_ERASER_RADIUS = 18.0
 
 # PySide6 では pointerType は QTabletEvent ではなく QPointingDevice 側の列挙
 _Pen = QPointingDevice.PointerType.Pen
@@ -55,6 +56,30 @@ def is_finger_tablet_event(event: QTabletEvent) -> bool:
     return event.pointerType() == _Finger
 
 
+def is_eraser_tablet_event(event: QTabletEvent) -> bool:
+    return event.pointerType() == _Eraser
+
+
+def is_eraser_mouse_event(event: QMouseEvent) -> bool:
+    if event.pointerType() == _Eraser:
+        return True
+    dev = event.pointingDevice()
+    return dev is not None and dev.pointerType() == _Eraser
+
+
+def _dist_point_to_segment(
+    px: float, py: float, ax: float, ay: float, bx: float, by: float
+) -> float:
+    dx, dy = bx - ax, by - ay
+    len_sq = dx * dx + dy * dy
+    if len_sq <= 1e-9:
+        return ((px - ax) ** 2 + (py - ay) ** 2) ** 0.5
+    t = max(0.0, min(1.0, ((px - ax) * dx + (py - ay) * dy) / len_sq))
+    proj_x = ax + t * dx
+    proj_y = ay + t * dy
+    return ((px - proj_x) ** 2 + (py - proj_y) ** 2) ** 0.5
+
+
 def _mouse_synthesized_by_system(event: QMouseEvent) -> bool:
     """Qt バージョン差を吸収してタブレット由来の合成マウスか判定。"""
     synth = getattr(Qt, "MouseEventFlag", None)
@@ -70,16 +95,22 @@ def _mouse_synthesized_by_system(event: QMouseEvent) -> bool:
 
 
 def is_pen_mouse_event(event: QMouseEvent) -> bool:
+    if is_eraser_mouse_event(event):
+        return False
     pt = event.pointerType()
-    if pt in (_Pen, _Eraser):
+    if pt == _Pen:
         return True
+    if pt == _Eraser:
+        return False
     if pt == _Finger:
         return False
     dev = event.pointingDevice()
     if dev is not None:
         dpt = dev.pointerType()
-        if dpt in (_Pen, _Eraser):
+        if dpt == _Pen:
             return True
+        if dpt == _Eraser:
+            return False
         if dpt == _Finger:
             return False
     # 合成マウス: 筆圧 0< p <1 ならペン
@@ -118,6 +149,7 @@ class InkOverlayWidget(QWidget):
         self._show_ink = True
         self._drawing_enabled = True
         self._pen_active = False
+        self._eraser_active = False
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setAttribute(Qt.WA_TabletTracking, True)
         self.setAutoFillBackground(False)
@@ -151,8 +183,74 @@ class InkOverlayWidget(QWidget):
         self._strokes = []
         self._current = None
         self._pen_active = False
+        self._eraser_active = False
         self.update()
         self.strokes_changed.emit()
+
+    def _cancel_current_stroke(self) -> None:
+        self._current = None
+        self._pen_active = False
+
+    def _eraser_radius_native(self, pressure: float) -> float:
+        p = max(0.0, min(1.0, pressure))
+        return DEFAULT_ERASER_RADIUS * (0.75 + 0.25 * p)
+
+    def _stroke_hit_radius(self, stroke: dict[str, Any], eraser_r: float) -> float:
+        base_w = float(stroke.get("baseWidth") or DEFAULT_BASE_WIDTH)
+        return eraser_r + base_w * 0.5
+
+    def _erase_stroke(
+        self,
+        stroke: dict[str, Any],
+        cx: float,
+        cy: float,
+        eraser_r: float,
+    ) -> list[dict[str, Any]]:
+        points = stroke.get("points") or []
+        if not points:
+            return []
+        hit_r = self._stroke_hit_radius(stroke, eraser_r)
+        fragments: list[list[dict[str, Any]]] = []
+        current: list[dict[str, Any]] = []
+        for i, p in enumerate(points):
+            px, py = float(p["x"]), float(p["y"])
+            hit = (px - cx) ** 2 + (py - cy) ** 2 <= hit_r * hit_r
+            if i > 0:
+                ap = points[i - 1]
+                d = _dist_point_to_segment(
+                    cx,
+                    cy,
+                    float(ap["x"]),
+                    float(ap["y"]),
+                    px,
+                    py,
+                )
+                if d <= hit_r:
+                    hit = True
+            if hit:
+                if current:
+                    fragments.append(current)
+                    current = []
+            else:
+                current.append(p)
+        if current:
+            fragments.append(current)
+        return [{**stroke, "points": frag} for frag in fragments if frag]
+
+    def _erase_at(self, x: float, y: float, pressure: float) -> bool:
+        nx, ny = self._to_native(x, y)
+        eraser_r = self._eraser_radius_native(pressure)
+        before_pts = sum(len(s.get("points") or []) for s in self._strokes)
+        before_n = len(self._strokes)
+        new_strokes: list[dict[str, Any]] = []
+        for stroke in self._strokes:
+            new_strokes.extend(self._erase_stroke(stroke, nx, ny, eraser_r))
+        after_pts = sum(len(s.get("points") or []) for s in new_strokes)
+        if before_pts == after_pts and before_n == len(new_strokes):
+            return False
+        self._strokes = new_strokes
+        self.strokes_changed.emit()
+        return True
 
     def _scale_x(self) -> float:
         return self._native_w / float(self._display_w)
@@ -240,23 +338,102 @@ class InkOverlayWidget(QWidget):
             painter.setPen(pen)
             painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
 
-    def _should_draw_tablet(self, event: QTabletEvent) -> bool:
+    def _should_handle_tablet(self, event: QTabletEvent) -> bool:
         if not self._drawing_enabled:
             return False
+        if is_eraser_tablet_event(event):
+            return True
         if self._palm_rejection:
             if is_finger_tablet_event(event):
                 return False
             return is_stylus_tablet_event(event)
         return True
 
+    def _should_draw_tablet(self, event: QTabletEvent) -> bool:
+        if is_eraser_tablet_event(event):
+            return False
+        return self._should_handle_tablet(event)
+
+    def _should_erase_tablet(self, event: QTabletEvent) -> bool:
+        if not self._drawing_enabled:
+            return False
+        return is_eraser_tablet_event(event) or self._eraser_active
+
     def _should_draw_mouse(self, event: QMouseEvent) -> bool:
         if not self._drawing_enabled:
+            return False
+        if is_eraser_mouse_event(event):
             return False
         if self._palm_rejection:
             return is_pen_mouse_event(event) or self._pen_active
         return True
 
+    def _should_erase_mouse(self, event: QMouseEvent) -> bool:
+        if not self._drawing_enabled:
+            return False
+        return is_eraser_mouse_event(event) or self._eraser_active
+
+    def _handle_tablet_eraser(self, event: QTabletEvent) -> None:
+        pos = event.position()
+        pressure = _event_pressure(event)
+        t = event.type()
+        if t == QEvent.Type.TabletPress:
+            self._eraser_active = True
+            self._cancel_current_stroke()
+            self._erase_at(pos.x(), pos.y(), pressure)
+            self.update()
+            event.accept()
+            return
+        if t == QEvent.Type.TabletMove:
+            if self._eraser_active or is_eraser_tablet_event(event):
+                self._eraser_active = True
+                self._cancel_current_stroke()
+                self._erase_at(pos.x(), pos.y(), pressure)
+                self.update()
+            event.accept()
+            return
+        if t == QEvent.Type.TabletRelease:
+            self._eraser_active = False
+            self.update()
+            event.accept()
+            return
+        event.ignore()
+
+    def _handle_mouse_eraser(self, event: QMouseEvent) -> None:
+        if event.button() != Qt.LeftButton and not (event.buttons() & Qt.LeftButton):
+            if event.type() == QEvent.Type.MouseButtonRelease:
+                self._eraser_active = False
+                event.accept()
+            else:
+                event.ignore()
+            return
+        pressure = _event_pressure(event)
+        pos = event.position()
+        t = event.type()
+        if t == QEvent.Type.MouseButtonPress:
+            self._eraser_active = True
+            self._cancel_current_stroke()
+            self._erase_at(pos.x(), pos.y(), pressure)
+            self.update()
+            event.accept()
+            return
+        if t == QEvent.Type.MouseMove:
+            if self._eraser_active:
+                self._erase_at(pos.x(), pos.y(), pressure)
+                self.update()
+            event.accept()
+            return
+        if t == QEvent.Type.MouseButtonRelease:
+            self._eraser_active = False
+            event.accept()
+            return
+        event.ignore()
+
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
+        if self._should_erase_tablet(event):
+            self._handle_tablet_eraser(event)
+            return
+
         pos = event.position()
         pressure = _event_pressure(event)
         t = event.type()
@@ -271,6 +448,7 @@ class InkOverlayWidget(QWidget):
             event.accept()
             return
 
+        self._eraser_active = False
         if t == QEvent.Type.TabletPress:
             self._pen_active = True
             self._start_stroke(pos.x(), pos.y(), pressure)
@@ -334,16 +512,23 @@ class InkOverlayWidget(QWidget):
         if event.button() != Qt.LeftButton:
             event.ignore()
             return
+        if self._should_erase_mouse(event):
+            self._handle_mouse_eraser(event)
+            return
         if not self._should_draw_mouse(event):
             self.click_through.emit()
             event.accept()
             return
+        self._eraser_active = False
         self._pen_active = is_pen_mouse_event(event) or not self._palm_rejection
         self._start_stroke(event.position().x(), event.position().y(), _event_pressure(event))
         self.update()
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._should_erase_mouse(event):
+            self._handle_mouse_eraser(event)
+            return
         if not self._should_draw_mouse(event):
             event.ignore()
             return
@@ -362,6 +547,9 @@ class InkOverlayWidget(QWidget):
         event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._should_erase_mouse(event) or self._eraser_active:
+            self._handle_mouse_eraser(event)
+            return
         if not self._should_draw_mouse(event) and not self._current:
             event.ignore()
             return
