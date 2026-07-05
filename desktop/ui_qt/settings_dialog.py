@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Callable
 
 from PySide6.QtCore import QTimer
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -14,15 +15,22 @@ from PySide6.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLineEdit,
+    QPushButton,
     QRadioButton,
     QVBoxLayout,
     QWidget,
+    QColorDialog,
 )
 
 from config import CONFIG_PATH, load_config, save_config
 from services.gemini_rubric import test_gemini_api_key
 from services.ocr import test_vision_api_key
 from ui_qt import helpers as h
+from ui_qt.floating_palette.palette_prefs import (
+    TEXT_PALETTE_COLORS_DEFAULT,
+    load_text_palette_colors,
+    save_text_palette_colors,
+)
 
 
 class SettingsDialog(QDialog):
@@ -102,6 +110,33 @@ class SettingsDialog(QDialog):
         stylus_form.addRow("", self.palm_rejection_check)
         root.addWidget(stylus_box)
 
+        # テキスト注釈
+        text_box = QGroupBox("テキスト注釈")
+        text_lay = QVBoxLayout(text_box)
+        text_lay.setSpacing(8)
+        text_lay.addWidget(
+            h.caption_label("書式タブで選べるテンプレート文字色（6色）。B パターンの背景は文字色の補色になります。")
+        )
+        palette_row = QHBoxLayout()
+        palette_row.setSpacing(6)
+        self._text_palette_colors: list[str] = list(load_text_palette_colors())
+        self._text_palette_btns: list[QPushButton] = []
+        for i in range(6):
+            btn = QPushButton()
+            btn.setObjectName("ColorSwatchBtn")
+            btn.setFixedSize(28, 28)
+            btn.setToolTip("クリックで色を変更")
+            btn.clicked.connect(lambda _c=False, idx=i: self._pick_text_palette_color(idx))
+            palette_row.addWidget(btn)
+            self._text_palette_btns.append(btn)
+        reset_btn = h.button("初期化", self._reset_text_palette_colors)
+        reset_btn.setToolTip("6色をデフォルトに戻す")
+        palette_row.addWidget(reset_btn)
+        palette_row.addStretch()
+        text_lay.addLayout(palette_row)
+        self._refresh_text_palette_btns()
+        root.addWidget(text_box)
+
         # その他
         misc_box = QGroupBox("その他")
         misc_form = QFormLayout(misc_box)
@@ -120,6 +155,26 @@ class SettingsDialog(QDialog):
         btn_row.addWidget(h.button("キャンセル", self.reject))
         btn_row.addWidget(h.button("保存", self._on_save, variant="primary"))
         root.addLayout(btn_row)
+
+    def _refresh_text_palette_btns(self) -> None:
+        for i, btn in enumerate(self._text_palette_btns):
+            col = self._text_palette_colors[i]
+            btn.setStyleSheet(
+                f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 14px; }}"
+            )
+
+    def _pick_text_palette_color(self, index: int) -> None:
+        if index < 0 or index >= len(self._text_palette_colors):
+            return
+        picked = QColorDialog.getColor(QColor(self._text_palette_colors[index]), self, "テンプレート文字色")
+        if not picked.isValid():
+            return
+        self._text_palette_colors[index] = picked.name()
+        self._refresh_text_palette_btns()
+
+    def _reset_text_palette_colors(self) -> None:
+        self._text_palette_colors = list(TEXT_PALETTE_COLORS_DEFAULT)
+        self._refresh_text_palette_btns()
 
     def _browse_tesseract(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -146,6 +201,7 @@ class SettingsDialog(QDialog):
             return
         try:
             save_config(cfg)
+            save_text_palette_colors(self._text_palette_colors)
         except OSError as e:
             h.error(self, "保存失敗", str(e))
             return

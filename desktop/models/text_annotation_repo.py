@@ -51,9 +51,9 @@ TEXT_STYLE_TEMPLATE_A: dict[str, Any] = {
 # パターンB: 文字色の補色を半透明背景に（fillColor は resolve で決定）
 TEXT_STYLE_TEMPLATE_B: dict[str, Any] = {
     "templateId": "B",
-    "borderWidth": 1,
-    "borderAlpha": 0.55,
-    "fillAlpha": 0.7,
+    "borderWidth": 0,
+    "borderAlpha": 0.0,
+    "fillAlpha": 0.2,
     "textColor": TEXT_PALETTE_COLORS[0],
     "fontSize": 14,
     "bold": False,
@@ -97,6 +97,9 @@ def resolve_text_style(style: dict[str, Any] | None) -> dict[str, Any]:
         merged["textColor"] = tc
         merged["fillColor"] = complementary_hex(tc)
         merged["borderColor"] = tc
+        merged["borderWidth"] = 0
+        merged["borderAlpha"] = 0.0
+        merged["fillAlpha"] = 0.2
     return merged
 
 

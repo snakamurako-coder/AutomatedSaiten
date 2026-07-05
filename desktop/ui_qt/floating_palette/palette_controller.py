@@ -16,7 +16,6 @@ from ui_qt.floating_palette.palette_prefs import (
     load_palette_prefs,
     load_text_palette_colors,
     save_palette_prefs,
-    save_text_palette_colors,
 )
 from ui_qt.floating_palette.tool_palette_window import ToolPaletteWindow
 from ui_qt.stylus_overlay import CropInkImageStack
@@ -73,7 +72,6 @@ class PaletteController:
         self.tool_window.eraser_mode_changed.connect(self._on_eraser_mode_changed)
         self.tool_window.show_ink_changed.connect(self._on_show_ink_changed)
         self.tool_window.show_text_changed.connect(self._on_show_text_changed)
-        self.tool_window.text_palette_colors_changed.connect(self._on_text_palette_colors_changed)
         self.tool_window.minimize_requested.connect(self._minimize)
         fp.style_changed.connect(self._on_format_style)
         fp.edit_done_requested.connect(self._on_format_edit_done)
@@ -150,13 +148,11 @@ class PaletteController:
                 "last_alpha": alpha,
                 "last_tool": self._tool,
                 "view_mode": self.tool_window._view_mode,
-                "text_palette_colors": self.tool_window.text_palette_colors(),
             }
         )
 
-    def _on_text_palette_colors_changed(self, colors: list[str]) -> None:
-        save_text_palette_colors(colors)
-        self.tool_window.format_panel.set_text_palette_colors(colors)
+    def apply_text_palette_colors(self) -> None:
+        self.tool_window.set_text_palette_colors(load_text_palette_colors())
 
     def apply_config(self) -> None:
         stylus = load_stylus_prefs()
@@ -164,6 +160,7 @@ class PaletteController:
         self._eraser_mode = stylus["eraser_mode"]
         self.tool_window.set_palm_rejection(self._palm_rejection)
         self.tool_window.set_eraser_mode(self._eraser_mode)
+        self.apply_text_palette_colors()
         if self._palm_rejection and self._tool == TOOL_PEN:
             self.tool_window.set_tool(TOOL_NONE)
         self._apply_to_stacks()

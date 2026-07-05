@@ -47,7 +47,7 @@ class FormatPalettePanel(QWidget):
         tpl_a.setToolTip("背景・枠なし（文字だけ表示）")
         tpl_a.clicked.connect(lambda: self.apply_template("A"))
         tpl_b = QPushButton("B: 半透明")
-        tpl_b.setToolTip("文字色の補色を半透明背景に（文字色は下の6色から選択）")
+        tpl_b.setToolTip("文字色の補色を背景20%で表示（枠線なし）")
         tpl_b.clicked.connect(lambda: self.apply_template("B"))
         tpl_row.addWidget(tpl_a, 1)
         tpl_row.addWidget(tpl_b, 1)

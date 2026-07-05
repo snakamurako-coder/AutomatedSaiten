@@ -185,7 +185,7 @@ def render_text_annotation_layer(
     canvas_size = (int(size[0] * sf), int(size[1] * sf))
     layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    pad = 4 * work_scale
+    pad = 1 * work_scale
     for box in annotations or []:
         st = resolve_text_style(box.get("style") or {})
         x = float(box.get("x") or 0) * work_scale
