@@ -41,6 +41,7 @@ class TextBoxLayer(QWidget):
         self._widgets: dict[str, TextBoxWidget] = {}
         self._selected_id: str | None = None
         self._placement_mode = False
+        self._show_text = True
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TabletTracking, True)
         self.setMouseTracking(True)
@@ -63,6 +64,10 @@ class TextBoxLayer(QWidget):
             self.setCursor(Qt.CursorShape.CrossCursor)
         else:
             self.unsetCursor()
+
+    def set_show_text(self, visible: bool) -> None:
+        self._show_text = bool(visible)
+        self.setVisible(self._show_text)
 
     def annotations(self) -> list[dict[str, Any]]:
         return [w.box_data() for w in self._widgets.values()]

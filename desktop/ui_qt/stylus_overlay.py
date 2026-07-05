@@ -697,6 +697,7 @@ class CropInkImageStack(QWidget):
         self._on_annotations_changed = on_annotations_changed
         self._palm_rejection = True
         self._show_ink = True
+        self._show_text = True
         self._tool_mode = TOOL_NONE
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -791,12 +792,10 @@ class CropInkImageStack(QWidget):
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
-        if self._tool_mode == TOOL_TEXT:
-            self.ink_overlay.lower()
-            self.text_layer.raise_()
-        else:
-            self.text_layer.lower()
-            self.ink_overlay.raise_()
+        # 最背面: 画像 → 中間: テキスト → 最前面: 手書き
+        self.image_label.lower()
+        self.text_layer.raise_()
+        self.ink_overlay.raise_()
 
     def _emit_strokes_changed(self) -> None:
         if self._on_strokes_changed:
@@ -813,6 +812,10 @@ class CropInkImageStack(QWidget):
     def set_show_ink(self, visible: bool) -> None:
         self._show_ink = bool(visible)
         self.ink_overlay.set_show_ink(visible)
+
+    def set_show_text(self, visible: bool) -> None:
+        self._show_text = bool(visible)
+        self.text_layer.set_show_text(visible)
 
     def set_drawing_enabled(self, enabled: bool) -> None:
         self.ink_overlay.set_drawing_enabled(enabled)

@@ -275,12 +275,12 @@ def render_feedback_image(
     )
 
     composite = Image.alpha_composite(base, layer)
-    if ink_strokes:
-        ink_layer = render_ink_layer(composite.size, ink_strokes, scale=1.0)
-        composite = Image.alpha_composite(composite, ink_layer)
     if text_annotations:
         text_layer = render_text_annotation_layer(composite.size, text_annotations, scale=1.0)
         composite = Image.alpha_composite(composite, text_layer)
+    if ink_strokes:
+        ink_layer = render_ink_layer(composite.size, ink_strokes, scale=1.0)
+        composite = Image.alpha_composite(composite, ink_layer)
     return composite.convert("RGB")
 
 

@@ -5,10 +5,9 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtWidgets import QPushButton, QScrollArea, QWidget
+from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QWidget
 
 from ui_qt.floating_palette.format_palette_placer import clamp_window_to_viewer
-from ui_qt.floating_palette.format_palette_window import FormatPaletteWindow
 from ui_qt.floating_palette.palette_prefs import (
     TOOL_ERASER,
     TOOL_NONE,
@@ -55,25 +54,28 @@ class PaletteController:
         self._step_id: int | None = None
         self._tool = TOOL_NONE
         self._show_ink = True
+        self._show_text = True
         stylus = load_stylus_prefs()
         self._palm_rejection = stylus["palm_rejection"]
         self._eraser_mode = stylus["eraser_mode"]
         prefs = load_palette_prefs()
 
         self.tool_window = ToolPaletteWindow(main_window)
-        self.format_window = FormatPaletteWindow(main_window)
         self.fab = PaletteFabButton(main_window)
         self.tool_window.set_eraser_mode(self._eraser_mode)
         self.tool_window.set_palm_rejection(self._palm_rejection)
 
+        fp = self.tool_window.format_panel
         self.tool_window.tool_changed.connect(self._on_tool_changed)
         self.tool_window.brush_changed.connect(self._on_brush_changed)
         self.tool_window.eraser_mode_changed.connect(self._on_eraser_mode_changed)
         self.tool_window.show_ink_changed.connect(self._on_show_ink_changed)
+        self.tool_window.show_text_changed.connect(self._on_show_text_changed)
         self.tool_window.minimize_requested.connect(self._minimize)
-        self.format_window.style_changed.connect(self._on_format_style)
-        self.format_window.edit_requested.connect(self._on_format_edit)
-        self.format_window.delete_requested.connect(self._on_format_delete)
+        fp.style_changed.connect(self._on_format_style)
+        fp.edit_done_requested.connect(self._on_format_edit_done)
+        fp.edit_requested.connect(self._on_format_edit)
+        fp.delete_requested.connect(self._on_format_delete)
         self.fab.clicked.connect(self._restore_from_fab)
 
         self.tool_window.set_view_mode(str(prefs.get("view_mode") or "simple"))
@@ -106,7 +108,8 @@ class PaletteController:
                 self._clamp_tool_window()
 
     def detach(self) -> None:
-        self.format_window.hide_palette()
+        self.tool_window.set_format_tab_available(False)
+        self.tool_window.show_draw_tab()
         self._page = None
         self._step_id = None
         self.tool_window.hide()
@@ -219,6 +222,7 @@ class PaletteController:
         for stack in self._stacks():
             stack.set_palm_rejection(self._palm_rejection)
             stack.set_show_ink(self._show_ink)
+            stack.set_show_text(self._show_text)
             stack.set_eraser_mode(self._eraser_mode)
             stack.set_tool_mode(self._tool)
             stack.set_brush(color, width, alpha)
@@ -227,32 +231,19 @@ class PaletteController:
         self._tool = tool
         self._apply_to_stacks()
         if tool != TOOL_TEXT:
-            self.format_window.hide_palette()
+            for stack in self._stacks():
+                stack.text_layer.clear_selection()
 
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
-            self.format_window.hide_palette()
+            self.tool_window.set_format_tab_available(False)
+            self.tool_window.show_draw_tab()
             if self._tool == TOOL_TEXT:
                 self.tool_window.clear_text_tool()
             return
-        st = box.get("style") or {}
-        self.format_window.load_style(st)
-        self.format_window.show()
-        self.format_window.raise_()
-        for stack in self._stacks():
-            sel = stack.text_layer.selected_box()
-            if sel and str(sel.get("id")) == str(box.get("id")):
-                w = stack.text_layer
-                for child in w.children():
-                    if hasattr(child, "box_id") and child.box_id == str(box.get("id")):
-                        tl = child.mapToGlobal(QPoint(0, 0))
-                        rect = QRect(tl, child.size())
-                        self.format_window.reposition_near(
-                            rect,
-                            viewer_global=self._viewer_global_rect(),
-                        )
-                        break
-                break
+        self.tool_window.format_panel.load_style(box.get("style") or {})
+        self.tool_window.set_format_tab_available(True)
+        self.tool_window.show_format_tab()
 
     def _on_stack_image_clicked(self) -> None:
         if self._tool != TOOL_TEXT:
@@ -278,10 +269,25 @@ class PaletteController:
         for stack in self._stacks():
             stack.set_show_ink(visible)
 
+    def _on_show_text_changed(self, visible: bool) -> None:
+        self._show_text = bool(visible)
+        for stack in self._stacks():
+            stack.set_show_text(visible)
+
     def _on_format_style(self, style: dict[str, Any]) -> None:
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.update_selected_style(style)
+
+    def _on_format_edit_done(self) -> None:
+        fw = QApplication.focusWidget()
+        if fw is not None:
+            fw.clearFocus()
+        for stack in self._stacks():
+            stack.text_layer.clear_selection()
+        self.tool_window.clear_text_tool()
+        self.tool_window.set_format_tab_available(False)
+        self.tool_window.show_draw_tab()
 
     def _on_format_edit(self) -> None:
         for stack in self._stacks():
@@ -293,7 +299,8 @@ class PaletteController:
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.delete_selected()
-                self.format_window.hide_palette()
+                self.tool_window.set_format_tab_available(False)
+                self.tool_window.show_draw_tab()
                 return
 
     def register_stack(self, stack: CropInkImageStack) -> None:
@@ -303,6 +310,7 @@ class PaletteController:
         color, width, alpha = self.tool_window.current_brush()
         stack.set_palm_rejection(self._palm_rejection)
         stack.set_show_ink(self._show_ink)
+        stack.set_show_text(self._show_text)
         stack.set_eraser_mode(self._eraser_mode)
         stack.set_tool_mode(self._tool)
         stack.set_brush(color, width, alpha)

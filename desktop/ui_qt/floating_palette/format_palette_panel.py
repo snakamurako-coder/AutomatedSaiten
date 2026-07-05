@@ -1,10 +1,10 @@
-"""テキスト書式フローティングパレット。"""
+"""テキスト書式パネル（描画ツールウィンドウ内タブ用）。"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -16,46 +16,21 @@ from PySide6.QtWidgets import (
 )
 
 from ui_qt.crop_widgets import SliderSpinControls
-from ui_qt.floating_palette.format_palette_placer import place_format_palette
 
 
-class FormatPaletteWindow(QWidget):
-    """テキストボックス選択時の書式パレット。"""
+class FormatPalettePanel(QWidget):
+    """テキストボックス選択時の書式コントロール。"""
 
     style_changed = Signal(dict)
+    edit_done_requested = Signal()
     edit_requested = Signal()
     delete_requested = Signal()
-    pin_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(
-            parent,
-            Qt.WindowType.Window
-            | Qt.WindowType.Tool
-            | Qt.WindowType.WindowStaysOnTopHint,
-        )
-        self.setWindowTitle("テキスト書式")
-        self.setObjectName("FormatPaletteWindow")
-        self.resize(280, 340)
-        self._pinned = False
-        self._pinned_pos: QPoint | None = None
-
+        super().__init__(parent)
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 10, 12, 12)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
-
-        header_row = QHBoxLayout()
-        title = QLabel("テキスト書式")
-        title.setObjectName("FloatingPaletteTitle")
-        header_row.addWidget(title)
-        header_row.addStretch()
-        self._pin_btn = QPushButton("📌")
-        self._pin_btn.setObjectName("PaletteIconBtn")
-        self._pin_btn.setCheckable(True)
-        self._pin_btn.setToolTip("位置を固定")
-        self._pin_btn.toggled.connect(self._on_pin_toggled)
-        header_row.addWidget(self._pin_btn)
-        root.addLayout(header_row)
 
         self._border_w = SliderSpinControls(
             label="枠太さ",
@@ -126,22 +101,18 @@ class FormatPaletteWindow(QWidget):
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
+        done_btn = QPushButton("編集完了")
+        done_btn.clicked.connect(self.edit_done_requested.emit)
         edit_btn = QPushButton("文字を編集")
         edit_btn.clicked.connect(self.edit_requested.emit)
         del_btn = QPushButton("削除")
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self.delete_requested.emit)
+        btn_row.addWidget(done_btn, 1)
         btn_row.addWidget(edit_btn, 1)
         btn_row.addWidget(del_btn, 1)
         root.addLayout(btn_row)
-
-    def _on_pin_toggled(self, pinned: bool) -> None:
-        self._pinned = bool(pinned)
-        if self._pinned:
-            self._pinned_pos = self.pos()
-        else:
-            self._pinned_pos = None
-        self.pin_changed.emit(self._pinned)
+        root.addStretch()
 
     def load_style(self, style: dict[str, Any]) -> None:
         st = style or {}
@@ -176,31 +147,3 @@ class FormatPaletteWindow(QWidget):
                 "align": self._align_combo.currentText(),
             }
         )
-
-    def reposition_near(
-        self,
-        box_global_rect,
-        *,
-        viewer_global=None,
-    ) -> None:
-        if self._pinned and self._pinned_pos is not None:
-            return
-        pos = place_format_palette(
-            box_global_rect,
-            (self.width(), self.height()),
-            viewer_global=viewer_global,
-            pinned_pos=None,
-        )
-        self.move(pos)
-
-    def clear_pin(self) -> None:
-        self._pinned = False
-        self._pinned_pos = None
-        self._pin_btn.blockSignals(True)
-        self._pin_btn.setChecked(False)
-        self._pin_btn.blockSignals(False)
-        self.pin_changed.emit(False)
-
-    def hide_palette(self) -> None:
-        self.clear_pin()
-        self.hide()

@@ -11,11 +11,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ui_qt.crop_widgets import SliderSpinControls
+from ui_qt.floating_palette.format_palette_panel import FormatPalettePanel
 from ui_qt.floating_palette.palette_prefs import (
     PALETTE_COLORS,
     TOOL_ERASER,
@@ -27,6 +29,9 @@ from ui_qt.floating_palette.palette_prefs import (
 )
 from ui_qt.stylus_overlay import ERASER_MODE_PIXEL, ERASER_MODE_STROKE
 
+TAB_DRAW = "draw"
+TAB_FORMAT = "format"
+
 
 class ToolPaletteWindow(QWidget):
     """別ウィンドウ型描画ツールパレット。"""
@@ -35,8 +40,10 @@ class ToolPaletteWindow(QWidget):
     brush_changed = Signal(str, float, float)
     eraser_mode_changed = Signal(str)
     show_ink_changed = Signal(bool)
+    show_text_changed = Signal(bool)
     view_mode_changed = Signal(str)
     minimize_requested = Signal()
+    tab_changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -47,7 +54,7 @@ class ToolPaletteWindow(QWidget):
         )
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
-        self.resize(280, 300)
+        self.resize(280, 360)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 12)
@@ -55,9 +62,9 @@ class ToolPaletteWindow(QWidget):
 
         header_row = QHBoxLayout()
         header_row.setSpacing(6)
-        title = QLabel("描画ツール")
-        title.setObjectName("FloatingPaletteTitle")
-        header_row.addWidget(title)
+        self._title = QLabel("描画ツール")
+        self._title.setObjectName("FloatingPaletteTitle")
+        header_row.addWidget(self._title)
         header_row.addStretch()
         self._min_btn = QPushButton("−")
         self._min_btn.setObjectName("PaletteIconBtn")
@@ -71,6 +78,28 @@ class ToolPaletteWindow(QWidget):
         self._view_btn.clicked.connect(self._toggle_view)
         header_row.addWidget(self._view_btn)
         root.addLayout(header_row)
+
+        tab_row = QHBoxLayout()
+        tab_row.setSpacing(4)
+        self._tab_group = QButtonGroup(self)
+        self._tab_draw_btn = self._make_tab_btn("描画")
+        self._tab_format_btn = self._make_tab_btn("書式")
+        self._tab_format_btn.setEnabled(False)
+        for i, btn in enumerate((self._tab_draw_btn, self._tab_format_btn)):
+            self._tab_group.addButton(btn, i)
+            tab_row.addWidget(btn, 1)
+        self._tab_draw_btn.setChecked(True)
+        self._tab_draw_btn.toggled.connect(lambda c: c and self._switch_tab(TAB_DRAW))
+        self._tab_format_btn.toggled.connect(lambda c: c and self._switch_tab(TAB_FORMAT))
+        root.addLayout(tab_row)
+
+        self._stack = QStackedWidget()
+        root.addWidget(self._stack, 1)
+
+        self._draw_page = QWidget()
+        draw_lay = QVBoxLayout(self._draw_page)
+        draw_lay.setContentsMargins(0, 0, 0, 0)
+        draw_lay.setSpacing(8)
 
         self._brush_frame = QFrame()
         self._brush_frame.setObjectName("FloatingPaletteSection")
@@ -99,12 +128,7 @@ class ToolPaletteWindow(QWidget):
         brush_lay.addLayout(colors_row)
 
         self._width_ctrl = SliderSpinControls(
-            label="太さ",
-            min_val=1,
-            max_val=20,
-            value=3,
-            label_width=36,
-            spin_width=52,
+            label="太さ", min_val=1, max_val=20, value=3, label_width=36, spin_width=52
         )
         self._width_ctrl.valueChanged.connect(lambda _v: self._emit_brush())
         brush_lay.addWidget(self._width_ctrl)
@@ -120,7 +144,7 @@ class ToolPaletteWindow(QWidget):
         )
         self._alpha_ctrl.valueChanged.connect(lambda _v: self._emit_brush())
         brush_lay.addWidget(self._alpha_ctrl)
-        root.addWidget(self._brush_frame)
+        draw_lay.addWidget(self._brush_frame)
 
         tools_row = QHBoxLayout()
         tools_row.setSpacing(4)
@@ -135,13 +159,13 @@ class ToolPaletteWindow(QWidget):
         for i, btn in enumerate((self._pen_btn, self._eraser_btn, self._text_btn)):
             self._tool_group.addButton(btn, i)
             tools_row.addWidget(btn, 1)
-        root.addLayout(tools_row)
+        draw_lay.addLayout(tools_row)
 
         self._hint_label = QLabel("画像をクリックしてテキストボックスを配置")
         self._hint_label.setObjectName("PaletteHintLabel")
         self._hint_label.setWordWrap(True)
         self._hint_label.hide()
-        root.addWidget(self._hint_label)
+        draw_lay.addWidget(self._hint_label)
 
         self._detail_frame = QFrame()
         self._detail_frame.setObjectName("FloatingPaletteSection")
@@ -166,11 +190,20 @@ class ToolPaletteWindow(QWidget):
         self._show_ink_check.setChecked(True)
         self._show_ink_check.toggled.connect(self.show_ink_changed.emit)
         detail_lay.addWidget(self._show_ink_check)
-        root.addWidget(self._detail_frame)
 
-        root.addStretch()
+        self._show_text_check = QCheckBox("テキストボックスレイヤー表示")
+        self._show_text_check.setChecked(True)
+        self._show_text_check.toggled.connect(self.show_text_changed.emit)
+        detail_lay.addWidget(self._show_text_check)
+        draw_lay.addWidget(self._detail_frame)
+        draw_lay.addStretch()
+
+        self._format_panel = FormatPalettePanel()
+        self._stack.addWidget(self._draw_page)
+        self._stack.addWidget(self._format_panel)
 
         self._view_mode = VIEW_SIMPLE
+        self._current_tab = TAB_DRAW
         self._palm_rejection = True
         self._current_tool = TOOL_NONE
         self._current_color = PALETTE_COLORS[0]
@@ -178,11 +211,50 @@ class ToolPaletteWindow(QWidget):
         self._apply_view_mode()
         self._set_tool(TOOL_NONE, emit=False)
 
+    @property
+    def format_panel(self) -> FormatPalettePanel:
+        return self._format_panel
+
+    def _make_tab_btn(self, label: str) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setObjectName("ToolSegmentBtn")
+        btn.setCheckable(True)
+        return btn
+
     def _make_tool_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)
         btn.setObjectName("ToolSegmentBtn")
         btn.setCheckable(True)
         return btn
+
+    def _switch_tab(self, tab: str) -> None:
+        if tab == TAB_FORMAT and not self._tab_format_btn.isEnabled():
+            self.show_draw_tab()
+            return
+        self._current_tab = tab
+        self._stack.setCurrentWidget(
+            self._format_panel if tab == TAB_FORMAT else self._draw_page
+        )
+        self._title.setText("テキスト書式" if tab == TAB_FORMAT else "描画ツール")
+        self.tab_changed.emit(tab)
+
+    def show_draw_tab(self) -> None:
+        self._tab_draw_btn.blockSignals(True)
+        self._tab_draw_btn.setChecked(True)
+        self._tab_draw_btn.blockSignals(False)
+        self._switch_tab(TAB_DRAW)
+
+    def show_format_tab(self) -> None:
+        self._tab_format_btn.setEnabled(True)
+        self._tab_format_btn.blockSignals(True)
+        self._tab_format_btn.setChecked(True)
+        self._tab_format_btn.blockSignals(False)
+        self._switch_tab(TAB_FORMAT)
+
+    def set_format_tab_available(self, available: bool) -> None:
+        self._tab_format_btn.setEnabled(bool(available))
+        if not available and self._current_tab == TAB_FORMAT:
+            self.show_draw_tab()
 
     def _tool_toggle_buttons(self) -> tuple[QPushButton, ...]:
         if self._palm_rejection:
@@ -323,6 +395,9 @@ class ToolPaletteWindow(QWidget):
 
     def set_show_ink(self, visible: bool) -> None:
         self._show_ink_check.setChecked(bool(visible))
+
+    def set_show_text(self, visible: bool) -> None:
+        self._show_text_check.setChecked(bool(visible))
 
     def current_brush(self) -> tuple[str, float, float]:
         return (
