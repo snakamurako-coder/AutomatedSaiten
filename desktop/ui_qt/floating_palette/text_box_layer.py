@@ -44,6 +44,7 @@ class TextBoxLayer(QWidget):
         self._selected_id: str | None = None
         self._placement_mode = False
         self._show_text = True
+        self._text_tool_mode = False
         self._palm_rejection = True
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TabletTracking, True)
@@ -73,7 +74,16 @@ class TextBoxLayer(QWidget):
 
     def set_show_text(self, visible: bool) -> None:
         self._show_text = bool(visible)
-        self.setVisible(self._show_text)
+        self._apply_layer_visibility()
+
+    def set_text_tool_mode(self, enabled: bool) -> None:
+        self._text_tool_mode = bool(enabled)
+        self._apply_layer_visibility()
+        for w in self._widgets.values():
+            w.set_text_tool_mode(enabled)
+
+    def _apply_layer_visibility(self) -> None:
+        self.setVisible(self._show_text or self._text_tool_mode)
 
     def annotations(self) -> list[dict[str, Any]]:
         self._sync_annotations_from_widgets()
@@ -192,6 +202,7 @@ class TextBoxLayer(QWidget):
                 continue
             item_copy = copy.deepcopy(item)
             w = TextBoxWidget(item_copy, display_scale=scale, parent=self)
+            w.set_text_tool_mode(self._text_tool_mode)
             w.changed.connect(self._notify_changed)
             w.selected.connect(self._on_widget_selected)
             w.editing_finished.connect(self._on_widget_editing_finished)

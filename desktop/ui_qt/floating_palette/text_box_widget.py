@@ -99,6 +99,7 @@ class TextBoxWidget(QFrame):
         self._scale = max(0.01, float(display_scale))
         self._selected = False
         self._editing = False
+        self._text_tool_mode = False
         self._syncing_text = False
         self._moving = False
         self._move_origin = QPoint()
@@ -190,7 +191,7 @@ class TextBoxWidget(QFrame):
     def set_selected(self, on: bool) -> None:
         self._selected = bool(on)
         for handle in self._resize_handles.values():
-            handle.setVisible(self._selected)
+            handle.setVisible(self._selected and self._text_tool_mode)
         if not self._selected and self._editing:
             self.finish_editing()
         self._apply_geometry()
@@ -233,6 +234,15 @@ class TextBoxWidget(QFrame):
 
     def is_editing(self) -> bool:
         return self._editing
+
+    def set_text_tool_mode(self, enabled: bool) -> None:
+        enabled = bool(enabled)
+        if self._text_tool_mode == enabled:
+            return
+        self._text_tool_mode = enabled
+        for handle in self._resize_handles.values():
+            handle.setVisible(self._selected and self._text_tool_mode)
+        self._apply_style()
 
     def append_transcript(self, text: str) -> None:
         chunk = str(text or "").strip()
@@ -386,14 +396,26 @@ class TextBoxWidget(QFrame):
         fa = float(st.get("fillAlpha", 0.85))
         tc = st.get("textColor") or "#111827"
         fs = int(st.get("fontSize") or 14)
+        chrome = self._text_tool_mode
 
-        bg = "transparent" if fa <= 0 else f"rgba({_hex_rgb(fill)}, {fa})"
-        if self._selected:
-            border_css = "1px solid #2563eb"
-        elif bw > 0 and ba > 0:
-            border_css = f"{bw}px solid rgba({_hex_rgb(border)}, {ba})"
+        if chrome:
+            if self._editing:
+                bg = f"rgba({_hex_rgb(fill)}, {max(fa, 0.92)})" if fa > 0 else "rgba(255, 255, 255, 0.92)"
+                border_css = "2px solid #2563eb"
+            elif self._selected:
+                bg = f"rgba({_hex_rgb(fill)}, {max(fa, 0.75)})" if fa > 0 else "rgba(255, 255, 255, 0.75)"
+                border_css = "1px solid #2563eb"
+            else:
+                bg = f"rgba({_hex_rgb(fill)}, {max(fa, 0.35)})" if fa > 0 else "rgba(255, 255, 255, 0.35)"
+                border_css = "1px dashed rgba(37, 99, 235, 0.7)"
         else:
-            border_css = "none"
+            bg = "transparent" if fa <= 0 else f"rgba({_hex_rgb(fill)}, {fa})"
+            if self._selected:
+                border_css = "1px solid #2563eb"
+            elif bw > 0 and ba > 0:
+                border_css = f"{bw}px solid rgba({_hex_rgb(border)}, {ba})"
+            else:
+                border_css = "none"
 
         self._body.setStyleSheet(
             f"QFrame {{ background: {bg}; border: {border_css}; border-radius: 2px; }}"
@@ -408,14 +430,24 @@ class TextBoxWidget(QFrame):
         tc_color = QColor(str(tc))
         pal = self._editor.palette()
         pal.setColor(QPalette.ColorRole.Text, tc_color)
-        pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
+        if chrome and self._editing:
+            pal.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255, 235))
+        else:
+            pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
         self._editor.setPalette(pal)
+        editor_bg = (
+            "rgba(255, 255, 255, 0.92)"
+            if chrome and self._editing
+            else "transparent"
+        )
         editor_css = (
-            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: transparent; "
+            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: {editor_bg}; "
             f"border: none; padding: 0px; margin: 0px; }}"
         )
         self._editor.setStyleSheet(editor_css)
-        self._editor.viewport().setStyleSheet("background: transparent; border: none;")
+        self._editor.viewport().setStyleSheet(
+            f"background: {editor_bg}; border: none;"
+        )
         label_css = (
             f"QLabel#TextBoxDisplayLabel {{ color: {tc}; background: transparent; "
             f"border: none; padding: 0px; margin: 0px; }}"

@@ -838,10 +838,14 @@ class CropInkImageStack(QWidget):
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
-        # 最背面: 画像 → 中間: テキスト → 最前面: 手書き
+        # 最背面: 画像。描画モードは手書きが最前面、テキストモードはテキストが最前面。
         self.image_label.lower()
-        self.text_layer.raise_()
-        self.ink_overlay.raise_()
+        if self._tool_mode == TOOL_TEXT:
+            self.ink_overlay.raise_()
+            self.text_layer.raise_()
+        else:
+            self.text_layer.raise_()
+            self.ink_overlay.raise_()
 
     def _emit_strokes_changed(self) -> None:
         if self._on_strokes_changed:
@@ -882,6 +886,7 @@ class CropInkImageStack(QWidget):
         is_text = mode == TOOL_TEXT
         self.ink_overlay.set_tool_mode(mode)
         self.text_layer.set_placement_mode(is_text)
+        self.text_layer.set_text_tool_mode(is_text)
         self._sync_input_routing()
         self._sync_layer_order()
 
