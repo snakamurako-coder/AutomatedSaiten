@@ -29,6 +29,7 @@ _DEFAULTS: dict[str, Any] = {
     "last_width": 2.5,
     "last_alpha": 1.0,
     "last_tool": TOOL_NONE,
+    "last_input_mode": "draw",
     "text_palette_colors": list(TEXT_PALETTE_COLORS_DEFAULT),
 }
 
@@ -85,6 +86,8 @@ def load_palette_prefs() -> dict[str, Any]:
     out["view_mode"] = vm if vm in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
     lt = str(out.get("last_tool") or TOOL_NONE)
     out["last_tool"] = lt if lt in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE) else TOOL_NONE
+    lim = str(out.get("last_input_mode") or "draw")
+    out["last_input_mode"] = lim if lim in ("draw", "text") else "draw"
     return out
 
 

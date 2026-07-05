@@ -17,7 +17,7 @@ from ui_qt.floating_palette.palette_prefs import (
     load_text_palette_colors,
     save_palette_prefs,
 )
-from ui_qt.floating_palette.tool_palette_window import ToolPaletteWindow
+from ui_qt.floating_palette.tool_palette_window import MODE_DRAW, MODE_TEXT, ToolPaletteWindow
 from ui_qt.speech import SpeechEngine
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.stylus_prefs import load_stylus_prefs
@@ -93,7 +93,14 @@ class PaletteController:
             float(prefs.get("last_width") or 2.5),
             float(prefs.get("last_alpha") or 1.0),
         )
-        self.tool_window.set_tool(self._normalize_saved_tool(str(prefs.get("last_tool") or TOOL_NONE)))
+        saved_mode = str(prefs.get("last_input_mode") or MODE_DRAW)
+        saved_tool = self._normalize_saved_tool(str(prefs.get("last_tool") or TOOL_NONE))
+        if saved_mode == MODE_TEXT or saved_tool == TOOL_TEXT:
+            self.tool_window.set_input_mode(MODE_TEXT)
+        else:
+            self.tool_window.set_input_mode(MODE_DRAW)
+            self.tool_window.set_draw_tool(saved_tool)
+        self._tool = self.tool_window.current_tool()
         self.tool_window.set_text_palette_colors(load_text_palette_colors())
         if prefs.get("minimized"):
             self._minimize()
@@ -103,8 +110,6 @@ class PaletteController:
 
     def _normalize_saved_tool(self, tool: str) -> str:
         if self._palm_rejection and tool == TOOL_PEN:
-            return TOOL_NONE
-        if tool == TOOL_TEXT:
             return TOOL_NONE
         if tool not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE):
             return TOOL_NONE
@@ -130,8 +135,8 @@ class PaletteController:
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page
         self._step_id = step_id
-        if self.tool_window.current_tool() == TOOL_TEXT:
-            self.tool_window.clear_text_tool()
+        if self.tool_window.current_input_mode() == MODE_TEXT:
+            self.tool_window.show_draw_mode()
         self._connect_stacks()
         self._apply_to_stacks()
         if prefs := load_palette_prefs():
@@ -140,8 +145,6 @@ class PaletteController:
 
     def detach(self) -> None:
         self._stop_speech()
-        self.tool_window.set_format_tab_available(False)
-        self.tool_window.show_draw_tab()
         self._page = None
         self._step_id = None
         self.tool_window.hide()
@@ -168,6 +171,7 @@ class PaletteController:
                 "last_width": width,
                 "last_alpha": alpha,
                 "last_tool": self._tool,
+                "last_input_mode": self.tool_window.current_input_mode(),
                 "view_mode": self.tool_window._view_mode,
             }
         )
@@ -183,7 +187,8 @@ class PaletteController:
         self.tool_window.set_eraser_mode(self._eraser_mode)
         self.apply_text_palette_colors()
         if self._palm_rejection and self._tool == TOOL_PEN:
-            self.tool_window.set_tool(TOOL_NONE)
+            self.tool_window.set_draw_tool(TOOL_NONE)
+            self._tool = TOOL_NONE
         self._apply_to_stacks()
 
     def _viewer_global_rect(self) -> QRect | None:
@@ -256,11 +261,14 @@ class PaletteController:
             stack.set_brush(color, width, alpha)
 
     def _on_tool_changed(self, tool: str) -> None:
+        prev = self._tool
         self._tool = tool
-        self._apply_to_stacks()
+        if prev == TOOL_TEXT and tool != TOOL_TEXT:
+            self.finish_all_text_editing()
         if tool != TOOL_TEXT:
             for stack in self._stacks():
                 stack.text_layer.clear_selection()
+        self._apply_to_stacks()
 
     def _ensure_tool_visible(self) -> None:
         prefs = load_palette_prefs()
@@ -278,13 +286,10 @@ class PaletteController:
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
             self._stop_speech()
-            self.tool_window.set_format_tab_available(False)
-            self.tool_window.show_draw_tab()
             return
+        self.tool_window.show_text_mode()
         self._ensure_tool_visible()
         self.tool_window.format_panel.load_style(box.get("style") or {})
-        self.tool_window.set_format_tab_available(True)
-        self.tool_window.show_format_tab()
 
     def _on_stack_image_clicked(self) -> None:
         if self._tool != TOOL_TEXT:
@@ -325,11 +330,8 @@ class PaletteController:
         fw = QApplication.focusWidget()
         if fw is not None:
             fw.clearFocus()
-        self.tool_window.clear_text_tool()
         for stack in self._stacks():
             stack.text_layer.clear_selection()
-        self.tool_window.set_format_tab_available(False)
-        self.tool_window.show_draw_tab()
         self._ensure_tool_visible()
 
     def _on_format_edit(self) -> None:
@@ -343,8 +345,6 @@ class PaletteController:
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.delete_selected()
-                self.tool_window.set_format_tab_available(False)
-                self.tool_window.show_draw_tab()
                 self._ensure_tool_visible()
                 return
 

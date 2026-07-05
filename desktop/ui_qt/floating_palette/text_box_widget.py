@@ -30,6 +30,7 @@ from models.text_annotation_repo import DEFAULT_TEXT_STYLE, resolve_text_style
 _INNER_PAD_PX = 1
 _HANDLE_PX = 12
 _DRAG_THRESHOLD_PX = 4
+_LONG_PRESS_MS = 500
 _CORNER_CURSORS = {
     "tl": Qt.CursorShape.SizeFDiagCursor,
     "tr": Qt.CursorShape.SizeBDiagCursor,
@@ -103,6 +104,11 @@ class TextBoxWidget(QFrame):
         self._press_origin: QPoint | None = None
         self._press_moved = False
         self._suppress_focus_check = False
+        self._long_press_fired = False
+        self._long_press_timer = QTimer(self)
+        self._long_press_timer.setSingleShot(True)
+        self._long_press_timer.setInterval(_LONG_PRESS_MS)
+        self._long_press_timer.timeout.connect(self._on_long_press)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self._apply_geometry()
@@ -283,12 +289,21 @@ class TextBoxWidget(QFrame):
                 self._update_hover_cursor(pos)
         return super().eventFilter(watched, event)
 
+    def _on_long_press(self) -> None:
+        if self._moving or self._editing or self._press_moved:
+            return
+        self._long_press_fired = True
+        self.selected.emit(self.box_id)
+        self.start_editing()
+
     def _begin_pointer(self, global_pos: QPoint) -> None:
+        self._long_press_fired = False
         if not self._selected:
             self.selected.emit(self.box_id)
         self._press_origin = global_pos
         self._press_moved = False
         self._moving = False
+        self._long_press_timer.start()
 
     def _update_move_drag(self, global_pos: QPoint) -> None:
         if self._press_origin is None or self._editing:
@@ -300,6 +315,7 @@ class TextBoxWidget(QFrame):
                 and abs(delta.y()) <= _DRAG_THRESHOLD_PX
             ):
                 return
+            self._long_press_timer.stop()
             self._press_moved = True
             self._moving = True
             self._move_origin = global_pos
@@ -310,8 +326,10 @@ class TextBoxWidget(QFrame):
             self._on_move_drag(delta)
 
     def _end_pointer(self) -> None:
+        self._long_press_timer.stop()
         if self._press_moved:
             self.changed.emit()
+        self._long_press_fired = False
         self._press_origin = None
         self._press_moved = False
         self._moving = False
@@ -531,17 +549,8 @@ class TextBoxWidget(QFrame):
             return
         super().mouseReleaseEvent(event)
 
-    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and not self._point_on_handle(event.position().toPoint()):
-            self._press_origin = None
-            self._moving = False
-            self.selected.emit(self.box_id)
-            self.start_editing()
-            event.accept()
-            return
-        super().mouseDoubleClickEvent(event)
-
     def leaveEvent(self, event) -> None:  # noqa: N802
+        self._long_press_timer.stop()
         if not self._moving:
             self.unsetCursor()
         super().leaveEvent(event)

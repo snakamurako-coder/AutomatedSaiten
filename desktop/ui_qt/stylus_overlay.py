@@ -199,7 +199,7 @@ class InkOverlayWidget(QWidget):
         self._software_eraser = m == TOOL_ERASER
 
     def _stylus_may_draw(self) -> bool:
-        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
+        if self._tool_mode == TOOL_TEXT:
             return False
         if self._tool_mode == TOOL_ERASER:
             return False
@@ -469,7 +469,7 @@ class InkOverlayWidget(QWidget):
         return self._should_handle_tablet(event)
 
     def _should_erase_tablet(self, event: QTabletEvent) -> bool:
-        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
+        if self._tool_mode == TOOL_TEXT:
             return False
         if not self._stylus_may_draw() and not self._software_eraser:
             return False
@@ -479,7 +479,7 @@ class InkOverlayWidget(QWidget):
         if is_eraser_mouse_event(event) or self._software_eraser:
             return False
         if self._tool_mode == TOOL_TEXT:
-            return self._palm_rejection and is_pen_mouse_event(event)
+            return False
         if not self._pointer_may_draw():
             return False
         return True
@@ -550,7 +550,7 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
-        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
+        if self._tool_mode == TOOL_TEXT:
             event.ignore()
             return
         if self._should_erase_tablet(event):
@@ -599,7 +599,7 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
-        if self._tool_mode == TOOL_TEXT and not self._palm_rejection:
+        if self._tool_mode == TOOL_TEXT:
             event.ignore()
             return
         points = event.points()

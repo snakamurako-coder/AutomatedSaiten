@@ -136,6 +136,7 @@ class FormatPalettePanel(QWidget):
         done_btn = QPushButton("編集完了")
         done_btn.clicked.connect(self.edit_done_requested.emit)
         edit_btn = QPushButton("文字を編集")
+        edit_btn.setToolTip("長押し（約0.5秒）でも編集を開始できます")
         edit_btn.clicked.connect(self.edit_requested.emit)
         self._speech_btn = QPushButton("音声入力")
         self._speech_btn.setCheckable(True)

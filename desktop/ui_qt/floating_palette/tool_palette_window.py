@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QScrollArea,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -29,13 +30,14 @@ from ui_qt.floating_palette.palette_prefs import (
 )
 from ui_qt.stylus_overlay import ERASER_MODE_PIXEL, ERASER_MODE_STROKE
 
-TAB_DRAW = "draw"
-TAB_FORMAT = "format"
+MODE_DRAW = "draw"
+MODE_TEXT = "text"
 
 
 class ToolPaletteWindow(QWidget):
-    """別ウィンドウ型描画ツールパレット。"""
+    """別ウィンドウ型描画ツールパレット（描画 / テキストの入力モードをタブで切替）。"""
 
+    input_mode_changed = Signal(str)
     tool_changed = Signal(str)
     brush_changed = Signal(str, float, float)
     eraser_mode_changed = Signal(str)
@@ -43,7 +45,6 @@ class ToolPaletteWindow(QWidget):
     show_text_changed = Signal(bool)
     view_mode_changed = Signal(str)
     minimize_requested = Signal()
-    tab_changed = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -52,7 +53,7 @@ class ToolPaletteWindow(QWidget):
         )
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
-        self.resize(280, 360)
+        self.resize(280, 380)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 12)
@@ -60,7 +61,7 @@ class ToolPaletteWindow(QWidget):
 
         header_row = QHBoxLayout()
         header_row.setSpacing(6)
-        self._title = QLabel("描画ツール")
+        self._title = QLabel("描画")
         self._title.setObjectName("FloatingPaletteTitle")
         header_row.addWidget(self._title)
         header_row.addStretch()
@@ -77,19 +78,18 @@ class ToolPaletteWindow(QWidget):
         header_row.addWidget(self._view_btn)
         root.addLayout(header_row)
 
-        tab_row = QHBoxLayout()
-        tab_row.setSpacing(4)
-        self._tab_group = QButtonGroup(self)
-        self._tab_draw_btn = self._make_tab_btn("描画")
-        self._tab_format_btn = self._make_tab_btn("書式")
-        self._tab_format_btn.setEnabled(False)
-        for i, btn in enumerate((self._tab_draw_btn, self._tab_format_btn)):
-            self._tab_group.addButton(btn, i)
-            tab_row.addWidget(btn, 1)
-        self._tab_draw_btn.setChecked(True)
-        self._tab_draw_btn.toggled.connect(lambda c: c and self._switch_tab(TAB_DRAW))
-        self._tab_format_btn.toggled.connect(lambda c: c and self._switch_tab(TAB_FORMAT))
-        root.addLayout(tab_row)
+        mode_row = QHBoxLayout()
+        mode_row.setSpacing(4)
+        self._mode_group = QButtonGroup(self)
+        self._mode_draw_btn = self._make_tab_btn("描画")
+        self._mode_text_btn = self._make_tab_btn("テキスト")
+        for i, btn in enumerate((self._mode_draw_btn, self._mode_text_btn)):
+            self._mode_group.addButton(btn, i)
+            mode_row.addWidget(btn, 1)
+        self._mode_draw_btn.setChecked(True)
+        self._mode_draw_btn.toggled.connect(lambda c: c and self._switch_input_mode(MODE_DRAW))
+        self._mode_text_btn.toggled.connect(lambda c: c and self._switch_input_mode(MODE_TEXT))
+        root.addLayout(mode_row)
 
         self._stack = QStackedWidget()
         root.addWidget(self._stack, 1)
@@ -146,24 +146,21 @@ class ToolPaletteWindow(QWidget):
 
         tools_row = QHBoxLayout()
         tools_row.setSpacing(4)
-        self._tool_group = QButtonGroup(self)
-        self._tool_group.setExclusive(False)
+        self._draw_tool_group = QButtonGroup(self)
+        self._draw_tool_group.setExclusive(False)
         self._pen_btn = self._make_tool_btn("ペン")
         self._eraser_btn = self._make_tool_btn("消しゴム")
-        self._text_btn = self._make_tool_btn("テキスト")
         self._pen_btn.toggled.connect(self._on_pen_toggled)
         self._eraser_btn.toggled.connect(self._on_eraser_toggled)
-        self._text_btn.toggled.connect(self._on_text_toggled)
-        for i, btn in enumerate((self._pen_btn, self._eraser_btn, self._text_btn)):
-            self._tool_group.addButton(btn, i)
+        for i, btn in enumerate((self._pen_btn, self._eraser_btn)):
+            self._draw_tool_group.addButton(btn, i)
             tools_row.addWidget(btn, 1)
         draw_lay.addLayout(tools_row)
 
-        self._hint_label = QLabel("画像をクリックしてテキストボックスを配置")
-        self._hint_label.setObjectName("PaletteHintLabel")
-        self._hint_label.setWordWrap(True)
-        self._hint_label.hide()
-        draw_lay.addWidget(self._hint_label)
+        self._draw_hint = QLabel("スタイラスで手書き（パームリジェクション ON 時は常時描画）")
+        self._draw_hint.setObjectName("PaletteHintLabel")
+        self._draw_hint.setWordWrap(True)
+        draw_lay.addWidget(self._draw_hint)
 
         self._detail_frame = QFrame()
         self._detail_frame.setObjectName("FloatingPaletteSection")
@@ -197,18 +194,39 @@ class ToolPaletteWindow(QWidget):
         draw_lay.addWidget(self._detail_frame)
         draw_lay.addStretch()
 
+        self._text_page = QWidget()
+        text_lay = QVBoxLayout(self._text_page)
+        text_lay.setContentsMargins(0, 0, 0, 0)
+        text_lay.setSpacing(8)
+
+        self._text_hint = QLabel(
+            "画像をクリックでテキストボックスを配置\n"
+            "配置済みボックスを長押し（約0.5秒）で文字編集"
+        )
+        self._text_hint.setObjectName("PaletteHintLabel")
+        self._text_hint.setWordWrap(True)
+        text_lay.addWidget(self._text_hint)
+
         self._format_panel = FormatPalettePanel()
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setWidget(self._format_panel)
+        text_lay.addWidget(scroll, 1)
+
         self._stack.addWidget(self._draw_page)
-        self._stack.addWidget(self._format_panel)
+        self._stack.addWidget(self._text_page)
 
         self._view_mode = VIEW_SIMPLE
-        self._current_tab = TAB_DRAW
+        self._input_mode = MODE_DRAW
         self._palm_rejection = True
-        self._current_tool = TOOL_NONE
+        self._draw_tool = TOOL_NONE
         self._current_color = PALETTE_COLORS[0]
         self._pen_btn.setVisible(False)
         self._apply_view_mode()
-        self._set_tool(TOOL_NONE, emit=False)
+        self._apply_palm_rejection_ui()
+        self._switch_input_mode(MODE_DRAW, emit=False)
+        self._emit_draw_tool(emit=False)
 
     @property
     def format_panel(self) -> FormatPalettePanel:
@@ -226,42 +244,39 @@ class ToolPaletteWindow(QWidget):
         btn.setCheckable(True)
         return btn
 
-    def _switch_tab(self, tab: str) -> None:
-        if tab == TAB_FORMAT and not self._tab_format_btn.isEnabled():
-            self.show_draw_tab()
-            return
-        self._current_tab = tab
-        self._stack.setCurrentWidget(
-            self._format_panel if tab == TAB_FORMAT else self._draw_page
-        )
-        self._title.setText("テキスト書式" if tab == TAB_FORMAT else "描画ツール")
-        self.tab_changed.emit(tab)
+    def _switch_input_mode(self, mode: str, *, emit: bool = True) -> None:
+        mode = mode if mode in (MODE_DRAW, MODE_TEXT) else MODE_DRAW
+        self._input_mode = mode
+        self._stack.setCurrentWidget(self._text_page if mode == MODE_TEXT else self._draw_page)
+        self._title.setText("テキスト" if mode == MODE_TEXT else "描画")
+        if mode == MODE_DRAW:
+            self._mode_draw_btn.blockSignals(True)
+            self._mode_draw_btn.setChecked(True)
+            self._mode_draw_btn.blockSignals(False)
+        else:
+            self._mode_text_btn.blockSignals(True)
+            self._mode_text_btn.setChecked(True)
+            self._mode_text_btn.blockSignals(False)
+        if emit:
+            self.input_mode_changed.emit(mode)
+            self._emit_active_tool()
 
-    def show_draw_tab(self) -> None:
-        self._tab_draw_btn.blockSignals(True)
-        self._tab_draw_btn.setChecked(True)
-        self._tab_draw_btn.blockSignals(False)
-        self._switch_tab(TAB_DRAW)
+    def show_draw_mode(self) -> None:
+        self._switch_input_mode(MODE_DRAW)
 
-    def show_format_tab(self) -> None:
-        self._tab_format_btn.setEnabled(True)
-        self._tab_format_btn.blockSignals(True)
-        self._tab_format_btn.setChecked(True)
-        self._tab_format_btn.blockSignals(False)
-        self._switch_tab(TAB_FORMAT)
+    def show_text_mode(self) -> None:
+        self._switch_input_mode(MODE_TEXT)
 
-    def set_format_tab_available(self, available: bool) -> None:
-        self._tab_format_btn.setEnabled(bool(available))
-        if not available and self._current_tab == TAB_FORMAT:
-            self.show_draw_tab()
+    def current_input_mode(self) -> str:
+        return self._input_mode
 
-    def _tool_toggle_buttons(self) -> tuple[QPushButton, ...]:
+    def _draw_tool_buttons(self) -> tuple[QPushButton, ...]:
         if self._palm_rejection:
-            return (self._eraser_btn, self._text_btn)
-        return (self._pen_btn, self._eraser_btn, self._text_btn)
+            return (self._eraser_btn,)
+        return (self._pen_btn, self._eraser_btn)
 
-    def _uncheck_other_tools(self, active: QPushButton) -> None:
-        for btn in self._tool_toggle_buttons():
+    def _uncheck_other_draw_tools(self, active: QPushButton) -> None:
+        for btn in self._draw_tool_buttons():
             if btn is active:
                 continue
             btn.blockSignals(True)
@@ -269,51 +284,97 @@ class ToolPaletteWindow(QWidget):
             btn.blockSignals(False)
 
     def _on_pen_toggled(self, checked: bool) -> None:
+        if self._input_mode != MODE_DRAW:
+            return
         if checked:
-            self._uncheck_other_tools(self._pen_btn)
-            self._set_tool(TOOL_PEN)
+            self._uncheck_other_draw_tools(self._pen_btn)
+            self._draw_tool = TOOL_PEN
+            self._emit_draw_tool()
         else:
-            self._maybe_clear_tool()
+            self._maybe_clear_draw_tool()
 
     def _on_eraser_toggled(self, checked: bool) -> None:
-        if checked:
-            self._uncheck_other_tools(self._eraser_btn)
-            self._set_tool(TOOL_ERASER)
-        else:
-            self._maybe_clear_tool()
-
-    def _on_text_toggled(self, checked: bool) -> None:
-        if checked:
-            self._uncheck_other_tools(self._text_btn)
-            self._set_tool(TOOL_TEXT)
-        else:
-            self._maybe_clear_tool()
-
-    def _maybe_clear_tool(self) -> None:
-        if any(btn.isChecked() for btn in self._tool_toggle_buttons()):
+        if self._input_mode != MODE_DRAW:
             return
-        self._set_tool(TOOL_NONE)
+        if checked:
+            self._uncheck_other_draw_tools(self._eraser_btn)
+            self._draw_tool = TOOL_ERASER
+            self._emit_draw_tool()
+        else:
+            self._maybe_clear_draw_tool()
+
+    def _maybe_clear_draw_tool(self) -> None:
+        if any(btn.isChecked() for btn in self._draw_tool_buttons()):
+            return
+        self._draw_tool = TOOL_NONE
+        self._emit_draw_tool()
+
+    def _sync_draw_tool_buttons(self) -> None:
+        mapping = {TOOL_PEN: self._pen_btn, TOOL_ERASER: self._eraser_btn}
+        for btn in (self._pen_btn, self._eraser_btn):
+            btn.blockSignals(True)
+            btn.setChecked(False)
+            btn.blockSignals(False)
+        btn = mapping.get(self._draw_tool)
+        if btn:
+            btn.blockSignals(True)
+            btn.setChecked(True)
+            btn.blockSignals(False)
+
+    def _emit_draw_tool(self, *, emit: bool = True) -> None:
+        tool = self._draw_tool
+        if self._palm_rejection and tool == TOOL_PEN:
+            tool = TOOL_NONE
+        if emit:
+            self.tool_changed.emit(tool)
+
+    def _emit_active_tool(self) -> None:
+        if self._input_mode == MODE_TEXT:
+            self.tool_changed.emit(TOOL_TEXT)
+        else:
+            self._emit_draw_tool()
 
     def set_palm_rejection(self, enabled: bool) -> None:
         enabled = bool(enabled)
         if self._palm_rejection == enabled:
             return
         self._palm_rejection = enabled
-        self._pen_btn.setVisible(not enabled)
-        if enabled:
+        self._apply_palm_rejection_ui()
+        if self._input_mode == MODE_DRAW:
+            self._emit_active_tool()
+
+    def _apply_palm_rejection_ui(self) -> None:
+        self._pen_btn.setVisible(not self._palm_rejection)
+        if self._palm_rejection:
             self._pen_btn.blockSignals(True)
             self._pen_btn.setChecked(False)
             self._pen_btn.blockSignals(False)
-            if self._current_tool == TOOL_PEN:
-                self._maybe_clear_tool()
+            if self._draw_tool == TOOL_PEN:
+                self._draw_tool = TOOL_NONE
+        self._draw_hint.setVisible(self._palm_rejection)
+
+    def set_input_mode(self, mode: str) -> None:
+        self._switch_input_mode(mode if mode in (MODE_DRAW, MODE_TEXT) else MODE_DRAW)
+
+    def set_draw_tool(self, tool: str) -> None:
+        tool = tool if tool in (TOOL_PEN, TOOL_ERASER, TOOL_NONE) else TOOL_NONE
+        if self._palm_rejection and tool == TOOL_PEN:
+            tool = TOOL_NONE
+        self._draw_tool = tool
+        self._sync_draw_tool_buttons()
+        if self._input_mode == MODE_DRAW:
+            self._emit_draw_tool()
+
+    def set_tool(self, tool: str) -> None:
+        """後方互換: TOOL_TEXT ならテキストモード、それ以外は描画モード＋サブツール。"""
+        if tool == TOOL_TEXT:
+            self.set_input_mode(MODE_TEXT)
+            return
+        self.set_input_mode(MODE_DRAW)
+        self.set_draw_tool(tool)
 
     def clear_text_tool(self) -> None:
-        if not self._text_btn.isChecked():
-            return
-        self._text_btn.blockSignals(True)
-        self._text_btn.setChecked(False)
-        self._text_btn.blockSignals(False)
-        self._maybe_clear_tool()
+        self.show_draw_mode()
 
     def _toggle_view(self) -> None:
         self._view_mode = VIEW_DETAILED if self._view_mode == VIEW_SIMPLE else VIEW_SIMPLE
@@ -325,41 +386,9 @@ class ToolPaletteWindow(QWidget):
         self._detail_frame.setVisible(detailed)
         self._view_btn.setText("簡易" if detailed else "詳細")
 
-    def _update_tool_ui(self, tool: str) -> None:
-        self._hint_label.setVisible(tool == TOOL_TEXT)
-
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
         self._apply_view_mode()
-
-    def _sync_tool_buttons(self, tool: str) -> None:
-        mapping = {
-            TOOL_PEN: self._pen_btn,
-            TOOL_ERASER: self._eraser_btn,
-            TOOL_TEXT: self._text_btn,
-        }
-        for btn in (self._pen_btn, self._eraser_btn, self._text_btn):
-            btn.blockSignals(True)
-            btn.setChecked(False)
-            btn.blockSignals(False)
-        btn = mapping.get(tool)
-        if btn:
-            btn.blockSignals(True)
-            btn.setChecked(True)
-            btn.blockSignals(False)
-
-    def _set_tool(self, tool: str, *, emit: bool = True) -> None:
-        tool = tool if tool in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE) else TOOL_NONE
-        if self._palm_rejection and tool == TOOL_PEN:
-            tool = TOOL_NONE
-        self._current_tool = tool
-        self._sync_tool_buttons(tool)
-        self._update_tool_ui(tool)
-        if emit:
-            self.tool_changed.emit(tool)
-
-    def set_tool(self, tool: str) -> None:
-        self._set_tool(tool)
 
     def _pick_color(self, color: str) -> None:
         self._current_color = color
@@ -409,4 +438,6 @@ class ToolPaletteWindow(QWidget):
         )
 
     def current_tool(self) -> str:
-        return self._current_tool
+        if self._input_mode == MODE_TEXT:
+            return TOOL_TEXT
+        return self._draw_tool if not (self._palm_rejection and self._draw_tool == TOOL_PEN) else TOOL_NONE
