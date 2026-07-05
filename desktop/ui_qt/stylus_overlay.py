@@ -55,6 +55,20 @@ def is_finger_tablet_event(event: QTabletEvent) -> bool:
     return event.pointerType() == _Finger
 
 
+def _mouse_synthesized_by_system(event: QMouseEvent) -> bool:
+    """Qt バージョン差を吸収してタブレット由来の合成マウスか判定。"""
+    synth = getattr(Qt, "MouseEventFlag", None)
+    if synth is None:
+        return False
+    flag = getattr(synth, "MouseEventSynthesizedBySystem", None)
+    if flag is None:
+        return False
+    try:
+        return bool(event.flags() & flag)
+    except (AttributeError, TypeError):
+        return False
+
+
 def is_pen_mouse_event(event: QMouseEvent) -> bool:
     pt = event.pointerType()
     if pt in (_Pen, _Eraser):
@@ -72,10 +86,8 @@ def is_pen_mouse_event(event: QMouseEvent) -> bool:
     pr = _event_pressure(event)
     if 0.0 < pr < 1.0:
         return True
-    # タブレット由来の合成マウス（Windows Ink 等）
-    flags = event.flags()
-    synth = getattr(Qt, "MouseEventFlag", None)
-    if synth is not None and (flags & synth.MouseEventSynthesizedBySystem):
+    # タブレット由来の合成マウス（Windows Ink 等・対応 Qt のみ）
+    if _mouse_synthesized_by_system(event):
         return pt != _Finger
     return False
 
