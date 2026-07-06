@@ -2,21 +2,13 @@
 
 from __future__ import annotations
 
+import importlib.util
 import sys
 import threading
 import time
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
-
-_SOUNDcard_AVAILABLE = False
-if sys.platform == "win32":
-    try:
-        import soundcard  # noqa: F401
-
-        _SOUNDcard_AVAILABLE = True
-    except ImportError:
-        pass
 
 _SR_AVAILABLE = False
 try:
@@ -39,9 +31,18 @@ _COINIT_MULTITHREADED = 0
 _RPC_E_CHANGED_MODE = -2147417850
 
 
+def _soundcard_installed() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        return importlib.util.find_spec("soundcard") is not None
+    except Exception:
+        return False
+
+
 def _availability_message() -> tuple[bool, str]:
     if sys.platform == "win32":
-        if _SOUNDcard_AVAILABLE and _SR_AVAILABLE:
+        if _soundcard_installed() and _SR_AVAILABLE:
             return True, ""
         if not _SR_AVAILABLE:
             return False, "SpeechRecognition が未インストールです（pip install SpeechRecognition）"
@@ -164,8 +165,10 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
 
     def _run_loop(self) -> None:
         import numpy as np
-        import soundcard as sc
         import speech_recognition as sr
+
+        # soundcard は COM を使うため、メインスレッドでは import しない
+        import soundcard as sc
 
         recognizer = sr.Recognizer()
         recognizer.dynamic_energy_threshold = True
@@ -292,7 +295,7 @@ class _SrSpeechWorker(_SpeechWorkerBase):
 
 
 def _create_worker(bridge: _SpeechBridge) -> _SpeechWorkerBase:
-    if sys.platform == "win32" and _SOUNDcard_AVAILABLE:
+    if sys.platform == "win32" and _soundcard_installed():
         return _SoundcardSpeechWorker(bridge)
     return _SrSpeechWorker(bridge)
 

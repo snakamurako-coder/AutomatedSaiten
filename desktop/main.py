@@ -5,6 +5,10 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+# soundcard 等の COM ライブラリと Qt の OleInitialize 競合を避ける（Windows）
+if sys.platform == "win32":
+    sys.coinit_flags = 2  # COINIT_APARTMENTTHREADED
+
 # desktop/ を import パスに追加（python main.py / python -m どちらでも動作）
 DESKTOP_ROOT = Path(__file__).resolve().parent
 if str(DESKTOP_ROOT) not in sys.path:
