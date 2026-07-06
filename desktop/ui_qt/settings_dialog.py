@@ -240,6 +240,7 @@ class SettingsDialog(QDialog):
             "アプリ内認識で、話したあと何秒無言なら区切って認識するか"
         )
         pause_form.addRow("無言区切り", self.speech_pause_spin)
+        self._speech_pause_label = pause_form.labelForField(self.speech_pause_spin)
         lay.addLayout(pause_form)
         lay.addWidget(
             h.caption_label(
@@ -285,6 +286,8 @@ class SettingsDialog(QDialog):
     def _sync_speech_pause_enabled(self) -> None:
         app_mode = self.speech_app.isChecked()
         self.speech_pause_spin.setEnabled(app_mode)
+        if self._speech_pause_label is not None:
+            self._speech_pause_label.setEnabled(app_mode)
 
     def _build_misc_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page("その他の既定値を設定します。")

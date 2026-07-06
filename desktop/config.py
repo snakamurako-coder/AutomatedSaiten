@@ -30,6 +30,8 @@ def load_config() -> dict:
             "default_orientation": "landscape",
             "tesseract_cmd": "",
             "gemini_api_key": "",
+            "speech_input_mode": "app",
+            "speech_pause_seconds": 1.8,
             "stylus_palm_rejection": True,
             "stylus_eraser_mode": "pixel",
             "floating_palette": {

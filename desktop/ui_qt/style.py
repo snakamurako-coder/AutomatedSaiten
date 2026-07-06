@@ -164,6 +164,9 @@ QLabel[role="caption"] {{
     color: {COLORS["text_muted"]};
     font-size: 11px;
 }}
+QLabel:disabled {{
+    color: {COLORS["text_muted"]};
+}}
 
 /* --- ボタン --- */
 QPushButton {{
@@ -215,15 +218,22 @@ QPushButton[variant="danger-soft"]:hover {{
 }}
 
 /* --- 入力 --- */
-QLineEdit, QComboBox, QSpinBox, QPlainTextEdit, QTextEdit {{
+QLineEdit, QComboBox, QSpinBox, QDoubleSpinBox, QPlainTextEdit, QTextEdit {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border_strong"]};
     border-radius: 6px;
     padding: 5px 8px;
+    color: {COLORS["text"]};
     selection-background-color: {COLORS["select_bg"]};
     selection-color: {COLORS["text"]};
 }}
-QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QPlainTextEdit:focus {{
+QLineEdit:disabled, QComboBox:disabled, QSpinBox:disabled, QDoubleSpinBox:disabled,
+QPlainTextEdit:disabled, QTextEdit:disabled {{
+    color: {COLORS["text_muted"]};
+    background: {COLORS["sidebar"]};
+    border-color: {COLORS["border"]};
+}}
+QLineEdit:focus, QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus, QPlainTextEdit:focus {{
     border: 1px solid {COLORS["accent"]};
 }}
 QComboBox::drop-down {{
