@@ -254,6 +254,7 @@ class MainWindow(QMainWindow):
         def on_saved() -> None:
             self._refresh_ocr_status()
             self._refresh_stylus_prefs()
+            self.palette_controller.refresh_speech_prefs()
 
         open_settings_dialog(self, on_saved=on_saved)
 

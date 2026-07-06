@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 from typing import Callable
 
 from PySide6.QtCore import QTimer
@@ -23,6 +24,11 @@ from PySide6.QtWidgets import (
 )
 
 from config import CONFIG_PATH, load_config, save_config
+from ui_qt.speech.speech_prefs import (
+    DEFAULT_SPEECH_MODE,
+    SPEECH_MODE_WINDOWS,
+    save_speech_input_mode,
+)
 from services.gemini_rubric import test_gemini_api_key
 from services.ocr import test_vision_api_key
 from ui_qt import helpers as h
@@ -137,6 +143,35 @@ class SettingsDialog(QDialog):
         self._refresh_text_palette_btns()
         root.addWidget(text_box)
 
+        # 音声入力
+        speech_box = QGroupBox("音声入力")
+        speech_lay = QVBoxLayout(speech_box)
+        speech_lay.setSpacing(6)
+        self.speech_app = QRadioButton("アプリ内認識（Google・確認ダイアログあり）")
+        speech_lay.addWidget(self.speech_app)
+        self.speech_windows: QRadioButton | None = None
+        if sys.platform == "win32":
+            self.speech_windows = QRadioButton(
+                "Windows 音声入力（Win+H・タッチキーボードのマイクと同等）"
+            )
+            speech_lay.addWidget(self.speech_windows)
+            speech_lay.addWidget(
+                h.caption_label(
+                    "Windows モードは Win+H で音声入力バーを開き、"
+                    "認識結果をテキストボックスへ直接入力します（確認ダイアログなし）。"
+                )
+            )
+        else:
+            speech_lay.addWidget(
+                h.caption_label("Windows 音声入力は Windows 版でのみ利用できます。")
+            )
+        speech_mode = str(cfg.get("speech_input_mode") or DEFAULT_SPEECH_MODE).strip().lower()
+        if sys.platform == "win32" and speech_mode == SPEECH_MODE_WINDOWS and self.speech_windows:
+            self.speech_windows.setChecked(True)
+        else:
+            self.speech_app.setChecked(True)
+        root.addWidget(speech_box)
+
         # その他
         misc_box = QGroupBox("その他")
         misc_form = QFormLayout(misc_box)
@@ -196,6 +231,10 @@ class SettingsDialog(QDialog):
         cfg = load_config()
         cfg.update(self._collect())
         cfg["stylus_palm_rejection"] = self.palm_rejection_check.isChecked()
+        if sys.platform == "win32" and self.speech_windows is not None and self.speech_windows.isChecked():
+            save_speech_input_mode(SPEECH_MODE_WINDOWS)
+        else:
+            save_speech_input_mode(SPEECH_MODE_APP)
         if cfg["ocr_engine"] == "vision" and not cfg["vision_api_key"]:
             h.warn(self, "設定エラー", "OCR エンジンが Vision API の場合、Vision API キーを入力してください。")
             return

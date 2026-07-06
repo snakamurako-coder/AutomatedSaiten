@@ -169,6 +169,21 @@ class FormatPalettePanel(QWidget):
     def _on_speech_toggled(self, on: bool) -> None:
         self.speech_toggled.emit(bool(on))
 
+    def set_speech_mode(self, mode: str) -> None:
+        if mode == "windows":
+            self._speech_btn.setToolTip(
+                "Windows 音声入力（Win+H）を起動。"
+                "画面上部の音声入力バーで話すと、テキストボックスに直接入力されます。"
+            )
+        else:
+            self._speech_btn.setToolTip(
+                "マイクで音声をテキストに追加"
+                "（要ネット・話したあと少し間を空けると認識されます）"
+            )
+
+    def is_speech_checked(self) -> bool:
+        return self._speech_btn.isChecked()
+
     def set_speech_available(self, available: bool) -> None:
         self._speech_btn.setEnabled(bool(available))
         if not available:

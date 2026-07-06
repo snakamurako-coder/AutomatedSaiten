@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Protocol
 
-from PySide6.QtCore import QPoint, QRect, Qt
+from PySide6.QtCore import QPoint, QRect, QTimer, Qt
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
 
 from ui_qt.floating_palette.palette_prefs import (
@@ -19,6 +19,12 @@ from ui_qt.floating_palette.palette_prefs import (
 from ui_qt.floating_palette.tool_palette_window import MODE_DRAW, MODE_TEXT, ToolPaletteWindow
 from ui_qt.speech import SpeechEngine
 from ui_qt.speech.speech_confirm_dialog import SpeechConfirmDialog, SpeechConfirmResult
+from ui_qt.speech.speech_prefs import (
+    SPEECH_MODE_WINDOWS,
+    is_speech_input_available,
+    load_speech_input_mode,
+)
+from ui_qt.speech.windows_voice_typing import toggle_windows_voice_typing
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.stylus_prefs import load_stylus_prefs
 
@@ -86,9 +92,10 @@ class PaletteController:
         self._speech.error.connect(self._on_speech_error)
         self._speech.listening_changed.connect(self._on_speech_listening_changed)
         self._speech_confirm_open = False
+        self._windows_speech_active = False
         self._active_stack: CropInkImageStack | None = None
         self._active_result_id: int | None = None
-        fp.set_speech_available(SpeechEngine.is_available())
+        self.refresh_speech_prefs()
 
         self.tool_window.clear_ink_requested.connect(self._on_clear_active_ink)
         self.tool_window.clear_text_boxes_requested.connect(self._on_clear_active_text_boxes)
@@ -453,17 +460,36 @@ class PaletteController:
                 stack.text_layer.delete_selected()
                 return
 
+    def refresh_speech_prefs(self) -> None:
+        mode = load_speech_input_mode()
+        fp = self.tool_window.format_panel
+        fp.set_speech_available(is_speech_input_available(mode))
+        fp.set_speech_mode(mode)
+        if self._is_speech_active():
+            self._stop_speech()
+
+    def _is_speech_active(self) -> bool:
+        if self._windows_speech_active:
+            return True
+        return self._speech.is_listening()
+
     def finish_all_text_editing(self) -> None:
-        if self._speech.is_listening():
+        if self._is_speech_active():
             self._stop_speech()
         for stack in self._stacks():
             stack.text_layer.finish_all_editing()
 
     def _stop_speech(self) -> None:
+        if self._windows_speech_active:
+            toggle_windows_voice_typing()
+            self._windows_speech_active = False
         self._speech.stop()
         self.tool_window.format_panel.set_speech_active(False)
 
     def _on_format_speech_toggled(self, on: bool) -> None:
+        if load_speech_input_mode() == SPEECH_MODE_WINDOWS:
+            self._on_windows_speech_toggled(on)
+            return
         if not on:
             self._stop_speech()
             return
@@ -477,6 +503,39 @@ class PaletteController:
             self.tool_window.format_panel.set_speech_active(False)
             return
         self._speech.start()
+
+    def _on_windows_speech_toggled(self, on: bool) -> None:
+        from ui_qt import helpers as h
+
+        if not on:
+            self._stop_speech()
+            return
+        if not any(stack.text_layer.selected_box() for stack in self._stacks()):
+            self.tool_window.format_panel.set_speech_active(False)
+            h.warn(self._main, "音声入力", "テキストボックスを選択してください")
+            return
+        if not self._ensure_speech_target_editing():
+            self.tool_window.format_panel.set_speech_active(False)
+            return
+        QTimer.singleShot(200, self._launch_windows_voice_typing)
+
+    def _launch_windows_voice_typing(self) -> None:
+        from ui_qt import helpers as h
+
+        fp = self.tool_window.format_panel
+        if not fp.is_speech_checked():
+            return
+        if toggle_windows_voice_typing():
+            self._windows_speech_active = True
+            fp.set_speech_active(True)
+            return
+        fp.set_speech_active(False)
+        h.warn(
+            self._main,
+            "音声入力",
+            "Windows 音声入力（Win+H）を起動できませんでした。\n"
+            "Windows の音声設定とマイク許可を確認してください。",
+        )
 
     def _ensure_speech_target_editing(self) -> bool:
         for stack in self._stacks():
