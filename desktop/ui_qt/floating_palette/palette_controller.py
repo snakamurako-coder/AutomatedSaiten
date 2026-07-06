@@ -651,10 +651,10 @@ class PaletteController:
                     if stack.text_layer.append_transcript_to_selected(chunk):
                         break
                 if not manual_finalize:
-                    self._speech.resume()
+                    self._resume_app_speech_after_confirm()
             elif result == SpeechConfirmResult.RETRY:
                 if not manual_finalize:
-                    self._speech.resume()
+                    self._resume_app_speech_after_confirm()
             else:
                 self._stop_speech()
         finally:
@@ -662,6 +662,13 @@ class PaletteController:
             if manual_finalize:
                 self._speech_manual_finalize = False
                 self._stop_speech()
+
+    def _resume_app_speech_after_confirm(self) -> None:
+        """確認ダイアログ後にアプリ内認識を再開し、ボタンを認識中表示に戻す。"""
+        self._speech_confirm_open = False
+        self._speech.resume()
+        self.tool_window.format_panel.set_speech_active(True)
+        self.tool_window.format_panel.set_speech_phase("recognizing")
 
     def _on_speech_error(self, message: str) -> None:
         from ui_qt import helpers as h
