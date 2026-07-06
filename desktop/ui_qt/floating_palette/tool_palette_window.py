@@ -214,8 +214,8 @@ class ToolPaletteWindow(QWidget):
         text_lay.setSpacing(8)
 
         self._text_hint = QLabel(
-            "画像をクリックでテキストボックスを配置\n"
-            "配置済みボックスを長押し（約0.5秒）で文字編集"
+            "画像上でドラッグしてテキストボックスの大きさを決定\n"
+            "配置後はダブルクリックで文字編集"
         )
         self._text_hint.setObjectName("PaletteHintLabel")
         self._text_hint.setWordWrap(True)

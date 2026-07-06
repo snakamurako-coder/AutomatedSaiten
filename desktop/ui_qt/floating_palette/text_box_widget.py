@@ -1,4 +1,4 @@
-"""テキストボックス1件の UI（移動・ダブルクリック編集・自動サイズ）。"""
+"""テキストボックス1件の UI（移動・ダブルクリック編集）。"""
 
 from __future__ import annotations
 
@@ -8,9 +8,7 @@ from typing import Any
 from PySide6.QtCore import QPoint, Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import (
     QColor,
-    QCursor,
     QFont,
-    QFontMetrics,
     QMouseEvent,
     QPalette,
     QTextBlockFormat,
@@ -80,7 +78,7 @@ class TextBoxWidget(QFrame):
         self._editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._editor.setFrameShape(QFrame.NoFrame)
         self._editor.setAutoFillBackground(False)
-        self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
+        self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
         self._editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._editor.viewport().setAutoFillBackground(False)
@@ -91,7 +89,7 @@ class TextBoxWidget(QFrame):
 
         self._display_label = QLabel(str(box.get("text") or ""))
         self._display_label.setObjectName("TextBoxDisplayLabel")
-        self._display_label.setWordWrap(False)
+        self._display_label.setWordWrap(True)
         self._display_label.setAutoFillBackground(False)
         self._display_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self._display_label.setContentsMargins(0, 0, 0, 0)
@@ -111,7 +109,7 @@ class TextBoxWidget(QFrame):
 
         self._setup_tight_document()
         self._apply_style()
-        self._fit_to_content()
+        self._apply_geometry()
 
     @property
     def box_id(self) -> str:
@@ -119,7 +117,6 @@ class TextBoxWidget(QFrame):
 
     def box_data(self) -> dict[str, Any]:
         self._box["text"] = self._editor.toPlainText()
-        self._fit_to_content()
         data = copy.deepcopy(self._box)
         if isinstance(data.get("style"), dict):
             data["style"] = resolve_text_style(data["style"])
@@ -134,7 +131,7 @@ class TextBoxWidget(QFrame):
     def set_display_scale(self, scale: float) -> None:
         self._scale = max(0.01, float(scale))
         self._apply_style()
-        self._fit_to_content()
+        self._apply_geometry()
 
     def start_editing(self) -> None:
         if not self._selected:
@@ -182,7 +179,6 @@ class TextBoxWidget(QFrame):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self._editor.setTextCursor(cursor)
         self._box["text"] = new_text
-        self._fit_to_content()
         self.changed.emit()
 
     def apply_style_dict(self, style: dict[str, Any]) -> None:
@@ -203,7 +199,6 @@ class TextBoxWidget(QFrame):
             self._display_label.setText(text)
             self._text_stack.setCurrentWidget(self._display_label)
         self._apply_style()
-        self._fit_to_content()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if watched is self._editor and event.type() == QEvent.Type.FocusOut:
@@ -242,17 +237,6 @@ class TextBoxWidget(QFrame):
         disp_pt = max(8, int(round(_FIXED_FONT_PT / self._scale)))
         font.setPointSize(disp_pt)
         return font
-
-    def _fit_to_content(self) -> None:
-        font = self._content_font()
-        fm = QFontMetrics(font)
-        text = self._editor.toPlainText() if self._editing else self._display_label.text()
-        lines = text.split("\n") if text else [""]
-        line_h = fm.height()
-        max_w = max((fm.horizontalAdvance(line) for line in lines), default=fm.horizontalAdvance(" "))
-        self._box["width"] = max(_MIN_NATIVE_W, float(max_w))
-        self._box["height"] = max(_MIN_NATIVE_H, float(line_h * max(1, len(lines))))
-        self._apply_geometry()
 
     def _apply_style(self) -> None:
         st = self._style()
@@ -325,7 +309,6 @@ class TextBoxWidget(QFrame):
 
     def _on_text_changed(self) -> None:
         self._box["text"] = self._editor.toPlainText()
-        self._fit_to_content()
         self.changed.emit()
 
     def _begin_pointer(self, global_pos: QPoint) -> None:

@@ -6,13 +6,17 @@ import copy
 from collections.abc import Callable
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal, QEvent, QTimer
+from PySide6.QtCore import QPointF, Qt, Signal, QEvent, QTimer
 from PySide6.QtGui import QMouseEvent, QTabletEvent
-from PySide6.QtWidgets import QWidget
+from PySide6.QtWidgets import QFrame, QWidget
 
 from models.text_annotation_repo import new_text_box
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
 from ui_qt.stylus_overlay import is_pen_mouse_event, is_stylus_tablet_event
+
+_MIN_NATIVE_W = 40.0
+_MIN_NATIVE_H = 24.0
+_MIN_DISPLAY_DRAG_PX = 6
 
 
 class TextBoxLayer(QWidget):
@@ -46,6 +50,14 @@ class TextBoxLayer(QWidget):
         self._show_text = True
         self._text_tool_mode = False
         self._palm_rejection = True
+        self._placing = False
+        self._place_origin: QPointF | None = None
+        self._rubber = QFrame(self)
+        self._rubber.setStyleSheet(
+            "QFrame { background: rgba(37, 99, 235, 0.12);"
+            " border: 1px dashed #2563eb; }"
+        )
+        self._rubber.hide()
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TabletTracking, True)
         self.setMouseTracking(True)
@@ -67,6 +79,7 @@ class TextBoxLayer(QWidget):
         if enabled:
             self.setCursor(Qt.CursorShape.CrossCursor)
         else:
+            self._cancel_place_drag()
             self.unsetCursor()
 
     def set_palm_rejection(self, enabled: bool) -> None:
@@ -184,10 +197,104 @@ class TextBoxLayer(QWidget):
         self._persist_annotations()
         self.selection_changed.emit(None)
 
-    def place_box_at(self, display_x: float, display_y: float) -> dict[str, Any]:
-        nx = max(0.0, min(self._native_w, display_x * self._scale_x))
-        ny = max(0.0, min(self._native_h, display_y * self._scale_y))
-        box = new_text_box(nx, ny)
+    def is_placing(self) -> bool:
+        return self._placing
+
+    def handle_placement_event(self, et: QEvent.Type, local_pos: QPointF, event) -> bool:
+        """テキスト配置ドラッグ（container / ink からの転送も含む）。"""
+        if not self._placement_mode:
+            return False
+        if self._reject_placement_event(event):
+            return False
+
+        lx, ly = int(local_pos.x()), int(local_pos.y())
+
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+            if self._placing:
+                return True
+            if self.childAt(lx, ly) is not None:
+                return False
+            self._begin_place_drag(local_pos)
+            return True
+
+        if et in (QEvent.Type.MouseMove, QEvent.Type.TabletMove):
+            if not self._placing:
+                return False
+            self._update_place_drag(local_pos)
+            return True
+
+        if et in (QEvent.Type.MouseButtonRelease, QEvent.Type.TabletRelease):
+            if not self._placing:
+                return False
+            self._finish_place_drag(local_pos)
+            return True
+
+        return False
+
+    def _reject_placement_event(self, event) -> bool:
+        if not self._palm_rejection:
+            return False
+        if isinstance(event, QMouseEvent) and is_pen_mouse_event(event):
+            return True
+        if isinstance(event, QTabletEvent) and is_stylus_tablet_event(event):
+            return True
+        return False
+
+    def _begin_place_drag(self, pos: QPointF) -> None:
+        self.finish_all_editing()
+        self.clear_selection()
+        self._placing = True
+        self._place_origin = QPointF(pos)
+        self._update_place_drag(pos)
+        self._rubber.show()
+        self._rubber.raise_()
+        self.grabMouse()
+
+    def _update_place_drag(self, pos: QPointF) -> None:
+        if self._place_origin is None:
+            return
+        x1, y1 = self._place_origin.x(), self._place_origin.y()
+        x2, y2 = pos.x(), pos.y()
+        left = min(x1, x2)
+        top = min(y1, y2)
+        w = max(1.0, abs(x2 - x1))
+        h = max(1.0, abs(y2 - y1))
+        self._rubber.setGeometry(int(left), int(top), int(w), int(h))
+
+    def _finish_place_drag(self, pos: QPointF) -> None:
+        if self._place_origin is None:
+            self._cancel_place_drag()
+            return
+        origin = self._place_origin
+        self._cancel_place_drag()
+        self.place_box_rect(origin.x(), origin.y(), pos.x(), pos.y())
+
+    def _cancel_place_drag(self) -> None:
+        if self._placing:
+            self.releaseMouse()
+        self._placing = False
+        self._place_origin = None
+        self._rubber.hide()
+
+    def place_box_rect(
+        self,
+        display_x1: float,
+        display_y1: float,
+        display_x2: float,
+        display_y2: float,
+    ) -> dict[str, Any]:
+        left = min(display_x1, display_x2)
+        top = min(display_y1, display_y2)
+        dw = abs(display_x2 - display_x1)
+        dh = abs(display_y2 - display_y1)
+        if dw < _MIN_DISPLAY_DRAG_PX and dh < _MIN_DISPLAY_DRAG_PX:
+            dw = 80.0
+            dh = 28.0
+        nw = max(_MIN_NATIVE_W, dw * self._scale_x)
+        nh = max(_MIN_NATIVE_H, dh * self._scale_y)
+        nx = max(0.0, min(self._native_w - nw, left * self._scale_x))
+        ny = max(0.0, min(self._native_h - nh, top * self._scale_y))
+        box = new_text_box(nx, ny, width=nw, height=nh)
         self._sync_annotations_from_widgets()
         self._annotations.append(copy.deepcopy(box))
         self._rebuild_widgets(from_widgets=False)
@@ -237,32 +344,43 @@ class TextBoxLayer(QWidget):
             self._on_changed(copy.deepcopy(self._annotations))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._palm_rejection and is_pen_mouse_event(event):
-            event.ignore()
-            return
         if self._placement_mode and event.button() == Qt.LeftButton:
-            pos = event.position()
-            lx, ly = int(pos.x()), int(pos.y())
-            if self.childAt(lx, ly) is None:
-                self.place_box_at(pos.x(), pos.y())
-            event.accept()
-            return
-        if event.button() == Qt.LeftButton:
+            if self.handle_placement_event(
+                QEvent.Type.MouseButtonPress, event.position(), event
+            ):
+                event.accept()
+                return
+        if event.button() == Qt.LeftButton and not self._placing:
             self.finish_all_editing()
             self.clear_selection()
             event.accept()
             return
         super().mousePressEvent(event)
 
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._placing:
+            if self.handle_placement_event(QEvent.Type.MouseMove, event.position(), event):
+                event.accept()
+                return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._placing and event.button() == Qt.LeftButton:
+            if self.handle_placement_event(
+                QEvent.Type.MouseButtonRelease, event.position(), event
+            ):
+                event.accept()
+                return
+        super().mouseReleaseEvent(event)
+
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
-        if self._palm_rejection and is_stylus_tablet_event(event):
-            event.ignore()
-            return
-        if self._placement_mode and event.type() == QEvent.Type.TabletPress:
-            pos = event.position()
-            lx, ly = int(pos.x()), int(pos.y())
-            if self.childAt(lx, ly) is None:
-                self.place_box_at(pos.x(), pos.y())
-            event.accept()
-            return
+        et = event.type()
+        if self._placement_mode and et in (
+            QEvent.Type.TabletPress,
+            QEvent.Type.TabletMove,
+            QEvent.Type.TabletRelease,
+        ):
+            if self.handle_placement_event(et, event.position(), event):
+                event.accept()
+                return
         super().tabletEvent(event)

@@ -772,6 +772,7 @@ class CropInkImageStack(QWidget):
         self.text_layer.setParent(self.container)
         self.text_layer.move(0, 0)
         self.container.installEventFilter(self)
+        self.image_label.installEventFilter(self)
         self.ink_overlay.installEventFilter(self)
         self.text_layer.installEventFilter(self)
         self._sync_layer_order()
@@ -795,20 +796,11 @@ class CropInkImageStack(QWidget):
         if self._tool_mode != TOOL_TEXT:
             self.image_clicked.emit()
 
-    def _try_place_text_at(self, source: QWidget, pos) -> bool:
-        if self._tool_mode != TOOL_TEXT:
-            return False
-        if self._before_ink_draw:
-            self._before_ink_draw()
-        else:
-            self.text_layer.finish_all_editing()
+    def _map_to_text_layer(self, source: QWidget, pos) -> QPointF:
+        from PySide6.QtCore import QPoint
+
         gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
-        local = self.text_layer.mapFromGlobal(gp)
-        lx, ly = int(local.x()), int(local.y())
-        if self.text_layer.point_on_any_box(lx, ly):
-            return False
-        self.text_layer.place_box_at(float(lx), float(ly))
-        return True
+        return self.text_layer.mapFromGlobal(gp)
 
     def _is_text_placement_event(self, event) -> bool:
         if isinstance(event, QTabletEvent):
@@ -816,6 +808,11 @@ class CropInkImageStack(QWidget):
                 return False
             return True
         if isinstance(event, QMouseEvent):
+            et = event.type()
+            if et == QEvent.Type.MouseMove:
+                return bool(event.buttons() & Qt.LeftButton)
+            if et == QEvent.Type.MouseButtonRelease:
+                return event.button() == Qt.LeftButton
             if event.button() != Qt.LeftButton:
                 return False
             if self._palm_rejection and is_pen_mouse_event(event):
@@ -826,15 +823,36 @@ class CropInkImageStack(QWidget):
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if self._tool_mode != TOOL_TEXT:
             return super().eventFilter(watched, event)
-        et = event.type()
-        if et == QEvent.Type.TabletPress and watched in (
+        watched_layers = (
             self.container,
+            self.image_label,
             self.ink_overlay,
             self.text_layer,
-        ):
-            if isinstance(event, QTabletEvent) and self._is_text_placement_event(event):
-                if self._try_place_text_at(watched, event.position()):
-                    return True
+        )
+        if watched not in watched_layers:
+            return super().eventFilter(watched, event)
+        et = event.type()
+        placement_types = (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonRelease,
+            QEvent.Type.TabletPress,
+            QEvent.Type.TabletMove,
+            QEvent.Type.TabletRelease,
+        )
+        if et not in placement_types:
+            return super().eventFilter(watched, event)
+        if not self._is_text_placement_event(event):
+            return super().eventFilter(watched, event)
+        if watched is self.text_layer and isinstance(event, QMouseEvent):
+            return super().eventFilter(watched, event)
+        local = (
+            event.position()
+            if watched is self.text_layer
+            else self._map_to_text_layer(watched, event.position())
+        )
+        if self.text_layer.handle_placement_event(et, local, event):
+            return True
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
@@ -862,10 +880,10 @@ class CropInkImageStack(QWidget):
         self._sync_input_routing()
 
     def _sync_input_routing(self) -> None:
-        """テキストモード: マウス/指は text_layer へ透過、スタイラス(tablet)は ink が受ける。"""
+        """テキストモード: 手書きレイヤーはマウス透過。配置は text_layer と eventFilter で処理。"""
         is_text = self._tool_mode == TOOL_TEXT
         self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, is_text)
-        self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, not is_text)
+        self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, False)
 
     def set_show_ink(self, visible: bool) -> None:
         self._show_ink = bool(visible)

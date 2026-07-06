@@ -89,13 +89,19 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def new_text_box(x: float, y: float) -> dict[str, Any]:
+def new_text_box(
+    x: float,
+    y: float,
+    *,
+    width: float = 120.0,
+    height: float = 36.0,
+) -> dict[str, Any]:
     return {
         "id": str(uuid.uuid4()),
         "x": float(x),
         "y": float(y),
-        "width": 32.0,
-        "height": 18.0,
+        "width": float(width),
+        "height": float(height),
         "text": "",
         "style": dict(TEXT_STYLE_TEMPLATE_A),
     }
