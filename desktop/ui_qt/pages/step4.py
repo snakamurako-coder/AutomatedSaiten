@@ -412,6 +412,12 @@ class Step4Page(QWidget):
         self._sync_checks_to_rows()
         self._refresh_check_views()
 
+    def _on_crop_image_clicked(self, fid: str, result_id: int, ans: str) -> None:
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.set_active_result_id(result_id)
+        self._toggle_deemed(fid, ans)
+
     def _toggle_incorrect(self, fid: str, ans: str) -> None:
         m = self._incorrect_map(fid)
         if m.get(ans):
@@ -1074,7 +1080,9 @@ class Step4Page(QWidget):
                 rid, f, s
             ),
         )
-        ink_stack.image_clicked.connect(lambda a=ans: self._toggle_deemed(fid, a))
+        ink_stack.image_clicked.connect(
+            lambda f=fid, rid=row_index, a=ans: self._on_crop_image_clicked(f, rid, a)
+        )
         self._ink_stacks.append(ink_stack)
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:

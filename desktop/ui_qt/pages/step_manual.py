@@ -804,6 +804,12 @@ class StepManualPage(QWidget):
     def palette_field_id(self) -> str:
         return self._selected_field_id() or ""
 
+    def palette_focus_result_id(self) -> int | None:
+        """描画ツールが参照する選択中画像（1件のみ選択時）。"""
+        if len(self._selected_ids) == 1:
+            return next(iter(self._selected_ids))
+        return None
+
     def palette_save_annotations(
         self, result_id: int, field_id: str, items: list
     ) -> None:
@@ -1256,6 +1262,9 @@ class StepManualPage(QWidget):
         return tile
 
     def _on_tile_image_clicked(self, result_id: int) -> None:
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.set_active_result_id(result_id)
         if self._parallel_palette_mode:
             if self._palette_active_key:
                 self._apply_palette_to_image(result_id)

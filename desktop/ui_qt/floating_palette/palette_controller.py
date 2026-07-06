@@ -87,6 +87,7 @@ class PaletteController:
         self._speech.listening_changed.connect(self._on_speech_listening_changed)
         self._speech_confirm_open = False
         self._active_stack: CropInkImageStack | None = None
+        self._active_result_id: int | None = None
         fp.set_speech_available(SpeechEngine.is_available())
 
         self.tool_window.clear_ink_requested.connect(self._on_clear_active_ink)
@@ -149,8 +150,18 @@ class PaletteController:
         self._page = None
         self._step_id = None
         self._active_stack = None
+        self._active_result_id = None
         self.tool_window.hide()
         self.fab.hide()
+
+    def set_active_result_id(self, result_id: int) -> None:
+        """グリッド再描画後も有効な、選択中画像の result_id（rowIndex）。"""
+        self._active_result_id = int(result_id)
+        self._active_stack = None
+        for stack in self._stacks():
+            if stack.result_id == self._active_result_id:
+                self._active_stack = stack
+                return
 
     def show_for_step(self, step_id: int) -> None:
         if step_id not in self.ACTIVE_STEPS:
@@ -285,19 +296,32 @@ class PaletteController:
                 stack.text_layer.clear_selection()
         self._apply_to_stacks()
 
+    def _set_active_stack(self, stack: CropInkImageStack) -> None:
+        self._active_stack = stack
+        self._active_result_id = stack.result_id
+
+    def _page_focus_result_id(self) -> int | None:
+        if not self._page:
+            return None
+        fn = getattr(self._page, "palette_focus_result_id", None)
+        if not callable(fn):
+            return None
+        rid = fn()
+        return int(rid) if rid is not None else None
+
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
             self._stop_speech()
             return
         for stack in self._stacks():
             if stack.text_layer.selected_box():
-                self._active_stack = stack
+                self._set_active_stack(stack)
                 break
         self.tool_window.show_text_mode()
         self.tool_window.format_panel.load_style(box.get("style") or {})
 
     def _on_stack_image_clicked(self, stack: CropInkImageStack) -> None:
-        self._active_stack = stack
+        self._set_active_stack(stack)
         if self._tool != TOOL_TEXT:
             return
         for s in self._stacks():
@@ -305,12 +329,25 @@ class PaletteController:
             s.text_layer.clear_selection()
 
     def _resolve_active_stack(self) -> CropInkImageStack | None:
-        if self._active_stack is not None and self._active_stack in self._stacks():
-            return self._active_stack
-        for stack in self._stacks():
+        stacks = self._stacks()
+        if not stacks:
+            return None
+
+        rid = self._active_result_id
+        if rid is None:
+            rid = self._page_focus_result_id()
+
+        if rid is not None:
+            for stack in stacks:
+                if stack.result_id == rid:
+                    self._active_stack = stack
+                    return stack
+
+        for stack in stacks:
             if stack.text_layer.selected_box():
-                self._active_stack = stack
+                self._set_active_stack(stack)
                 return stack
+
         return None
 
     def _on_clear_active_ink(self) -> None:
