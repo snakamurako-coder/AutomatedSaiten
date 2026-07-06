@@ -99,7 +99,7 @@ class SettingsDialog(QDialog):
             h.caption_label(
                 "Vision API キーは「HTTP リファラー（ウェブサイト）」制限では使えません。"
                 "制限は「なし」または IP アドレスにし、Cloud Vision API を有効化・課金設定してください。"
-                "設定後は必ず「保存」を押してください。"
+                "設定後は「適用して保存」または「保存して閉じる」を押してください。"
             ),
         )
         root.addWidget(api_box)
@@ -170,6 +170,9 @@ class SettingsDialog(QDialog):
             self.speech_windows.setChecked(True)
         else:
             self.speech_app.setChecked(True)
+        speech_lay.addWidget(
+            h.caption_label("音声入力モードを変えたら「適用して保存」で反映できます（ダイアログは開いたまま）。")
+        )
         root.addWidget(speech_box)
 
         # その他
@@ -188,7 +191,8 @@ class SettingsDialog(QDialog):
         btn_row = QHBoxLayout()
         btn_row.addStretch()
         btn_row.addWidget(h.button("キャンセル", self.reject))
-        btn_row.addWidget(h.button("保存", self._on_save, variant="primary"))
+        btn_row.addWidget(h.button("適用して保存", self._on_apply_save, variant="primary"))
+        btn_row.addWidget(h.button("保存して閉じる", self._on_save))
         root.addLayout(btn_row)
 
     def _refresh_text_palette_btns(self) -> None:
@@ -227,7 +231,7 @@ class SettingsDialog(QDialog):
             "gemini_api_key": self.gemini_edit.text().strip(),
         }
 
-    def _on_save(self) -> None:
+    def _persist_settings(self) -> bool:
         cfg = load_config()
         cfg.update(self._collect())
         cfg["stylus_palm_rejection"] = self.palm_rejection_check.isChecked()
@@ -237,15 +241,25 @@ class SettingsDialog(QDialog):
             save_speech_input_mode(SPEECH_MODE_APP)
         if cfg["ocr_engine"] == "vision" and not cfg["vision_api_key"]:
             h.warn(self, "設定エラー", "OCR エンジンが Vision API の場合、Vision API キーを入力してください。")
-            return
+            return False
         try:
             save_config(cfg)
             save_text_palette_colors(self._text_palette_colors)
         except OSError as e:
             h.error(self, "保存失敗", str(e))
-            return
+            return False
         if self._on_saved:
             self._on_saved()
+        return True
+
+    def _on_apply_save(self) -> None:
+        if not self._persist_settings():
+            return
+        self.status_label.setText("設定を保存し、適用しました。")
+
+    def _on_save(self) -> None:
+        if not self._persist_settings():
+            return
         h.info(self, "保存完了", "詳細設定を保存しました。")
         self.accept()
 

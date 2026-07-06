@@ -165,13 +165,11 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
 
     def _run_loop(self) -> None:
         import numpy as np
-        import speech_recognition as sr
+
+        from ui_qt.speech.google_stt import RequestError, UnknownValueError, recognize_pcm
 
         # soundcard は COM を使うため、メインスレッドでは import しない
         import soundcard as sc
-
-        recognizer = sr.Recognizer()
-        recognizer.dynamic_energy_threshold = True
 
         try:
             microphone = sc.default_microphone()
@@ -231,12 +229,15 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
                 empty_streak = 0
                 audio = np.concatenate(frames, axis=0)
                 pcm = (np.clip(audio[:, 0], -1.0, 1.0) * 32767).astype(np.int16)
-                audio_data = sr.AudioData(pcm.tobytes(), self._SAMPLE_RATE, 2)
                 try:
-                    text = recognizer.recognize_google(audio_data, language="ja-JP")
-                except sr.UnknownValueError:
+                    text = recognize_pcm(
+                        pcm.tobytes(),
+                        sample_rate=self._SAMPLE_RATE,
+                        language="ja-JP",
+                    )
+                except UnknownValueError:
                     continue
-                except sr.RequestError as exc:
+                except RequestError as exc:
                     self._bridge.error.emit(f"音声認識エラー: {exc}")
                     continue
 
@@ -248,6 +249,8 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
 class _SrSpeechWorker(_SpeechWorkerBase):
     def _run_loop(self) -> None:
         import speech_recognition as sr
+
+        from ui_qt.speech.google_stt import RequestError, UnknownValueError, recognize_pcm
 
         recognizer = sr.Recognizer()
         recognizer.dynamic_energy_threshold = True
@@ -282,10 +285,11 @@ class _SrSpeechWorker(_SpeechWorkerBase):
                     continue
 
                 try:
-                    text = recognizer.recognize_google(audio, language="ja-JP")
-                except sr.UnknownValueError:
+                    pcm = audio.get_raw_data(convert_rate=16000, convert_width=2)
+                    text = recognize_pcm(pcm, sample_rate=16000, language="ja-JP")
+                except UnknownValueError:
                     continue
-                except sr.RequestError as exc:
+                except RequestError as exc:
                     self._bridge.error.emit(f"音声認識エラー: {exc}")
                     continue
 
