@@ -226,6 +226,28 @@ class SettingsDialog(QDialog):
 
         self.speech_app = QRadioButton("アプリ内認識（Google・確認ダイアログあり）")
         lay.addWidget(self.speech_app)
+
+        pause_form = QFormLayout()
+        pause_form.setContentsMargins(0, 0, 0, 0)
+        pause_form.setSpacing(10)
+        self.speech_pause_spin = QDoubleSpinBox()
+        self.speech_pause_spin.setRange(0.3, 5.0)
+        self.speech_pause_spin.setSingleStep(0.1)
+        self.speech_pause_spin.setDecimals(1)
+        self.speech_pause_spin.setSuffix(" 秒")
+        self.speech_pause_spin.setValue(load_speech_pause_seconds())
+        self.speech_pause_spin.setToolTip(
+            "アプリ内認識で、話したあと何秒無言なら区切って認識するか"
+        )
+        pause_form.addRow("無言区切り", self.speech_pause_spin)
+        lay.addLayout(pause_form)
+        lay.addWidget(
+            h.caption_label(
+                "話したあと何秒無言なら区切って認識するか（0.3〜5.0秒、0.1秒刻み）。"
+                "アプリ内認識のときのみ有効です。"
+            )
+        )
+
         self.speech_windows: QRadioButton | None = None
         if sys.platform == "win32":
             self.speech_windows = QRadioButton(
@@ -242,36 +264,27 @@ class SettingsDialog(QDialog):
             lay.addWidget(
                 h.caption_label("Windows 音声入力は Windows 版でのみ利用できます。")
             )
+
         speech_mode = str(cfg.get("speech_input_mode") or DEFAULT_SPEECH_MODE).strip().lower()
         if sys.platform == "win32" and speech_mode == SPEECH_MODE_WINDOWS and self.speech_windows:
             self.speech_windows.setChecked(True)
         else:
             self.speech_app.setChecked(True)
 
-        app_form = QFormLayout()
-        app_form.setContentsMargins(0, 0, 0, 0)
-        app_form.setSpacing(10)
-        self.speech_pause_spin = QDoubleSpinBox()
-        self.speech_pause_spin.setRange(0.3, 5.0)
-        self.speech_pause_spin.setSingleStep(0.1)
-        self.speech_pause_spin.setDecimals(1)
-        self.speech_pause_spin.setSuffix(" 秒")
-        self.speech_pause_spin.setValue(load_speech_pause_seconds())
-        self.speech_pause_spin.setToolTip(
-            "アプリ内認識で、話したあと何秒無言なら区切って認識するか"
-        )
-        app_form.addRow("無言区切り", self.speech_pause_spin)
-        lay.addLayout(app_form)
-        lay.addWidget(
-            h.caption_label(
-                "アプリ内認識のみ有効です。短いほど区切りが早くなります（0.3〜5.0秒、0.1秒刻み）。"
-            )
-        )
+        self.speech_app.toggled.connect(self._sync_speech_pause_enabled)
+        if self.speech_windows is not None:
+            self.speech_windows.toggled.connect(self._sync_speech_pause_enabled)
+        self._sync_speech_pause_enabled()
+
         lay.addWidget(
             h.caption_label("音声入力モードを変えたら「適用して保存」で反映できます（ダイアログは開いたまま）。")
         )
         lay.addStretch()
         self._tabs.addTab(page, "音声入力")
+
+    def _sync_speech_pause_enabled(self) -> None:
+        app_mode = self.speech_app.isChecked()
+        self.speech_pause_spin.setEnabled(app_mode)
 
     def _build_misc_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page("その他の既定値を設定します。")

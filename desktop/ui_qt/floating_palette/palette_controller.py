@@ -637,11 +637,13 @@ class PaletteController:
                 self._stop_speech()
             return
         manual_finalize = self._speech_manual_finalize
+        self._speech_confirm_open = True
         if not manual_finalize:
             self._speech.pause()
-        self._speech_confirm_open = True
-        self.tool_window.format_panel.set_speech_phase("paused")
+        self.tool_window.format_panel.set_speech_phase("idle")
+        QApplication.processEvents()
         try:
+            self.tool_window.format_panel.set_speech_phase("paused")
             dlg = SpeechConfirmDialog(self._main, chunk)
             result = dlg.exec()
             if result == SpeechConfirmResult.ACCEPT:
@@ -677,6 +679,8 @@ class PaletteController:
         self.tool_window.format_panel.set_speech_active(on)
 
     def _on_speech_phase_changed(self, phase: str) -> None:
+        if self._speech_confirm_open and phase in ("preparing", "recognizing"):
+            return
         self.tool_window.format_panel.set_speech_phase(phase)
         status = {
             "preparing": "音声入力: マイクを準備しています…",

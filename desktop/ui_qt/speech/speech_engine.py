@@ -438,7 +438,7 @@ class SpeechEngine(QWidget):
         self._paused = True
         if self._worker is not None:
             self._worker.request_pause()
-        self._set_phase("paused")
+        self._set_phase("idle")
 
     def resume(self) -> None:
         """一時停止後に認識を再開。"""
