@@ -2,11 +2,11 @@
 
 from __future__ import annotations
 
-import subprocess
 import sys
 import threading
+import time
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
 
 _SOUNDcard_AVAILABLE = False
@@ -35,6 +35,9 @@ if _SR_AVAILABLE:
     except ImportError:
         pass
 
+_COINIT_MULTITHREADED = 0
+_RPC_E_CHANGED_MODE = -2147417850
+
 
 def _availability_message() -> tuple[bool, str]:
     if sys.platform == "win32":
@@ -50,15 +53,59 @@ def _availability_message() -> tuple[bool, str]:
     return False, "PyAudio が未インストールです（pip install PyAudio）"
 
 
-class _SpeechWorkerBase(QThread):
+def _init_worker_com() -> bool:
+    """ワーカースレッド用 COM 初期化。自前で初期化した場合のみ True（Uninitialize 要）。"""
+    if sys.platform != "win32":
+        return False
+    try:
+        import pythoncom
+
+        hr = pythoncom.CoInitializeEx(pythoncom.COINIT_MULTITHREADED)
+        if hr == pythoncom.RPC_E_CHANGED_MODE:
+            return False
+        return hr in (0, 1)
+    except ImportError:
+        import ctypes
+
+        hr = ctypes.windll.ole32.CoInitializeEx(None, _COINIT_MULTITHREADED)
+        if hr == _RPC_E_CHANGED_MODE:
+            return False
+        return hr in (0, 1)
+    except Exception:
+        return False
+
+
+def _uninit_worker_com(should_uninit: bool) -> None:
+    if not should_uninit or sys.platform != "win32":
+        return
+    try:
+        import pythoncom
+
+        pythoncom.CoUninitialize()
+    except ImportError:
+        import ctypes
+
+        ctypes.windll.ole32.CoUninitialize()
+    except Exception:
+        pass
+
+
+class _SpeechBridge(QObject):
     transcript_received = Signal(str)
     error = Signal(str)
+    finished = Signal()
 
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
+
+class _SpeechWorkerBase:
+    def __init__(self, bridge: _SpeechBridge) -> None:
+        self._bridge = bridge
+        self._thread: threading.Thread | None = None
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._want_listening = False
+
+    def is_running(self) -> bool:
+        return self._thread is not None and self._thread.is_alive()
 
     def request_start(self) -> None:
         self._want_listening = True
@@ -75,6 +122,34 @@ class _SpeechWorkerBase(QThread):
     def request_resume(self) -> None:
         self._pause_event.clear()
 
+    def start(self) -> None:
+        if self.is_running():
+            self.request_start()
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(target=self._thread_main, name="SpeechWorker", daemon=True)
+        self._thread.start()
+
+    def wait(self, timeout_ms: int) -> bool:
+        if self._thread is None:
+            return True
+        self._thread.join(timeout=max(timeout_ms, 0) / 1000)
+        return not self.is_running()
+
+    def _thread_main(self) -> None:
+        com_owned = _init_worker_com()
+        try:
+            self._run_loop()
+        except Exception as exc:
+            if not self._stop_event.is_set():
+                self._bridge.error.emit(f"音声認識エラー: {exc}")
+        finally:
+            _uninit_worker_com(com_owned)
+            self._bridge.finished.emit()
+
+    def _run_loop(self) -> None:
+        raise NotImplementedError
+
 
 class _SoundcardSpeechWorker(_SpeechWorkerBase):
     """Windows: soundcard で録音し Google STT で認識（要ネット）。"""
@@ -87,7 +162,7 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
     _MAX_PHRASE_BLOCKS = _SAMPLE_RATE // _BLOCK_SIZE * 25
     _NO_SPEECH_HINT_AFTER = 10
 
-    def run(self) -> None:
+    def _run_loop(self) -> None:
         import numpy as np
         import soundcard as sc
         import speech_recognition as sr
@@ -98,81 +173,77 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
         try:
             microphone = sc.default_microphone()
         except Exception as exc:
-            self.error.emit(f"マイクを開けません: {exc}")
+            self._bridge.error.emit(f"マイクを開けません: {exc}")
             return
 
         empty_streak = 0
-        try:
-            with microphone.recorder(samplerate=self._SAMPLE_RATE, channels=1) as recorder:
-                while not self._stop_event.is_set():
-                    if not self._want_listening or self._pause_event.is_set():
-                        self.msleep(50)
-                        continue
+        with microphone.recorder(samplerate=self._SAMPLE_RATE, channels=1) as recorder:
+            while not self._stop_event.is_set():
+                if not self._want_listening or self._pause_event.is_set():
+                    time.sleep(0.05)
+                    continue
 
-                    frames: list = []
-                    silent_run = 0
-                    speech_blocks = 0
-                    idle_blocks = 0
+                frames: list = []
+                silent_run = 0
+                speech_blocks = 0
+                idle_blocks = 0
 
-                    while (
-                        not self._stop_event.is_set()
-                        and self._want_listening
-                        and not self._pause_event.is_set()
-                    ):
-                        block = recorder.record(numframes=self._BLOCK_SIZE)
-                        level = float(np.abs(block).mean())
-                        if level >= self._SILENCE_LEVEL:
-                            frames.append(block)
-                            speech_blocks += 1
-                            silent_run = 0
-                            idle_blocks = 0
-                        elif frames:
-                            frames.append(block)
-                            silent_run += 1
-                            if silent_run >= self._SILENCE_BLOCKS:
-                                break
-                        else:
-                            idle_blocks += 1
-                            if idle_blocks >= 40:
-                                break
-                        if speech_blocks >= self._MAX_PHRASE_BLOCKS:
+                while (
+                    not self._stop_event.is_set()
+                    and self._want_listening
+                    and not self._pause_event.is_set()
+                ):
+                    block = recorder.record(numframes=self._BLOCK_SIZE)
+                    level = float(np.abs(block).mean())
+                    if level >= self._SILENCE_LEVEL:
+                        frames.append(block)
+                        speech_blocks += 1
+                        silent_run = 0
+                        idle_blocks = 0
+                    elif frames:
+                        frames.append(block)
+                        silent_run += 1
+                        if silent_run >= self._SILENCE_BLOCKS:
                             break
+                    else:
+                        idle_blocks += 1
+                        if idle_blocks >= 40:
+                            break
+                    if speech_blocks >= self._MAX_PHRASE_BLOCKS:
+                        break
 
-                    if self._stop_event.is_set() or not self._want_listening or self._pause_event.is_set():
-                        continue
+                if self._stop_event.is_set() or not self._want_listening or self._pause_event.is_set():
+                    continue
 
-                    if not frames or speech_blocks < self._MIN_SPEECH_BLOCKS:
-                        empty_streak += 1
-                        if empty_streak >= self._NO_SPEECH_HINT_AFTER:
-                            empty_streak = 0
-                            self.error.emit(
-                                "音声が検出されません。"
-                                "マイクに向かって話し、区切りで少し黙ってください。"
-                            )
-                        continue
+                if not frames or speech_blocks < self._MIN_SPEECH_BLOCKS:
+                    empty_streak += 1
+                    if empty_streak >= self._NO_SPEECH_HINT_AFTER:
+                        empty_streak = 0
+                        self._bridge.error.emit(
+                            "音声が検出されません。"
+                            "マイクに向かって話し、区切りで少し黙ってください。"
+                        )
+                    continue
 
-                    empty_streak = 0
-                    audio = np.concatenate(frames, axis=0)
-                    pcm = (np.clip(audio[:, 0], -1.0, 1.0) * 32767).astype(np.int16)
-                    audio_data = sr.AudioData(pcm.tobytes(), self._SAMPLE_RATE, 2)
-                    try:
-                        text = recognizer.recognize_google(audio_data, language="ja-JP")
-                    except sr.UnknownValueError:
-                        continue
-                    except sr.RequestError as exc:
-                        self.error.emit(f"音声認識エラー: {exc}")
-                        continue
+                empty_streak = 0
+                audio = np.concatenate(frames, axis=0)
+                pcm = (np.clip(audio[:, 0], -1.0, 1.0) * 32767).astype(np.int16)
+                audio_data = sr.AudioData(pcm.tobytes(), self._SAMPLE_RATE, 2)
+                try:
+                    text = recognizer.recognize_google(audio_data, language="ja-JP")
+                except sr.UnknownValueError:
+                    continue
+                except sr.RequestError as exc:
+                    self._bridge.error.emit(f"音声認識エラー: {exc}")
+                    continue
 
-                    chunk = str(text or "").strip()
-                    if chunk:
-                        self.transcript_received.emit(chunk)
-        except Exception as exc:
-            if not self._stop_event.is_set():
-                self.error.emit(f"音声認識エラー: {exc}")
+                chunk = str(text or "").strip()
+                if chunk:
+                    self._bridge.transcript_received.emit(chunk)
 
 
 class _SrSpeechWorker(_SpeechWorkerBase):
-    def run(self) -> None:
+    def _run_loop(self) -> None:
         import speech_recognition as sr
 
         recognizer = sr.Recognizer()
@@ -182,7 +253,7 @@ class _SrSpeechWorker(_SpeechWorkerBase):
         try:
             microphone = sr.Microphone()
         except OSError as exc:
-            self.error.emit(f"マイクを開けません: {exc}")
+            self._bridge.error.emit(f"マイクを開けません: {exc}")
             return
 
         with microphone as source:
@@ -193,7 +264,7 @@ class _SrSpeechWorker(_SpeechWorkerBase):
 
             while not self._stop_event.is_set():
                 if not self._want_listening or self._pause_event.is_set():
-                    self.msleep(50)
+                    time.sleep(0.05)
                     continue
                 try:
                     audio = recognizer.listen(source, timeout=0.8, phrase_time_limit=20)
@@ -201,7 +272,7 @@ class _SrSpeechWorker(_SpeechWorkerBase):
                     continue
                 except Exception as exc:
                     if not self._stop_event.is_set():
-                        self.error.emit(f"録音エラー: {exc}")
+                        self._bridge.error.emit(f"録音エラー: {exc}")
                     break
 
                 if self._stop_event.is_set() or self._pause_event.is_set():
@@ -212,18 +283,18 @@ class _SrSpeechWorker(_SpeechWorkerBase):
                 except sr.UnknownValueError:
                     continue
                 except sr.RequestError as exc:
-                    self.error.emit(f"音声認識エラー: {exc}")
+                    self._bridge.error.emit(f"音声認識エラー: {exc}")
                     continue
 
                 chunk = str(text or "").strip()
                 if chunk:
-                    self.transcript_received.emit(chunk)
+                    self._bridge.transcript_received.emit(chunk)
 
 
-def _create_worker(parent: QWidget | None) -> _SpeechWorkerBase:
+def _create_worker(bridge: _SpeechBridge) -> _SpeechWorkerBase:
     if sys.platform == "win32" and _SOUNDcard_AVAILABLE:
-        return _SoundcardSpeechWorker(parent)
-    return _SrSpeechWorker(parent)
+        return _SoundcardSpeechWorker(bridge)
+    return _SrSpeechWorker(bridge)
 
 
 class SpeechEngine(QWidget):
@@ -236,6 +307,10 @@ class SpeechEngine(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._bridge = _SpeechBridge(self)
+        self._bridge.transcript_received.connect(self.transcript_received)
+        self._bridge.error.connect(self._on_worker_error)
+        self._bridge.finished.connect(self._on_worker_finished)
         self._worker: _SpeechWorkerBase | None = None
         self._listening = False
         self._paused = False
@@ -257,17 +332,14 @@ class SpeechEngine(QWidget):
             return
         self._want_listening = True
         self._paused = False
-        if self._worker is not None and self._worker.isRunning():
+        if self._worker is not None and self._worker.is_running():
             self._worker.request_start()
             self._set_listening(True)
             return
         self._spawn_worker()
 
     def _spawn_worker(self) -> None:
-        self._worker = _create_worker(self)
-        self._worker.transcript_received.connect(self.transcript_received)
-        self._worker.error.connect(self._on_worker_error)
-        self._worker.finished.connect(self._on_worker_finished)
+        self._worker = _create_worker(self._bridge)
         self._worker.request_start()
         self._worker.start()
         self._set_listening(True)
@@ -277,9 +349,7 @@ class SpeechEngine(QWidget):
         self._paused = False
         if self._worker is not None:
             self._worker.request_stop()
-            if not self._worker.wait(5000):
-                self._worker.terminate()
-                self._worker.wait(1000)
+            self._worker.wait(5000)
             self._worker = None
         self._set_listening(False)
 
@@ -293,7 +363,7 @@ class SpeechEngine(QWidget):
     def resume(self) -> None:
         """一時停止後に認識を再開。"""
         self._paused = False
-        if self._worker is not None and self._worker.isRunning():
+        if self._worker is not None and self._worker.is_running():
             self._worker.request_resume()
         if self._want_listening:
             self._set_listening(True)
