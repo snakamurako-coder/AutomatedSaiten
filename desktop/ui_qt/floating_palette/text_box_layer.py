@@ -165,8 +165,28 @@ class TextBoxLayer(QWidget):
         w = self._widgets.get(self._selected_id)
         if w is None:
             return False
-        w.focus_caret_at_end()
-        return True
+        return w.focus_caret_at_end()
+
+    def prepare_selected_speech_input(self) -> bool:
+        if not self._selected_id:
+            return False
+        w = self._widgets.get(self._selected_id)
+        if w is None:
+            return False
+        return w.prepare_speech_input()
+
+    def release_selected_speech_input_guard(self) -> None:
+        if not self._selected_id:
+            return
+        w = self._widgets.get(self._selected_id)
+        if w is not None:
+            w.release_speech_input_guard()
+
+    def is_selected_editor_focused_at_end(self) -> bool:
+        if not self._selected_id:
+            return False
+        w = self._widgets.get(self._selected_id)
+        return w is not None and w.is_editor_focused_at_end()
 
     def finish_all_editing(self) -> None:
         for w in self._widgets.values():

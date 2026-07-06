@@ -105,6 +105,7 @@ class _SpeechWorkerBase:
         self._stop_event = threading.Event()
         self._pause_event = threading.Event()
         self._want_listening = False
+        self._finalize_requested = False
 
     def is_running(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
@@ -112,11 +113,18 @@ class _SpeechWorkerBase:
     def request_start(self) -> None:
         self._want_listening = True
         self._pause_event.clear()
+        self._finalize_requested = False
 
     def request_stop(self) -> None:
         self._want_listening = False
         self._pause_event.clear()
+        self._finalize_requested = False
         self._stop_event.set()
+
+    def request_finalize(self) -> None:
+        """録音中のフレーズを区切って認識し、認識ループを終了する。"""
+        self._finalize_requested = True
+        self._want_listening = False
 
     def request_pause(self) -> None:
         self._pause_event.set()
@@ -164,10 +172,34 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
     _MAX_PHRASE_BLOCKS = _SAMPLE_RATE // _BLOCK_SIZE * 25
     _NO_SPEECH_HINT_AFTER = 10
 
-    def _run_loop(self) -> None:
+    def _recognize_frames(self, frames: list, speech_blocks: int) -> bool:
         import numpy as np
 
         from ui_qt.speech.google_stt import RequestError, UnknownValueError, recognize_pcm
+
+        if not frames or speech_blocks < self._MIN_SPEECH_BLOCKS:
+            return False
+        audio = np.concatenate(frames, axis=0)
+        pcm = (np.clip(audio[:, 0], -1.0, 1.0) * 32767).astype(np.int16)
+        try:
+            text = recognize_pcm(
+                pcm.tobytes(),
+                sample_rate=self._SAMPLE_RATE,
+                language="ja-JP",
+            )
+        except UnknownValueError:
+            return False
+        except RequestError as exc:
+            self._bridge.error.emit(f"音声認識エラー: {exc}")
+            return False
+        chunk = str(text or "").strip()
+        if chunk:
+            self._bridge.transcript_received.emit(chunk)
+            return True
+        return False
+
+    def _run_loop(self) -> None:
+        import numpy as np
 
         self._bridge.phase_changed.emit("preparing")
         # soundcard は COM を使うため、メインスレッドでは import しない
@@ -183,7 +215,13 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
         empty_streak = 0
         with microphone.recorder(samplerate=self._SAMPLE_RATE, channels=1) as recorder:
             while not self._stop_event.is_set():
-                if not self._want_listening or self._pause_event.is_set():
+                if self._pause_event.is_set():
+                    time.sleep(0.05)
+                    continue
+                if self._finalize_requested and not self._want_listening:
+                    self._finalize_requested = False
+                    break
+                if not self._want_listening:
                     time.sleep(0.05)
                     continue
 
@@ -196,6 +234,7 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
                     not self._stop_event.is_set()
                     and self._want_listening
                     and not self._pause_event.is_set()
+                    and not self._finalize_requested
                 ):
                     block = recorder.record(numframes=self._BLOCK_SIZE)
                     level = float(np.abs(block).mean())
@@ -216,10 +255,20 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
                     if speech_blocks >= self._MAX_PHRASE_BLOCKS:
                         break
 
-                if self._stop_event.is_set() or not self._want_listening or self._pause_event.is_set():
+                finalize_now = self._finalize_requested
+                if finalize_now:
+                    self._finalize_requested = False
+
+                if self._pause_event.is_set():
                     continue
 
-                if not frames or speech_blocks < self._MIN_SPEECH_BLOCKS:
+                if finalize_now and self._recognize_frames(frames, speech_blocks):
+                    empty_streak = 0
+                elif finalize_now:
+                    pass
+                elif self._stop_event.is_set() or not self._want_listening:
+                    break
+                elif not frames or speech_blocks < self._MIN_SPEECH_BLOCKS:
                     empty_streak += 1
                     if empty_streak >= self._NO_SPEECH_HINT_AFTER:
                         empty_streak = 0
@@ -228,25 +277,12 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
                             "マイクに向かって話し、区切りで少し黙ってください。"
                         )
                     continue
+                else:
+                    empty_streak = 0
+                    self._recognize_frames(frames, speech_blocks)
 
-                empty_streak = 0
-                audio = np.concatenate(frames, axis=0)
-                pcm = (np.clip(audio[:, 0], -1.0, 1.0) * 32767).astype(np.int16)
-                try:
-                    text = recognize_pcm(
-                        pcm.tobytes(),
-                        sample_rate=self._SAMPLE_RATE,
-                        language="ja-JP",
-                    )
-                except UnknownValueError:
-                    continue
-                except RequestError as exc:
-                    self._bridge.error.emit(f"音声認識エラー: {exc}")
-                    continue
-
-                chunk = str(text or "").strip()
-                if chunk:
-                    self._bridge.transcript_received.emit(chunk)
+                if finalize_now or self._stop_event.is_set() or not self._want_listening:
+                    break
 
 
 class _SrSpeechWorker(_SpeechWorkerBase):
@@ -275,7 +311,13 @@ class _SrSpeechWorker(_SpeechWorkerBase):
             self._bridge.phase_changed.emit("recognizing")
 
             while not self._stop_event.is_set():
-                if not self._want_listening or self._pause_event.is_set():
+                if self._pause_event.is_set():
+                    time.sleep(0.05)
+                    continue
+                if self._finalize_requested:
+                    self._finalize_requested = False
+                    break
+                if not self._want_listening:
                     time.sleep(0.05)
                     continue
                 try:
@@ -370,6 +412,20 @@ class SpeechEngine(QWidget):
         if self._worker is not None:
             self._worker.request_stop()
             self._worker.wait(5000)
+            self._worker = None
+        self._set_phase("idle")
+        self._set_listening(False)
+
+    def finalize_and_stop(self) -> None:
+        """認識中のフレーズを確定してからマイク入力を終了する。"""
+        self._want_listening = False
+        self._paused = False
+        if self._worker is not None:
+            if self._worker.is_running():
+                self._worker.request_finalize()
+                if not self._worker.wait(12000):
+                    self._worker.request_stop()
+                    self._worker.wait(3000)
             self._worker = None
         self._set_phase("idle")
         self._set_listening(False)

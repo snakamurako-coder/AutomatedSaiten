@@ -187,8 +187,12 @@ class FormatPalettePanel(QWidget):
         else:
             self._speech_btn.setToolTip(
                 "マイクで音声をテキストに追加"
-                "（要ネット・話したあと少し間を空けると認識されます）"
+                "（無言で区切ると認識。認識中にもう一度押すと終了）"
             )
+
+    def release_speech_button_focus(self) -> None:
+        self._speech_btn.clearFocus()
+        self.clearFocus()
 
     def is_speech_checked(self) -> bool:
         return self._speech_btn.isChecked()
@@ -221,7 +225,7 @@ class FormatPalettePanel(QWidget):
             accent = True
         elif self._speech_phase == "recognizing":
             btn_text = "認識中…"
-            status = "話してください。区切りで少し黙ると認識します。"
+            status = "話してください。もう一度押すとその時点まで認識して終了します。"
             accent = True
         elif self._speech_phase == "paused":
             btn_text = "確認中…"

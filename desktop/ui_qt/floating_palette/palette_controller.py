@@ -93,7 +93,9 @@ class PaletteController:
         self._speech.listening_changed.connect(self._on_speech_listening_changed)
         self._speech.phase_changed.connect(self._on_speech_phase_changed)
         self._speech_confirm_open = False
+        self._speech_manual_finalize = False
         self._windows_speech_active = False
+        self._windows_voice_prep_attempt = 0
         self._settings_overlay_active = False
         self._active_stack: CropInkImageStack | None = None
         self._active_result_id: int | None = None
@@ -498,6 +500,7 @@ class PaletteController:
             toggle_windows_voice_typing()
             self._windows_speech_active = False
         self._speech.stop()
+        self._release_speech_input_guards()
         self.tool_window.format_panel.set_speech_active(False)
         self.tool_window.format_panel.set_speech_phase("idle")
 
@@ -506,7 +509,7 @@ class PaletteController:
             self._on_windows_speech_toggled(on)
             return
         if not on:
-            self._stop_speech()
+            self._finalize_app_speech()
             return
         if not any(stack.text_layer.selected_box() for stack in self._stacks()):
             self.tool_window.format_panel.set_speech_active(False)
@@ -518,7 +521,27 @@ class PaletteController:
             self.tool_window.format_panel.set_speech_active(False)
             return
         self.tool_window.format_panel.set_speech_phase("preparing")
+        self._speech_manual_finalize = False
         self._speech.start()
+
+    def _finalize_app_speech(self) -> None:
+        """認識中ボタン再押下: その時点までを認識して終了する。"""
+        phase = self._speech.phase()
+        if phase in ("preparing", "recognizing") and (
+            self._speech.is_listening() or phase == "preparing"
+        ):
+            self._speech_manual_finalize = True
+            self._speech.finalize_and_stop()
+            self.tool_window.format_panel.set_speech_active(False)
+            self.tool_window.format_panel.set_speech_phase("idle")
+            QTimer.singleShot(400, self._end_manual_finalize_if_no_confirm)
+            return
+        self._speech_manual_finalize = False
+        self._stop_speech()
+
+    def _end_manual_finalize_if_no_confirm(self) -> None:
+        if self._speech_manual_finalize and not self._speech_confirm_open:
+            self._speech_manual_finalize = False
 
     def _on_windows_speech_toggled(self, on: bool) -> None:
         from ui_qt import helpers as h
@@ -530,18 +553,46 @@ class PaletteController:
             self.tool_window.format_panel.set_speech_active(False)
             h.warn(self._main, "音声入力", "テキストボックスを選択してください")
             return
-        if not self._ensure_speech_target_editing(caret_at_end=True):
+        if not self._ensure_speech_target_editing():
             self.tool_window.format_panel.set_speech_active(False)
             return
-        QTimer.singleShot(0, self._prepare_windows_voice_typing)
+        self.tool_window.format_panel.release_speech_button_focus()
+        self._windows_voice_prep_attempt = 0
+        QTimer.singleShot(50, self._prepare_windows_voice_typing)
 
     def _prepare_windows_voice_typing(self) -> None:
         """テキスト末尾にカーソルを置いてから Windows 音声入力を起動する。"""
         fp = self.tool_window.format_panel
         if not fp.is_speech_checked():
             return
-        self._focus_speech_target_at_end()
-        QTimer.singleShot(150, self._launch_windows_voice_typing)
+
+        self.tool_window.format_panel.release_speech_button_focus()
+        self._main.raise_()
+        self._main.activateWindow()
+
+        ready = self._prepare_speech_target_editor()
+        self._windows_voice_prep_attempt += 1
+        if ready:
+            QTimer.singleShot(120, self._launch_windows_voice_typing)
+        elif self._windows_voice_prep_attempt < 12:
+            QTimer.singleShot(50, self._prepare_windows_voice_typing)
+        else:
+            QTimer.singleShot(80, self._launch_windows_voice_typing)
+
+    def _prepare_speech_target_editor(self) -> bool:
+        for stack in self._stacks():
+            layer = stack.text_layer
+            if not layer.selected_box():
+                continue
+            if layer.prepare_selected_speech_input():
+                return True
+            if layer.is_selected_editor_focused_at_end():
+                return True
+        return False
+
+    def _release_speech_input_guards(self) -> None:
+        for stack in self._stacks():
+            stack.text_layer.release_selected_speech_input_guard()
 
     def _launch_windows_voice_typing(self) -> None:
         from ui_qt import helpers as h
@@ -549,6 +600,9 @@ class PaletteController:
         fp = self.tool_window.format_panel
         if not fp.is_speech_checked():
             return
+
+        self.tool_window.format_panel.release_speech_button_focus()
+        self._prepare_speech_target_editor()
         if toggle_windows_voice_typing():
             self._windows_speech_active = True
             fp.set_speech_active(True)
@@ -569,16 +623,22 @@ class PaletteController:
                 return True
         return False
 
-    def _focus_speech_target_at_end(self) -> None:
+    def _focus_speech_target_at_end(self) -> bool:
         for stack in self._stacks():
             if stack.text_layer.focus_selected_caret_at_end():
-                return
+                return True
+        return False
 
     def _on_speech_transcript(self, text: str) -> None:
         chunk = str(text or "").strip()
         if not chunk or self._speech_confirm_open:
+            if self._speech_manual_finalize:
+                self._speech_manual_finalize = False
+                self._stop_speech()
             return
-        self._speech.pause()
+        manual_finalize = self._speech_manual_finalize
+        if not manual_finalize:
+            self._speech.pause()
         self._speech_confirm_open = True
         self.tool_window.format_panel.set_speech_phase("paused")
         try:
@@ -588,13 +648,18 @@ class PaletteController:
                 for stack in self._stacks():
                     if stack.text_layer.append_transcript_to_selected(chunk):
                         break
-                self._speech.resume()
+                if not manual_finalize:
+                    self._speech.resume()
             elif result == SpeechConfirmResult.RETRY:
-                self._speech.resume()
+                if not manual_finalize:
+                    self._speech.resume()
             else:
                 self._stop_speech()
         finally:
             self._speech_confirm_open = False
+            if manual_finalize:
+                self._speech_manual_finalize = False
+                self._stop_speech()
 
     def _on_speech_error(self, message: str) -> None:
         from ui_qt import helpers as h

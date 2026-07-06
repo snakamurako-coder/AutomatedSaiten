@@ -191,19 +191,51 @@ class TextBoxWidget(QFrame):
         else:
             QTimer.singleShot(0, self._focus_editor)
 
-    def focus_caret_at_end(self) -> None:
+    def focus_caret_at_end(self) -> bool:
         """編集中のテキスト末尾へカーソルを移動してフォーカスする。"""
         if not self._editing:
             self._set_editing_mode(True)
-        self._focus_editor_at_end()
+        return self._focus_editor_at_end()
 
-    def _focus_editor_at_end(self) -> None:
-        if not self._editing:
-            return
-        self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
+    def prepare_speech_input(self) -> bool:
+        """Windows 音声入力の直前に、末尾カーソルとエディタフォーカスを確実にする。"""
+        from ui_qt.speech.windows_voice_typing import focus_widget_for_voice_input
+
+        if not self._selected:
+            self.selected.emit(self.box_id)
+        self._suppress_focus_check = True
+        self._set_editing_mode(True)
+        self.raise_()
+        self._editor.raise_()
         cursor = self._editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self._editor.setTextCursor(cursor)
+        self._editor.ensureCursorVisible()
+        focus_widget_for_voice_input(self._editor)
+        return self.is_editor_focused_at_end()
+
+    def is_editor_focused_at_end(self) -> bool:
+        if not self._editing:
+            return False
+        if not self._editor.hasFocus():
+            return False
+        text = self._editor.toPlainText()
+        return self._editor.textCursor().position() >= len(text)
+
+    def release_speech_input_guard(self) -> None:
+        self._suppress_focus_check = False
+
+    def _focus_editor_at_end(self) -> bool:
+        if not self._editing:
+            return False
+        from ui_qt.speech.windows_voice_typing import focus_widget_for_voice_input
+
+        cursor = self._editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self._editor.setTextCursor(cursor)
+        self._editor.ensureCursorVisible()
+        focus_widget_for_voice_input(self._editor)
+        return self.is_editor_focused_at_end()
 
     def _focus_editor(self) -> None:
         if not self._editing:
