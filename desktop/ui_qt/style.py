@@ -402,6 +402,7 @@ QPushButton#PaletteIconBtn {{
     min-height: 28px;
     max-height: 28px;
     padding: 0;
+    font-size: 15px;
     color: {COLORS["text_secondary"]};
 }}
 QPushButton#PaletteIconBtn:hover {{
