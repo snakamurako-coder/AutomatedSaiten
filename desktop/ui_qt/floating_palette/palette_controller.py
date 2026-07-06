@@ -244,11 +244,15 @@ class PaletteController:
         self._unbind_stack(stack)
         stack.set_before_ink_draw(self.finish_all_text_editing)
 
+        def on_selection_changed(box: dict[str, Any] | None) -> None:
+            self._on_text_selection(box)
+
         def on_image_clicked() -> None:
             self._on_stack_image_clicked(stack)
 
+        stack._palette_on_selection_changed = on_selection_changed  # type: ignore[attr-defined]
         stack._palette_on_image_clicked = on_image_clicked  # type: ignore[attr-defined]
-        stack.text_layer.selection_changed.connect(self._on_text_selection)
+        stack.text_layer.selection_changed.connect(on_selection_changed)
         stack.image_clicked.connect(on_image_clicked)
         color, width, alpha = self.tool_window.current_brush()
         stack.set_palm_rejection(self._palm_rejection)
@@ -259,10 +263,13 @@ class PaletteController:
         stack.set_brush(color, width, alpha)
 
     def _unbind_stack(self, stack: CropInkImageStack) -> None:
-        try:
-            stack.text_layer.selection_changed.disconnect(self._on_text_selection)
-        except (RuntimeError, TypeError):
-            pass
+        sel_handler = getattr(stack, "_palette_on_selection_changed", None)
+        if sel_handler is not None:
+            try:
+                stack.text_layer.selection_changed.disconnect(sel_handler)
+            except (RuntimeError, TypeError):
+                pass
+            delattr(stack, "_palette_on_selection_changed")
         handler = getattr(stack, "_palette_on_image_clicked", None)
         if handler is not None:
             try:
