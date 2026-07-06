@@ -11,6 +11,9 @@ from models.test_repo import touch_progress_conn
 
 # 書式はテスト横断の共通設定（GAS ではハブ SS に保存していた）。app_state に JSON 保存。
 STYLE_STATE_KEY = "feedback_style"
+EXPORT_FORMAT_STATE_KEY = "feedback_export_format"
+DEFAULT_FEEDBACK_EXPORT_FORMAT = "pdf"
+VALID_FEEDBACK_EXPORT_FORMATS = frozenset({"pdf", "jpeg", "png"})
 
 DEFAULT_FEEDBACK_STYLE: dict[str, Any] = {
     "mark": {
@@ -168,3 +171,30 @@ def reset_feedback_style() -> dict[str, Any]:
         conn.execute("DELETE FROM app_state WHERE key = ?", (STYLE_STATE_KEY,))
         conn.commit()
     return get_feedback_style()
+
+
+def get_feedback_export_format() -> str:
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (EXPORT_FORMAT_STATE_KEY,)
+        ).fetchone()
+    if row and row["value"]:
+        fmt = str(row["value"]).strip().lower()
+        if fmt in VALID_FEEDBACK_EXPORT_FORMATS:
+            return fmt
+    return DEFAULT_FEEDBACK_EXPORT_FORMAT
+
+
+def save_feedback_export_format(fmt: str) -> str:
+    normalized = str(fmt or "").strip().lower()
+    if normalized not in VALID_FEEDBACK_EXPORT_FORMATS:
+        raise ValueError(f"未対応の出力形式です: {fmt}")
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO app_state(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (EXPORT_FORMAT_STATE_KEY, normalized),
+        )
+        conn.commit()
+    return normalized

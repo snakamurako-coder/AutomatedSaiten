@@ -26,9 +26,11 @@ from PySide6.QtWidgets import (
 
 from models.output_repo import (
     get_available_output_slot_keys,
+    get_feedback_export_format,
     get_feedback_style,
     get_output_slots,
     reset_feedback_style,
+    save_feedback_export_format,
     save_feedback_style,
     save_output_slots,
 )
@@ -115,7 +117,8 @@ class Step10Page(QWidget):
         root.addWidget(h.title_label("⑩ 個票出力"))
         root.addWidget(
             h.muted_label(
-                "補正済み解答画像に判定マーク（○/△/×）・小問得点・合計欄を合成した個票を生成します。"
+                "補正済み解答画像に判定マーク（○/△/×）・小問得点・合計欄・手書き・テキスト注釈を合成した個票を生成します。"
+                "手書き・テキストを含む場合は PDF 出力を推奨します。"
             )
         )
         root.addWidget(self._build_slots_box())
@@ -271,6 +274,21 @@ class Step10Page(QWidget):
     def _build_batch_box(self) -> QGroupBox:
         box = QGroupBox("一括生成")
         lay = QVBoxLayout(box)
+        fmt_row = QHBoxLayout()
+        fmt_row.addWidget(QLabel("出力形式"))
+        self.export_format_combo = QComboBox()
+        self.export_format_combo.addItem("PDF（推奨・手書き・文字が鮮明）", "pdf")
+        self.export_format_combo.addItem("JPEG", "jpeg")
+        self.export_format_combo.addItem("PNG", "png")
+        self.export_format_combo.currentIndexChanged.connect(self._on_export_format_changed)
+        fmt_row.addWidget(self.export_format_combo, 1)
+        lay.addLayout(fmt_row)
+        lay.addWidget(
+            h.caption_label(
+                "PDF は手書き・テキストボックス・判定マークをベクトル描画します。"
+                "プレビューは参考表示（ラスター）です。"
+            )
+        )
         ctrl = QHBoxLayout()
         self.batch_btn = h.button("全員分の個票を生成", self._on_batch, variant="primary")
         ctrl.addWidget(self.batch_btn)
@@ -336,6 +354,7 @@ class Step10Page(QWidget):
 
         # 書式
         self._load_style_to_form(get_feedback_style())
+        self._load_export_format_to_form()
 
         # プレビュー行
         self._rows = _load_rows_with_extras(test_id)
@@ -396,6 +415,22 @@ class Step10Page(QWidget):
             self._update_slot_status()
         except Exception as e:
             h.error(self, "エラー", str(e))
+
+    def _load_export_format_to_form(self) -> None:
+        fmt = get_feedback_export_format()
+        idx = self.export_format_combo.findData(fmt)
+        self.export_format_combo.blockSignals(True)
+        self.export_format_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.export_format_combo.blockSignals(False)
+
+    def _on_export_format_changed(self) -> None:
+        fmt = self.export_format_combo.currentData()
+        if not fmt:
+            return
+        try:
+            save_feedback_export_format(str(fmt))
+        except Exception as e:
+            h.error(self, "保存エラー", str(e))
 
     # ---------- 書式 ----------
 
@@ -504,6 +539,7 @@ class Step10Page(QWidget):
         if not self.app.require_active_test():
             return
         test_id = self.app.active_test_id
+        export_format = str(self.export_format_combo.currentData() or "pdf")
         self.batch_btn.setEnabled(False)
         self.batch_progress.setValue(0)
         self.batch_status.setText("個票を生成中…")
@@ -515,7 +551,9 @@ class Step10Page(QWidget):
             def on_progress(current: int, total: int, name: str) -> None:
                 bridge.updated.emit(current, total, name)
 
-            return batch_generate_feedback(test_id, on_progress=on_progress)
+            return batch_generate_feedback(
+                test_id, on_progress=on_progress, export_format=export_format
+            )
 
         h.run_in_thread(self, task, self._on_batch_done)
 
@@ -531,6 +569,12 @@ class Step10Page(QWidget):
             h.error(self, "一括生成エラー", str(err))
             return
         assert result is not None
-        msg = f"生成 {result['saved']} 件 / スキップ {len(result['skipped'])} 件 / エラー {len(result['errors'])} 件\n保存先: {result['outputDir']}"
+        fmt = result.get("exportFormat") or "pdf"
+        fmt_label = {"pdf": "PDF", "jpeg": "JPEG", "png": "PNG"}.get(fmt, fmt.upper())
+        msg = (
+            f"形式: {fmt_label} / 生成 {result['saved']} 件 / "
+            f"スキップ {len(result['skipped'])} 件 / エラー {len(result['errors'])} 件\n"
+            f"保存先: {result['outputDir']}"
+        )
         self.batch_status.setText(msg.replace("\n", " — "))
         h.info(self, "一括生成完了", msg)

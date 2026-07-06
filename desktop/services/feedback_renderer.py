@@ -17,10 +17,8 @@ from PIL import Image, ImageDraw, ImageFont
 
 from config import test_feedback
 from models.domain_repo import DOMAIN_KINDS, _domain_groups, get_domain_settings
-from models.ink_repo import collect_warped_ink_strokes
-from models.text_annotation_repo import collect_warped_text_annotations
 from models.output_repo import get_feedback_style, get_output_slots
-from models.test_repo import get_all_results, get_answer_fields, get_test_info
+from models.test_repo import get_all_results, get_answer_fields
 from services.compositor import hex_to_rgba, render_supersampled_rgba
 from services.image_loader import imread_bgr
 
@@ -369,27 +367,19 @@ def _load_rows_with_extras(test_id: str) -> list[dict[str, Any]]:
 
 
 def render_feedback_for_row(test_id: str, row: dict[str, Any]) -> Image.Image:
-    info = get_test_info(test_id)
-    points = {k: int(v) for k, v in (info.get("points") or {}).items()}
-    payload = build_feedback_payload(test_id, row, points)
-    warped = str(row.get("warpedPath") or "").strip()
-    if not warped or not Path(warped).exists():
-        raise FileNotFoundError(f"補正画像が見つかりません: {row.get('fileName')}")
-    result_id = int(row.get("id") or 0)
-    ink = collect_warped_ink_strokes(test_id, result_id, payload["fields"]) if result_id else []
-    text_ann = (
-        collect_warped_text_annotations(test_id, result_id, payload["fields"])
-        if result_id
-        else []
-    )
+    from services.feedback_exporter import gather_row_render_data
+
+    data = gather_row_render_data(test_id, row)
+    payload = data["payload"]
     return render_feedback_image(
-        warped,
+        data["warped_path"],
         payload["fields"],
         payload["outputSlots"],
         payload["fieldMarks"],
         payload["totals"],
-        ink_strokes=ink,
-        text_annotations=text_ann,
+        style=data["style"],
+        ink_strokes=data["ink_strokes"],
+        text_annotations=data["text_annotations"],
     )
 
 
@@ -400,8 +390,16 @@ def _safe_name(value: str) -> str:
 def batch_generate_feedback(
     test_id: str,
     on_progress: Callable[[int, int, str], None] | None = None,
+    *,
+    export_format: str | None = None,
 ) -> dict[str, Any]:
     """全結果行の個票を生成して 個票/ フォルダに保存する。"""
+    from services.feedback_exporter import (
+        export_feedback_row,
+        feedback_filename,
+        normalize_export_format,
+    )
+
     slots = get_output_slots(test_id)
     if not slots:
         raise ValueError("合計欄が未設定です。先に出力欄を配置・保存してください。")
@@ -409,6 +407,7 @@ def batch_generate_feedback(
     if not rows:
         raise ValueError("採点結果がありません。")
 
+    fmt = normalize_export_format(export_format)
     out_dir = test_feedback(test_id)
     out_dir.mkdir(parents=True, exist_ok=True)
     saved = 0
@@ -425,11 +424,10 @@ def batch_generate_feedback(
             skipped.append(name)
             continue
         try:
-            img = render_feedback_for_row(test_id, row)
             sid = _safe_name(row.get("studentId") or "不明")
             sname = _safe_name(row.get("name") or row.get("fileName") or "")
-            out_path = out_dir / f"個票_{sid}_{sname}.jpg"
-            img.save(out_path, "JPEG", quality=92)
+            out_path = out_dir / feedback_filename(sid, sname, fmt)
+            export_feedback_row(test_id, row, out_path, fmt)
             saved += 1
         except Exception as e:
             errors.append({"fileName": name, "error": str(e)})
@@ -442,4 +440,5 @@ def batch_generate_feedback(
         "skipped": skipped,
         "errors": errors,
         "outputDir": str(out_dir),
+        "exportFormat": fmt,
     }
