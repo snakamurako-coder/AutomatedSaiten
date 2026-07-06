@@ -166,7 +166,6 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
 
     _SAMPLE_RATE = 16000
     _BLOCK_SIZE = _SAMPLE_RATE // 10
-    _SILENCE_BLOCKS = 18
     _MIN_SPEECH_BLOCKS = 3
     _SILENCE_LEVEL = 0.006
     _MAX_PHRASE_BLOCKS = _SAMPLE_RATE // _BLOCK_SIZE * 25
@@ -201,6 +200,9 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
     def _run_loop(self) -> None:
         import numpy as np
 
+        from ui_qt.speech.speech_prefs import soundcard_silence_blocks
+
+        silence_blocks = soundcard_silence_blocks()
         self._bridge.phase_changed.emit("preparing")
         # soundcard は COM を使うため、メインスレッドでは import しない
         import soundcard as sc
@@ -246,7 +248,7 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
                     elif frames:
                         frames.append(block)
                         silent_run += 1
-                        if silent_run >= self._SILENCE_BLOCKS:
+                        if silent_run >= silence_blocks:
                             break
                     else:
                         idle_blocks += 1
@@ -290,10 +292,11 @@ class _SrSpeechWorker(_SpeechWorkerBase):
         import speech_recognition as sr
 
         from ui_qt.speech.google_stt import RequestError, UnknownValueError, recognize_pcm
+        from ui_qt.speech.speech_prefs import load_speech_pause_seconds
 
         recognizer = sr.Recognizer()
         recognizer.dynamic_energy_threshold = True
-        recognizer.pause_threshold = 0.8
+        recognizer.pause_threshold = load_speech_pause_seconds()
 
         try:
             microphone = sr.Microphone()

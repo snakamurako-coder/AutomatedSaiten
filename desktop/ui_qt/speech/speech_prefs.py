@@ -9,6 +9,27 @@ from config import load_config, save_config
 SPEECH_MODE_APP = "app"
 SPEECH_MODE_WINDOWS = "windows"
 DEFAULT_SPEECH_MODE = SPEECH_MODE_APP
+DEFAULT_SPEECH_PAUSE_SECONDS = 0.8
+SPEECH_PAUSE_MIN_SECONDS = 0.3
+SPEECH_PAUSE_MAX_SECONDS = 5.0
+
+
+def clamp_speech_pause_seconds(value: float) -> float:
+    return max(SPEECH_PAUSE_MIN_SECONDS, min(SPEECH_PAUSE_MAX_SECONDS, round(float(value), 1)))
+
+
+def load_speech_pause_seconds() -> float:
+    raw = load_config().get("speech_pause_seconds", DEFAULT_SPEECH_PAUSE_SECONDS)
+    try:
+        return clamp_speech_pause_seconds(float(raw))
+    except (TypeError, ValueError):
+        return DEFAULT_SPEECH_PAUSE_SECONDS
+
+
+def soundcard_silence_blocks(pause_seconds: float | None = None) -> int:
+    """soundcard 経路: 0.1 秒ブロック何個分の無言で区切るか。"""
+    seconds = pause_seconds if pause_seconds is not None else load_speech_pause_seconds()
+    return max(3, int(round(clamp_speech_pause_seconds(seconds) / 0.1)))
 
 
 def load_speech_input_mode() -> str:

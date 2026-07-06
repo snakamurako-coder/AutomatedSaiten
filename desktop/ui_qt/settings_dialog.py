@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
     QColorDialog,
+    QDoubleSpinBox,
 )
 
 from config import CONFIG_PATH, load_config, save_config
@@ -28,6 +29,8 @@ from ui_qt.speech.speech_prefs import (
     DEFAULT_SPEECH_MODE,
     SPEECH_MODE_APP,
     SPEECH_MODE_WINDOWS,
+    clamp_speech_pause_seconds,
+    load_speech_pause_seconds,
 )
 from services.gemini_rubric import test_gemini_api_key
 from services.ocr import test_vision_api_key
@@ -244,6 +247,26 @@ class SettingsDialog(QDialog):
             self.speech_windows.setChecked(True)
         else:
             self.speech_app.setChecked(True)
+
+        app_form = QFormLayout()
+        app_form.setContentsMargins(0, 0, 0, 0)
+        app_form.setSpacing(10)
+        self.speech_pause_spin = QDoubleSpinBox()
+        self.speech_pause_spin.setRange(0.3, 5.0)
+        self.speech_pause_spin.setSingleStep(0.1)
+        self.speech_pause_spin.setDecimals(1)
+        self.speech_pause_spin.setSuffix(" 秒")
+        self.speech_pause_spin.setValue(load_speech_pause_seconds())
+        self.speech_pause_spin.setToolTip(
+            "アプリ内認識で、話したあと何秒無言なら区切って認識するか"
+        )
+        app_form.addRow("無言区切り", self.speech_pause_spin)
+        lay.addLayout(app_form)
+        lay.addWidget(
+            h.caption_label(
+                "アプリ内認識のみ有効です。短いほど区切りが早くなります（0.3〜5.0秒、0.1秒刻み）。"
+            )
+        )
         lay.addWidget(
             h.caption_label("音声入力モードを変えたら「適用して保存」で反映できます（ダイアログは開いたまま）。")
         )
@@ -302,6 +325,7 @@ class SettingsDialog(QDialog):
             "tesseract_cmd": self.tesseract_edit.text().strip(),
             "gemini_api_key": self.gemini_edit.text().strip(),
             "speech_input_mode": speech_mode,
+            "speech_pause_seconds": clamp_speech_pause_seconds(self.speech_pause_spin.value()),
         }
 
     def _persist_settings(self) -> bool:
