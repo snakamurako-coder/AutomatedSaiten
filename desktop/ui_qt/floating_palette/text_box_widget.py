@@ -31,6 +31,51 @@ _FIXED_FONT_PT = 14
 _DRAG_THRESHOLD_PX = 4
 _MIN_NATIVE_W = 32.0
 _MIN_NATIVE_H = 18.0
+_HANDLE_SIZE = 6
+_HANDLE_OVERHANG = 3
+
+_CORNER_CURSORS = {
+    "tl": Qt.CursorShape.SizeFDiagCursor,
+    "tr": Qt.CursorShape.SizeBDiagCursor,
+    "bl": Qt.CursorShape.SizeBDiagCursor,
+    "br": Qt.CursorShape.SizeFDiagCursor,
+}
+
+
+class _CornerHandle(QFrame):
+    """選択時に四隅へ表示するリサイズ用グラバー。"""
+
+    def __init__(self, corner: str, owner: TextBoxWidget) -> None:
+        super().__init__(owner)
+        self._corner = corner
+        self._owner = owner
+        self.setFixedSize(_HANDLE_SIZE, _HANDLE_SIZE)
+        self.setCursor(_CORNER_CURSORS[corner])
+        self.setStyleSheet(
+            "QFrame { background: #ffffff; border: 1px solid #2563eb; border-radius: 0px; }"
+        )
+        self.hide()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._owner._begin_resize(self._corner, event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.buttons() & Qt.LeftButton:
+            self._owner._update_resize(event.globalPosition().toPoint())
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            self._owner._end_resize()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 class TextBoxWidget(QFrame):
@@ -54,6 +99,10 @@ class TextBoxWidget(QFrame):
         self._editing = False
         self._text_tool_mode = False
         self._moving = False
+        self._resizing = False
+        self._resize_corner: str | None = None
+        self._resize_origin = QPoint()
+        self._resize_orig_box: tuple[float, float, float, float] | None = None
         self._move_origin = QPoint()
         self._press_origin: QPoint | None = None
         self._press_moved = False
@@ -107,9 +156,14 @@ class TextBoxWidget(QFrame):
         body_lay.addWidget(self._text_stack, 1)
         root.addWidget(self._body, 1)
 
+        self._handles: dict[str, _CornerHandle] = {
+            corner: _CornerHandle(corner, self) for corner in ("tl", "tr", "bl", "br")
+        }
+
         self._setup_tight_document()
         self._apply_style()
         self._apply_geometry()
+        self._update_handles()
 
     @property
     def box_id(self) -> str:
@@ -225,17 +279,52 @@ class TextBoxWidget(QFrame):
             merged.update(st)
         return resolve_text_style(merged)
 
-    def _apply_geometry(self) -> None:
-        x = int(float(self._box.get("x") or 0) / self._scale)
-        y = int(float(self._box.get("y") or 0) / self._scale)
+    def _body_display_size(self) -> tuple[int, int]:
         w = max(16, int(float(self._box.get("width") or _MIN_NATIVE_W) / self._scale))
         h = max(16, int(float(self._box.get("height") or _MIN_NATIVE_H) / self._scale))
-        self.setGeometry(x, y, w, h)
-        self._body.setMinimumSize(w, h)
+        return w, h
+
+    def _apply_geometry(self) -> None:
+        x = int(float(self._box.get("x") or 0) / self._scale) - _HANDLE_OVERHANG
+        y = int(float(self._box.get("y") or 0) / self._scale) - _HANDLE_OVERHANG
+        bw, bh = self._body_display_size()
+        self.setGeometry(
+            x,
+            y,
+            bw + _HANDLE_OVERHANG * 2,
+            bh + _HANDLE_OVERHANG * 2,
+        )
+        self._body.setGeometry(_HANDLE_OVERHANG, _HANDLE_OVERHANG, bw, bh)
+        self._body.setMinimumSize(bw, bh)
+        self._update_handles()
+
+    def _update_handles(self) -> None:
+        show = self._selected and not self._editing
+        half = _HANDLE_SIZE // 2
+        ox = _HANDLE_OVERHANG
+        oy = _HANDLE_OVERHANG
+        bw, bh = self._body_display_size()
+        positions = {
+            "tl": (ox - half, oy - half),
+            "tr": (ox + bw - half, oy - half),
+            "bl": (ox - half, oy + bh - half),
+            "br": (ox + bw - half, oy + bh - half),
+        }
+        for corner, handle in self._handles.items():
+            if show:
+                px, py = positions[corner]
+                handle.setGeometry(px, py, _HANDLE_SIZE, _HANDLE_SIZE)
+                handle.show()
+                handle.raise_()
+            else:
+                handle.hide()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
-        self._body.resize(self.width(), self.height())
+        bw = max(16, self.width() - _HANDLE_OVERHANG * 2)
+        bh = max(16, self.height() - _HANDLE_OVERHANG * 2)
+        self._body.setGeometry(_HANDLE_OVERHANG, _HANDLE_OVERHANG, bw, bh)
+        self._update_handles()
 
     def _content_font(self) -> QFont:
         font = QFont()
