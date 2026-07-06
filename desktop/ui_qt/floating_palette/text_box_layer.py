@@ -4,7 +4,10 @@ from __future__ import annotations
 
 import copy
 from collections.abc import Callable
-from typing import Any
+from typing import Any, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from ui_qt.floating_palette.annotation_undo import AnnotationUndoStack
 
 from PySide6.QtCore import QPointF, Qt, Signal, QEvent, QTimer
 from PySide6.QtGui import QMouseEvent, QTabletEvent
@@ -52,6 +55,8 @@ class TextBoxLayer(QWidget):
         self._show_text = True
         self._text_tool_mode = False
         self._palm_rejection = True
+        self._undo_stack: AnnotationUndoStack | None = None
+        self._undo_stack_ref: Any | None = None
         self._placing = False
         self._place_origin: QPointF | None = None
         self._rubber = QFrame(self)
@@ -75,6 +80,22 @@ class TextBoxLayer(QWidget):
         for wid in self._widgets.values():
             wid.set_display_scale(self._scale_x)
         self._rebuild_widgets()
+
+    def set_undo_stack(self, undo_stack: AnnotationUndoStack | None, stack_ref: Any) -> None:
+        self._undo_stack = undo_stack
+        self._undo_stack_ref = stack_ref
+
+    def _undo_begin(self) -> None:
+        if self._undo_stack is not None and self._undo_stack_ref is not None:
+            self._undo_stack.begin(self._undo_stack_ref)
+
+    def _undo_commit(self) -> None:
+        if self._undo_stack is not None and self._undo_stack_ref is not None:
+            self._undo_stack.commit(self._undo_stack_ref)
+
+    def _undo_cancel(self) -> None:
+        if self._undo_stack is not None and self._undo_stack_ref is not None:
+            self._undo_stack.cancel(self._undo_stack_ref)
 
     def set_placement_mode(self, enabled: bool) -> None:
         self._placement_mode = bool(enabled)
@@ -106,7 +127,12 @@ class TextBoxLayer(QWidget):
 
     def set_annotations(self, items: list[dict[str, Any]]) -> None:
         self._annotations = copy.deepcopy(items or [])
+        if self._selected_id and self._selected_id not in {
+            str(a.get("id") or "") for a in self._annotations
+        }:
+            self._selected_id = None
         self._rebuild_widgets(from_widgets=False)
+        self.selection_changed.emit(self.selected_box())
 
     def _sync_annotations_from_widgets(self) -> None:
         if not self._widgets:
@@ -154,8 +180,10 @@ class TextBoxLayer(QWidget):
             return
         w = self._widgets.get(self._selected_id)
         if w:
+            self._undo_begin()
             w.apply_style_dict(style)
             self._notify_changed()
+            self._undo_commit()
 
     def edit_selected(self, *, caret_at_end: bool = False) -> None:
         if self._selected_id and self._selected_id in self._widgets:
@@ -200,7 +228,9 @@ class TextBoxLayer(QWidget):
         w = self._widgets.get(self._selected_id)
         if w is None:
             return False
+        self._undo_begin()
         w.append_transcript(text)
+        self._undo_commit()
         return True
 
     def delete_selected(self) -> None:
@@ -208,6 +238,7 @@ class TextBoxLayer(QWidget):
         if not deleted_id:
             return
         self.finish_all_editing()
+        self._undo_begin()
         self._sync_annotations_from_widgets()
         self._annotations = [
             a for a in self._annotations if str(a.get("id") or "") != deleted_id
@@ -216,17 +247,20 @@ class TextBoxLayer(QWidget):
         self._rebuild_widgets(from_widgets=False)
         self._persist_annotations()
         self.selection_changed.emit(None)
+        self._undo_commit()
 
     def clear_all(self) -> None:
         """画像上のテキストボックスをすべて削除。"""
         if not self._annotations and not self._widgets:
             return
         self.finish_all_editing()
+        self._undo_begin()
         self._annotations = []
         self._selected_id = None
         self._rebuild_widgets(from_widgets=False)
         self._persist_annotations()
         self.selection_changed.emit(None)
+        self._undo_commit()
 
     def has_speech_place_pending(self) -> bool:
         return bool(self._speech_place_text)
@@ -293,11 +327,13 @@ class TextBoxLayer(QWidget):
         ny = max(0.0, min(self._native_h - nh, display_y * self._scale_y))
         box = new_text_box(nx, ny, width=nw, height=nh)
         box["text"] = chunk
+        self._undo_begin()
         self._sync_annotations_from_widgets()
         self._annotations.append(copy.deepcopy(box))
         self._rebuild_widgets(from_widgets=False)
         self.select_box(str(box["id"]))
         self._persist_annotations()
+        self._undo_commit()
         bid = str(box["id"])
         return self._widgets[bid].box_data() if bid in self._widgets else box
 
@@ -352,6 +388,7 @@ class TextBoxLayer(QWidget):
     def _begin_place_drag(self, pos: QPointF) -> None:
         self.finish_all_editing()
         self.clear_selection()
+        self._undo_begin()
         self._placing = True
         self._place_origin = QPointF(pos)
         self._update_place_drag(pos)
@@ -380,6 +417,7 @@ class TextBoxLayer(QWidget):
 
     def _cancel_place_drag(self) -> None:
         if self._placing:
+            self._undo_cancel()
             self.releaseMouse()
         self._placing = False
         self._place_origin = None
@@ -412,6 +450,7 @@ class TextBoxLayer(QWidget):
         if w:
             QTimer.singleShot(0, w.start_editing)
         self._persist_annotations()
+        self._undo_commit()
         return self._widgets[str(box["id"])].box_data() if str(box["id"]) in self._widgets else box
 
     def _rebuild_widgets(self, *, from_widgets: bool = True) -> None:
@@ -433,6 +472,10 @@ class TextBoxLayer(QWidget):
             w.changed.connect(self._notify_changed)
             w.selected.connect(self._on_widget_selected)
             w.editing_finished.connect(self._on_widget_editing_finished)
+            w.interactive_change_started.connect(self._undo_begin)
+            w.interactive_change_finished.connect(self._undo_commit)
+            w.editing_started.connect(self._undo_begin)
+            w.editing_committed.connect(self._undo_commit)
             w.set_selected(bid == self._selected_id)
             w.show()
             w.raise_()
@@ -454,6 +497,10 @@ class TextBoxLayer(QWidget):
         self.annotations_changed.emit()
         if self._on_changed:
             self._on_changed(copy.deepcopy(self._annotations))
+
+    def persist_annotations(self) -> None:
+        self._sync_annotations_from_widgets()
+        self._persist_annotations()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:

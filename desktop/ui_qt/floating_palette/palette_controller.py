@@ -8,6 +8,7 @@ from PySide6.QtCore import QPoint, QRect, QTimer, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
 
+from ui_qt.floating_palette.annotation_undo import AnnotationUndoStack
 from ui_qt.floating_palette.palette_prefs import (
     TOOL_ERASER,
     TOOL_NONE,
@@ -101,15 +102,25 @@ class PaletteController:
         self._settings_overlay_active = False
         self._active_stack: CropInkImageStack | None = None
         self._active_result_id: int | None = None
+        self._undo = AnnotationUndoStack()
+        self._undo.set_on_changed(self._sync_undo_ui)
         self.refresh_speech_prefs()
 
         self.tool_window.clear_ink_requested.connect(self._on_clear_active_ink)
         self.tool_window.clear_text_boxes_requested.connect(self._on_clear_active_text_boxes)
+        self.tool_window.undo_requested.connect(self._on_undo_requested)
+        self.tool_window.redo_requested.connect(self._on_redo_requested)
 
         for parent in (self._main, self.tool_window):
             shortcut = QShortcut(QKeySequence.StandardKey.Delete, parent)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(self._on_delete_selected_text_hotkey)
+            undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, parent)
+            undo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            undo_shortcut.activated.connect(self._on_undo_requested)
+            redo_shortcut = QShortcut(QKeySequence.StandardKey.Redo, parent)
+            redo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            redo_shortcut.activated.connect(self._on_redo_requested)
 
         self.tool_window.set_view_mode(str(prefs.get("view_mode") or "simple"))
         self.tool_window.set_brush(
@@ -177,6 +188,7 @@ class PaletteController:
 
     def detach(self) -> None:
         self._stop_speech()
+        self._undo.clear()
         self._page = None
         self._step_id = None
         self._active_stack = None
@@ -284,6 +296,16 @@ class PaletteController:
         stack._palette_on_image_clicked = on_image_clicked  # type: ignore[attr-defined]
         stack.text_layer.selection_changed.connect(on_selection_changed)
         stack.image_clicked.connect(on_image_clicked)
+
+        def on_ink_history(before: list, after: list) -> None:
+            self._on_ink_history_commit(stack, before, after)
+
+        stack._palette_on_ink_history = on_ink_history  # type: ignore[attr-defined]
+        stack.ink_overlay.ink_history_commit.connect(on_ink_history)
+
+        stack.text_layer.set_undo_stack(self._undo, stack)
+        self._undo.register_stack(stack)
+
         color, width, alpha = self.tool_window.current_brush()
         stack.set_palm_rejection(self._palm_rejection)
         stack.set_show_ink(self._show_ink)
@@ -307,6 +329,58 @@ class PaletteController:
             except (RuntimeError, TypeError):
                 pass
             delattr(stack, "_palette_on_image_clicked")
+        ink_handler = getattr(stack, "_palette_on_ink_history", None)
+        if ink_handler is not None:
+            try:
+                stack.ink_overlay.ink_history_commit.disconnect(ink_handler)
+            except (RuntimeError, TypeError):
+                pass
+            delattr(stack, "_palette_on_ink_history")
+        stack.text_layer.set_undo_stack(None, None)
+        self._undo.unregister_stack(stack)
+
+    def _on_ink_history_commit(
+        self,
+        stack: CropInkImageStack,
+        before_strokes: list,
+        after_strokes: list,
+    ) -> None:
+        annotations = stack.text_layer.annotations()
+        before = {"strokes": before_strokes, "annotations": annotations}
+        after = {"strokes": after_strokes, "annotations": annotations}
+        self._undo.push(stack, before, after)
+
+    def _sync_undo_ui(self) -> None:
+        self.tool_window.set_undo_available(self._undo.can_undo())
+        self.tool_window.set_redo_available(self._undo.can_redo())
+
+    def _after_history_apply(self) -> None:
+        self._sync_undo_ui()
+        for stack in self._stacks():
+            box = stack.text_layer.selected_box()
+            if box:
+                self._set_active_stack(stack)
+                self.tool_window.show_text_mode()
+                self.tool_window.format_panel.load_style(box.get("style") or {})
+                return
+
+    def _on_undo_requested(self) -> None:
+        if self._step_id not in self.ACTIVE_STEPS:
+            return
+        if not self._undo.undo(self._stacks()):
+            return
+        self._after_history_apply()
+        if hasattr(self._main, "show_app_message"):
+            self._main.show_app_message("直前の操作を戻しました", level="info")
+
+    def _on_redo_requested(self) -> None:
+        if self._step_id not in self.ACTIVE_STEPS:
+            return
+        if not self._undo.redo(self._stacks()):
+            return
+        self._after_history_apply()
+        if hasattr(self._main, "show_app_message"):
+            self._main.show_app_message("操作をやり直しました", level="info")
 
     def _stacks(self) -> list[CropInkImageStack]:
         if not self._page:

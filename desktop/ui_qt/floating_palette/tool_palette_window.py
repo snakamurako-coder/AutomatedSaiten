@@ -47,6 +47,8 @@ class ToolPaletteWindow(QWidget):
     minimize_requested = Signal()
     clear_ink_requested = Signal()
     clear_text_boxes_requested = Signal()
+    undo_requested = Signal()
+    redo_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -67,6 +69,18 @@ class ToolPaletteWindow(QWidget):
         self._title.setObjectName("FloatingPaletteTitle")
         header_row.addWidget(self._title)
         header_row.addStretch()
+        self._undo_btn = QPushButton("戻る")
+        self._undo_btn.setObjectName("PaletteIconBtn")
+        self._undo_btn.setToolTip("直前の操作を戻す（最大20件・Ctrl+Z）")
+        self._undo_btn.setEnabled(False)
+        self._undo_btn.clicked.connect(self.undo_requested.emit)
+        header_row.addWidget(self._undo_btn)
+        self._redo_btn = QPushButton("やり直し")
+        self._redo_btn.setObjectName("PaletteIconBtn")
+        self._redo_btn.setToolTip("戻した操作を復元（最大20件・Ctrl+Y）")
+        self._redo_btn.setEnabled(False)
+        self._redo_btn.clicked.connect(self.redo_requested.emit)
+        header_row.addWidget(self._redo_btn)
         self._min_btn = QPushButton("−")
         self._min_btn.setObjectName("PaletteIconBtn")
         self._min_btn.setToolTip("最小化")
@@ -347,6 +361,12 @@ class ToolPaletteWindow(QWidget):
             self.tool_changed.emit(TOOL_TEXT)
         else:
             self._emit_draw_tool()
+
+    def set_undo_available(self, available: bool) -> None:
+        self._undo_btn.setEnabled(bool(available))
+
+    def set_redo_available(self, available: bool) -> None:
+        self._redo_btn.setEnabled(bool(available))
 
     def set_palm_rejection(self, enabled: bool) -> None:
         enabled = bool(enabled)

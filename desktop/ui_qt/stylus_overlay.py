@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from collections.abc import Callable
 from typing import Any
 
@@ -135,6 +136,7 @@ class InkOverlayWidget(QWidget):
     """記述欄クロップ上の最前面手書きレイヤー。"""
 
     strokes_changed = Signal()
+    ink_history_commit = Signal(object, object)  # before strokes, after strokes
     click_through = Signal()
 
     def __init__(
@@ -164,6 +166,8 @@ class InkOverlayWidget(QWidget):
         self._brush_width = DEFAULT_BASE_WIDTH
         self._brush_alpha = 1.0
         self._software_eraser = False
+        self._eraser_session_before: list[dict[str, Any]] | None = None
+        self._eraser_session_dirty = False
         self._before_draw_cb: Callable[[], None] | None = None
         self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setAttribute(Qt.WA_TabletTracking, True)
@@ -238,11 +242,16 @@ class InkOverlayWidget(QWidget):
         self.update()
 
     def clear_strokes(self) -> None:
+        if not self._strokes and not self._current:
+            return
+        before = copy.deepcopy(self._strokes)
         self._strokes = []
         self._current = None
         self._pen_active = False
         self._eraser_active = False
+        self._finish_eraser_session()
         self.update()
+        self.ink_history_commit.emit(before, [])
         self.strokes_changed.emit()
 
     def _cancel_current_stroke(self) -> None:
@@ -342,6 +351,7 @@ class InkOverlayWidget(QWidget):
         if len(new_strokes) == before_n:
             return False
         self._strokes = new_strokes
+        self._eraser_session_dirty = True
         self.strokes_changed.emit()
         return True
 
@@ -355,8 +365,25 @@ class InkOverlayWidget(QWidget):
         if before_pts == after_pts and before_n == len(new_strokes):
             return False
         self._strokes = new_strokes
+        self._eraser_session_dirty = True
         self.strokes_changed.emit()
         return True
+
+    def _begin_eraser_session(self) -> None:
+        if self._eraser_session_before is None:
+            self._eraser_session_before = copy.deepcopy(self._strokes)
+            self._eraser_session_dirty = False
+
+    def _finish_eraser_session(self) -> None:
+        if self._eraser_session_before is None:
+            return
+        before = self._eraser_session_before
+        after = copy.deepcopy(self._strokes)
+        dirty = self._eraser_session_dirty
+        self._eraser_session_before = None
+        self._eraser_session_dirty = False
+        if dirty and before != after:
+            self.ink_history_commit.emit(before, after)
 
     def _scale_x(self) -> float:
         return self._native_w / float(self._display_w)
@@ -399,7 +426,9 @@ class InkOverlayWidget(QWidget):
         if not self._current:
             return
         if len(self._current.get("points") or []) >= 1:
+            before = copy.deepcopy(self._strokes)
             self._strokes.append(self._current)
+            self.ink_history_commit.emit(before, copy.deepcopy(self._strokes))
             self.strokes_changed.emit()
         self._current = None
         self._pen_active = False
@@ -498,6 +527,7 @@ class InkOverlayWidget(QWidget):
         if t == QEvent.Type.TabletPress:
             self._notify_before_draw()
             self._eraser_active = True
+            self._begin_eraser_session()
             self._cancel_current_stroke()
             self._erase_at(pos.x(), pos.y(), pressure)
             self.update()
@@ -513,6 +543,7 @@ class InkOverlayWidget(QWidget):
             return
         if t == QEvent.Type.TabletRelease:
             self._eraser_active = False
+            self._finish_eraser_session()
             self.update()
             event.accept()
             return
@@ -522,6 +553,7 @@ class InkOverlayWidget(QWidget):
         if event.button() != Qt.LeftButton and not (event.buttons() & Qt.LeftButton):
             if event.type() == QEvent.Type.MouseButtonRelease:
                 self._eraser_active = False
+                self._finish_eraser_session()
                 event.accept()
             else:
                 event.ignore()
@@ -532,6 +564,7 @@ class InkOverlayWidget(QWidget):
         if t == QEvent.Type.MouseButtonPress:
             self._notify_before_draw()
             self._eraser_active = True
+            self._begin_eraser_session()
             self._cancel_current_stroke()
             self._erase_at(pos.x(), pos.y(), pressure)
             self.update()
@@ -545,6 +578,7 @@ class InkOverlayWidget(QWidget):
             return
         if t == QEvent.Type.MouseButtonRelease:
             self._eraser_active = False
+            self._finish_eraser_session()
             event.accept()
             return
         event.ignore()
@@ -782,6 +816,24 @@ class CropInkImageStack(QWidget):
     @property
     def result_id(self) -> int:
         return self._result_id
+
+    @property
+    def field_id(self) -> str:
+        return self._field_id
+
+    def snapshot(self) -> dict[str, Any]:
+        return {
+            "strokes": copy.deepcopy(self.ink_overlay.strokes()),
+            "annotations": self.text_layer.annotations(),
+        }
+
+    def apply_snapshot(self, snap: dict[str, Any]) -> None:
+        strokes = copy.deepcopy(snap.get("strokes") or [])
+        annotations = copy.deepcopy(snap.get("annotations") or [])
+        self.ink_overlay.set_strokes(strokes)
+        self.text_layer.set_annotations(annotations)
+        self._emit_strokes_changed()
+        self.text_layer.persist_annotations()
 
     def _before_ink_stroke(self) -> None:
         if self._before_ink_draw:

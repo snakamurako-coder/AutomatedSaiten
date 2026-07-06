@@ -84,6 +84,10 @@ class TextBoxWidget(QFrame):
     changed = Signal()
     selected = Signal(str)
     editing_finished = Signal(str)
+    interactive_change_started = Signal()
+    interactive_change_finished = Signal()
+    editing_started = Signal()
+    editing_committed = Signal()
 
     def __init__(
         self,
@@ -182,9 +186,11 @@ class TextBoxWidget(QFrame):
         self._apply_style()
         self._apply_geometry()
 
-    def start_editing(self, *, caret_at_end: bool = False) -> None:
+    def start_editing(self, *, caret_at_end: bool = False, record_undo: bool = True) -> None:
         if not self._selected:
             self.selected.emit(self.box_id)
+        if record_undo and not self._editing:
+            self.editing_started.emit()
         self._set_editing_mode(True)
         if caret_at_end:
             QTimer.singleShot(0, self._focus_editor_at_end)
@@ -251,6 +257,7 @@ class TextBoxWidget(QFrame):
         self._moving = False
         self._set_editing_mode(False)
         self._suppress_focus_check = False
+        self.editing_committed.emit()
         self.changed.emit()
         self.editing_finished.emit(self.box_id)
 
@@ -269,7 +276,7 @@ class TextBoxWidget(QFrame):
         if not chunk:
             return
         if not self._editing:
-            self.start_editing()
+            self.start_editing(record_undo=False)
         cur = self._editor.toPlainText()
         new_text = (cur + chunk) if cur else chunk
         self._editor.setPlainText(new_text)
@@ -313,6 +320,7 @@ class TextBoxWidget(QFrame):
                 return
             w = w.parentWidget()
         self._set_editing_mode(False)
+        self.editing_committed.emit()
         self.changed.emit()
         self.editing_finished.emit(self.box_id)
 
@@ -483,6 +491,7 @@ class TextBoxWidget(QFrame):
             self._press_moved = True
             self._moving = True
             self._move_origin = global_pos
+            self.interactive_change_started.emit()
             return
         if self._moving:
             delta = global_pos - self._move_origin
@@ -494,6 +503,7 @@ class TextBoxWidget(QFrame):
 
     def _end_pointer(self) -> None:
         if self._press_moved:
+            self.interactive_change_finished.emit()
             self.changed.emit()
         self._press_origin = None
         self._press_moved = False
@@ -512,6 +522,7 @@ class TextBoxWidget(QFrame):
         ow = float(self._box.get("width") or _MIN_NATIVE_W)
         oh = float(self._box.get("height") or _MIN_NATIVE_H)
         self._resize_orig_box = (ox, oy, ow, oh)
+        self.interactive_change_started.emit()
         self.grabMouse()
 
     def _update_resize(self, global_pos: QPoint) -> None:
@@ -544,6 +555,7 @@ class TextBoxWidget(QFrame):
 
     def _end_resize(self) -> None:
         if self._resizing:
+            self.interactive_change_finished.emit()
             self.changed.emit()
         if self.mouseGrabber() is self:
             self.releaseMouse()
