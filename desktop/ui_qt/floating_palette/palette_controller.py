@@ -94,6 +94,7 @@ class PaletteController:
         self._speech.phase_changed.connect(self._on_speech_phase_changed)
         self._speech_confirm_open = False
         self._speech_manual_finalize = False
+        self._pending_speech_text: str | None = None
         self._windows_speech_active = False
         self._windows_voice_prep_attempt = 0
         self._settings_overlay_active = False
@@ -341,7 +342,8 @@ class PaletteController:
 
     def _on_text_selection(self, box: dict[str, Any] | None) -> None:
         if not box:
-            self._stop_speech()
+            if not self._pending_speech_text:
+                self._stop_speech()
             return
         for stack in self._stacks():
             if stack.text_layer.selected_box():
@@ -501,8 +503,56 @@ class PaletteController:
             self._windows_speech_active = False
         self._speech.stop()
         self._release_speech_input_guards()
+        self._cancel_speech_placement()
         self.tool_window.format_panel.set_speech_active(False)
         self.tool_window.format_panel.set_speech_phase("idle")
+
+    def _has_selected_text_box(self) -> bool:
+        return any(stack.text_layer.selected_box() for stack in self._stacks())
+
+    def _cancel_speech_placement(self) -> None:
+        self._pending_speech_text = None
+        for stack in self._stacks():
+            stack.text_layer.clear_speech_place_text()
+
+    def _begin_speech_placement(self, text: str) -> None:
+        chunk = str(text or "").strip()
+        if not chunk:
+            return
+        self._speech.stop()
+        self._release_speech_input_guards()
+        self._cancel_speech_placement()
+        self._pending_speech_text = chunk
+        self._ensure_text_tool_for_speech_placement()
+        for stack in self._stacks():
+            stack.text_layer.set_speech_place_text(
+                chunk,
+                on_placed=self._on_speech_box_placed,
+            )
+        self.tool_window.format_panel.set_speech_active(False)
+        self.tool_window.format_panel.set_speech_phase("placing")
+        if hasattr(self._main, "show_app_message"):
+            self._main.show_app_message(
+                "音声入力: テキストボックスを配置する場所をクリックしてください",
+                level="info",
+            )
+
+    def _on_speech_box_placed(self) -> None:
+        self._cancel_speech_placement()
+        self.tool_window.format_panel.set_speech_phase("idle")
+        for stack in self._stacks():
+            box = stack.text_layer.selected_box()
+            if box:
+                self._set_active_stack(stack)
+                self.tool_window.show_text_mode()
+                self.tool_window.format_panel.load_style(box.get("style") or {})
+                break
+
+    def _ensure_text_tool_for_speech_placement(self) -> None:
+        self.tool_window.show_text_mode()
+        if self._tool != TOOL_TEXT:
+            self.tool_window.set_tool(TOOL_TEXT)
+            self._on_tool_changed(TOOL_TEXT)
 
     def _on_format_speech_toggled(self, on: bool) -> None:
         if load_speech_input_mode() == SPEECH_MODE_WINDOWS:
@@ -511,15 +561,11 @@ class PaletteController:
         if not on:
             self._finalize_app_speech()
             return
-        if not any(stack.text_layer.selected_box() for stack in self._stacks()):
-            self.tool_window.format_panel.set_speech_active(False)
-            from ui_qt import helpers as h
-
-            h.warn(self._main, "音声入力", "テキストボックスを選択してください")
-            return
-        if not self._ensure_speech_target_editing():
-            self.tool_window.format_panel.set_speech_active(False)
-            return
+        self._cancel_speech_placement()
+        if self._has_selected_text_box():
+            if not self._ensure_speech_target_editing():
+                self.tool_window.format_panel.set_speech_active(False)
+                return
         self.tool_window.format_panel.set_speech_phase("preparing")
         self._speech_manual_finalize = False
         self._speech.start()
@@ -549,9 +595,13 @@ class PaletteController:
         if not on:
             self._stop_speech()
             return
-        if not any(stack.text_layer.selected_box() for stack in self._stacks()):
+        if not self._has_selected_text_box():
             self.tool_window.format_panel.set_speech_active(False)
-            h.warn(self._main, "音声入力", "テキストボックスを選択してください")
+            h.warn(
+                self._main,
+                "音声入力",
+                "Windows 音声入力はテキストボックスを選択してからご利用ください",
+            )
             return
         if not self._ensure_speech_target_editing():
             self.tool_window.format_panel.set_speech_active(False)
@@ -647,11 +697,16 @@ class PaletteController:
             dlg = SpeechConfirmDialog(self._main, chunk)
             result = dlg.exec()
             if result == SpeechConfirmResult.ACCEPT:
+                placed = False
                 for stack in self._stacks():
                     if stack.text_layer.append_transcript_to_selected(chunk):
+                        placed = True
                         break
-                if not manual_finalize:
-                    self._resume_app_speech_after_confirm()
+                if placed:
+                    if not manual_finalize:
+                        self._resume_app_speech_after_confirm()
+                else:
+                    self._begin_speech_placement(chunk)
             elif result == SpeechConfirmResult.RETRY:
                 if not manual_finalize:
                     self._resume_app_speech_after_confirm()
@@ -661,7 +716,8 @@ class PaletteController:
             self._speech_confirm_open = False
             if manual_finalize:
                 self._speech_manual_finalize = False
-                self._stop_speech()
+                if not self._pending_speech_text:
+                    self._stop_speech()
 
     def _resume_app_speech_after_confirm(self) -> None:
         """確認ダイアログ後にアプリ内認識を再開し、ボタンを認識中表示に戻す。"""
@@ -688,11 +744,14 @@ class PaletteController:
     def _on_speech_phase_changed(self, phase: str) -> None:
         if self._speech_confirm_open and phase in ("preparing", "recognizing"):
             return
+        if self._pending_speech_text and phase in ("preparing", "recognizing"):
+            return
         self.tool_window.format_panel.set_speech_phase(phase)
         status = {
             "preparing": "音声入力: マイクを準備しています…",
             "recognizing": "音声入力: 認識中 — 話してください",
             "paused": "音声入力: 認識結果を確認中",
+            "placing": "音声入力: 配置する場所をクリックしてください",
         }.get(phase)
         if status and hasattr(self._main, "show_app_message"):
             self._main.show_app_message(status, level="info")

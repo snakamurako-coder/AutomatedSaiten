@@ -862,6 +862,9 @@ class CropInkImageStack(QWidget):
             if watched is self.text_layer
             else self._map_to_text_layer(watched, event.position())
         )
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+            if self.text_layer.try_speech_place_at(local, event):
+                return True
         if self.text_layer.handle_placement_event(et, local, event):
             return True
         return super().eventFilter(watched, event)

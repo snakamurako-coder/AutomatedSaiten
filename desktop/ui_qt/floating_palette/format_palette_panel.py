@@ -187,7 +187,8 @@ class FormatPalettePanel(QWidget):
         else:
             self._speech_btn.setToolTip(
                 "マイクで音声をテキストに追加"
-                "（無言で区切ると認識。認識中にもう一度押すと終了）"
+                "（無言で区切ると認識。認識中にもう一度押すと終了。"
+                " テキストボックス未選択時は配置場所をクリック）"
             )
 
     def release_speech_button_focus(self) -> None:
@@ -234,6 +235,10 @@ class FormatPalettePanel(QWidget):
         elif self._speech_phase == "windows":
             btn_text = "音声入力中…"
             status = "Windows 音声入力を使用中です。"
+            accent = True
+        elif self._speech_phase == "placing":
+            btn_text = "配置待ち…"
+            status = "認識したテキストを配置する場所をクリックしてください。"
             accent = True
         self._speech_btn.setText(btn_text)
         if accent:

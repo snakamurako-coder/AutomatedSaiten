@@ -47,6 +47,8 @@ class TextBoxLayer(QWidget):
         self._widgets: dict[str, TextBoxWidget] = {}
         self._selected_id: str | None = None
         self._placement_mode = False
+        self._speech_place_text: str | None = None
+        self._speech_place_on_placed: Callable[[], None] | None = None
         self._show_text = True
         self._text_tool_mode = False
         self._palm_rejection = True
@@ -226,6 +228,79 @@ class TextBoxLayer(QWidget):
         self._persist_annotations()
         self.selection_changed.emit(None)
 
+    def has_speech_place_pending(self) -> bool:
+        return bool(self._speech_place_text)
+
+    def set_speech_place_text(
+        self,
+        text: str | None,
+        *,
+        on_placed: Callable[[], None] | None = None,
+    ) -> None:
+        chunk = str(text or "").strip()
+        self._speech_place_text = chunk or None
+        self._speech_place_on_placed = on_placed if chunk else None
+        if self._speech_place_text:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif not self._placement_mode:
+            self.unsetCursor()
+
+    def clear_speech_place_text(self) -> None:
+        self.set_speech_place_text(None)
+
+    def try_speech_place_at(self, local_pos: QPointF, event) -> bool:
+        if not self._speech_place_text:
+            return False
+        et = event.type()
+        if et not in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+            return False
+        if isinstance(event, QMouseEvent) and event.button() != Qt.LeftButton:
+            return False
+        if self._reject_placement_event(event):
+            return False
+        lx, ly = int(local_pos.x()), int(local_pos.y())
+        if self.childAt(lx, ly) not in (None, self._rubber):
+            return False
+        return self._try_speech_place_click(local_pos)
+
+    def _try_speech_place_click(self, pos: QPointF) -> bool:
+        if not self._speech_place_text:
+            return False
+        text = self._speech_place_text
+        callback = self._speech_place_on_placed
+        self._speech_place_text = None
+        self._speech_place_on_placed = None
+        if not self._placement_mode:
+            self.unsetCursor()
+        self.place_box_with_text(pos.x(), pos.y(), text)
+        if callback:
+            callback()
+        return True
+
+    def place_box_with_text(
+        self,
+        display_x: float,
+        display_y: float,
+        text: str,
+    ) -> dict[str, Any] | None:
+        chunk = str(text or "").strip()
+        if not chunk:
+            return None
+        dw, dh = 80.0, 28.0
+        nw = max(_MIN_NATIVE_W, dw * self._scale_x)
+        nh = max(_MIN_NATIVE_H, dh * self._scale_y)
+        nx = max(0.0, min(self._native_w - nw, display_x * self._scale_x))
+        ny = max(0.0, min(self._native_h - nh, display_y * self._scale_y))
+        box = new_text_box(nx, ny, width=nw, height=nh)
+        box["text"] = chunk
+        self._sync_annotations_from_widgets()
+        self._annotations.append(copy.deepcopy(box))
+        self._rebuild_widgets(from_widgets=False)
+        self.select_box(str(box["id"]))
+        self._persist_annotations()
+        bid = str(box["id"])
+        return self._widgets[bid].box_data() if bid in self._widgets else box
+
     def is_placing(self) -> bool:
         return self._placing
 
@@ -235,6 +310,10 @@ class TextBoxLayer(QWidget):
             return False
         if self._reject_placement_event(event):
             return False
+
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+            if self._try_speech_place_click(local_pos):
+                return True
 
         lx, ly = int(local_pos.x()), int(local_pos.y())
 
@@ -377,6 +456,10 @@ class TextBoxLayer(QWidget):
             self._on_changed(copy.deepcopy(self._annotations))
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton:
+            if self._try_speech_place_click(event.position()):
+                event.accept()
+                return
         if self._placement_mode and event.button() == Qt.LeftButton:
             if self.handle_placement_event(
                 QEvent.Type.MouseButtonPress, event.position(), event
