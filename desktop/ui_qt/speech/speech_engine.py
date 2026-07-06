@@ -3,11 +3,22 @@
 from __future__ import annotations
 
 import asyncio
+import subprocess
 import sys
 import threading
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QWidget
+
+_HRESULT_PRIVACY_DECLINED = 0x80045509
+_PRIVACY_ERROR_MESSAGE = (
+    "Windows の音声認識を使うには、以下の設定が必要です。\n\n"
+    "設定 → プライバシーとセキュリティ → 音声\n"
+    "で「オンライン音声認識」をオンにし、"
+    "Microsoft のプライバシーポリシーを確認・同意してください。\n\n"
+    "（従来の設定名: 「入力とカスタム入力の設定を使う」／「私を理解する」）\n\n"
+    "設定画面を開きました。有効にしたら、もう一度音声入力をお試しください。"
+)
 
 _WINRT_AVAILABLE = False
 if sys.platform == "win32":
@@ -55,6 +66,41 @@ def _availability_message() -> tuple[bool, str]:
     return False, "PyAudio が未インストールです（pip install PyAudio）"
 
 
+def _is_speech_privacy_error(exc: BaseException) -> bool:
+    for attr in ("winerror", "hresult", "HRESULT"):
+        value = getattr(exc, attr, None)
+        if value is not None and int(value) & 0xFFFFFFFF == _HRESULT_PRIVACY_DECLINED:
+            return True
+    message = str(exc).lower()
+    return "privacy policy" in message or "speech privacy" in message
+
+
+def _open_speech_privacy_settings() -> None:
+    if sys.platform != "win32":
+        return
+    for uri in (
+        "ms-settings:privacy-speech",
+        "ms-settings:privacy-speechtyping",
+        "ms-settings:privacy-accounts",
+    ):
+        try:
+            os_startfile = getattr(__import__("os"), "startfile", None)
+            if os_startfile is not None:
+                os_startfile(uri)
+                return
+        except OSError:
+            continue
+    subprocess.Popen(["cmd", "/c", "start", "", "ms-settings:privacy-speech"], shell=False)
+
+
+def _emit_speech_error(worker: _SpeechWorkerBase, exc: BaseException) -> None:
+    if _is_speech_privacy_error(exc):
+        _open_speech_privacy_settings()
+        worker.error.emit(_PRIVACY_ERROR_MESSAGE)
+        return
+    worker.error.emit(f"音声認識エラー: {exc}")
+
+
 class _SpeechWorkerBase(QThread):
     transcript_received = Signal(str)
     error = Signal(str)
@@ -87,7 +133,19 @@ class _WinrtSpeechWorker(_SpeechWorkerBase):
             asyncio.run(self._async_main())
         except Exception as exc:
             if not self._stop_event.is_set():
-                self.error.emit(f"音声認識エラー: {exc}")
+                _emit_speech_error(self, exc)
+
+    async def _start_continuous_session(self, session) -> bool:
+        try:
+            await session.start_async()
+            return True
+        except Exception as exc:
+            if _is_speech_privacy_error(exc):
+                if not self._stop_event.is_set():
+                    _open_speech_privacy_settings()
+                    self.error.emit(_PRIVACY_ERROR_MESSAGE)
+                return False
+            raise
 
     async def _async_main(self) -> None:
         from winrt.windows.globalization import Language
@@ -119,6 +177,11 @@ class _WinrtSpeechWorker(_SpeechWorkerBase):
                 if text:
                     self.transcript_received.emit(text)
             except Exception as exc:
+                if _is_speech_privacy_error(exc):
+                    if not self._stop_event.is_set():
+                        _open_speech_privacy_settings()
+                        self.error.emit(_PRIVACY_ERROR_MESSAGE)
+                    return
                 self.error.emit(f"音声認識エラー: {exc}")
 
         result_token = session.add_result_generated(on_result)
@@ -127,8 +190,9 @@ class _WinrtSpeechWorker(_SpeechWorkerBase):
             while not self._stop_event.is_set():
                 if self._want_listening and not self._pause_event.is_set():
                     if not session_active:
-                        await session.start_async()
-                        session_active = True
+                        session_active = await self._start_continuous_session(session)
+                        if not session_active:
+                            break
                 elif session_active:
                     await session.stop_async()
                     session_active = False
