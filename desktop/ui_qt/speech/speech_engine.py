@@ -7,7 +7,7 @@ import subprocess
 import sys
 import threading
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import Q_ARG, QMetaObject, QThread, Qt, Signal, Slot
 from PySide6.QtWidgets import QWidget
 
 _HRESULT_PRIVACY_DECLINED = 0x80045509
@@ -18,15 +18,6 @@ _PRIVACY_ERROR_MESSAGE = (
     "Microsoft のプライバシーポリシーを確認・同意してください。\n\n"
     "（従来の設定名: 「入力とカスタム入力の設定を使う」／「私を理解する」）\n\n"
     "設定画面を開きました。有効にしたら、もう一度音声入力をお試しください。"
-)
-_MICROPHONE_ERROR_MESSAGE = (
-    "マイクの使用が許可されていません。\n\n"
-    "設定 → プライバシーとセキュリティ → マイク\n"
-    "で「マイクへのアクセス」をオンにし、"
-    "一覧の「Python」（python.exe）をオンにしてください。\n\n"
-    "（ターミナルから python main.py で起動している場合、"
-    "アプリ名ではなく Python が表示されます）\n\n"
-    "設定画面を開きました。許可後、アプリを再起動してお試しください。"
 )
 
 _WINRT_AVAILABLE = False
@@ -102,29 +93,63 @@ def _open_speech_privacy_settings() -> None:
     subprocess.Popen(["cmd", "/c", "start", "", "ms-settings:privacy-speech"], shell=False)
 
 
-def _open_microphone_settings() -> None:
-    if sys.platform != "win32":
-        return
-    for uri in (
-        "ms-settings:privacy-microphone",
-        "ms-settings:privacy",
-    ):
-        try:
-            os_startfile = getattr(__import__("os"), "startfile", None)
-            if os_startfile is not None:
-                os_startfile(uri)
-                return
-        except OSError:
-            continue
-    subprocess.Popen(["cmd", "/c", "start", "", "ms-settings:privacy-microphone"], shell=False)
-
-
 def _emit_speech_error(worker: _SpeechWorkerBase, exc: BaseException) -> None:
     if _is_speech_privacy_error(exc):
         _open_speech_privacy_settings()
         worker.error.emit(_PRIVACY_ERROR_MESSAGE)
         return
     worker.error.emit(f"音声認識エラー: {exc}")
+
+
+def _init_worker_com() -> bool:
+    if sys.platform != "win32":
+        return False
+    try:
+        import ctypes
+
+        hr = ctypes.windll.ole32.CoInitializeEx(None, 2)
+        return hr in (0, 1)
+    except Exception:
+        return False
+
+
+def _uninit_worker_com(initialized: bool) -> None:
+    if not initialized or sys.platform != "win32":
+        return
+    try:
+        import ctypes
+
+        ctypes.windll.ole32.CoUninitialize()
+    except Exception:
+        pass
+
+
+def _winrt_status_message(status) -> str | None:
+    from winrt.windows.media.speechrecognition import SpeechRecognitionResultStatus
+
+    silent_statuses = {
+        SpeechRecognitionResultStatus.SUCCESS,
+        SpeechRecognitionResultStatus.TIMEOUT_EXCEEDED,
+        SpeechRecognitionResultStatus.UNKNOWN,
+        SpeechRecognitionResultStatus.USER_CANCELED,
+    }
+    if status in silent_statuses:
+        return None
+    messages = {
+        SpeechRecognitionResultStatus.MICROPHONE_UNAVAILABLE: (
+            "マイクが利用できません。Windows の設定 → プライバシー → マイクを確認してください。"
+        ),
+        SpeechRecognitionResultStatus.NETWORK_FAILURE: (
+            "音声認識にネットワーク接続が必要です。"
+        ),
+        SpeechRecognitionResultStatus.AUDIO_QUALITY_FAILURE: (
+            "音声品質が低いため認識できませんでした。マイク位置を調整してください。"
+        ),
+        SpeechRecognitionResultStatus.TOPIC_LANGUAGE_NOT_SUPPORTED: (
+            "日本語の音声認識がサポートされていません。Windows の言語パックを確認してください。"
+        ),
+    }
+    return messages.get(status)
 
 
 class _SpeechWorkerBase(QThread):
@@ -155,87 +180,109 @@ class _SpeechWorkerBase(QThread):
 
 class _WinrtSpeechWorker(_SpeechWorkerBase):
     def run(self) -> None:
+        com_initialized = _init_worker_com()
         try:
             asyncio.run(self._async_main())
         except Exception as exc:
             if not self._stop_event.is_set():
                 _emit_speech_error(self, exc)
+        finally:
+            _uninit_worker_com(com_initialized)
 
-    async def _start_continuous_session(self, session) -> bool:
-        try:
-            await session.start_async()
-            return True
-        except Exception as exc:
-            if _is_speech_privacy_error(exc):
-                if not self._stop_event.is_set():
-                    _open_speech_privacy_settings()
-                    self.error.emit(_PRIVACY_ERROR_MESSAGE)
-                return False
-            raise
+    @Slot(str)
+    def _deliver_transcript(self, text: str) -> None:
+        chunk = str(text or "").strip()
+        if chunk:
+            self.transcript_received.emit(chunk)
+
+    @Slot(str)
+    def _deliver_error(self, message: str) -> None:
+        msg = str(message or "").strip()
+        if msg:
+            self.error.emit(msg)
+
+    def _schedule_transcript(self, text: str) -> None:
+        QMetaObject.invokeMethod(
+            self,
+            "_deliver_transcript",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, text),
+        )
+
+    def _schedule_error(self, message: str) -> None:
+        QMetaObject.invokeMethod(
+            self,
+            "_deliver_error",
+            Qt.ConnectionType.QueuedConnection,
+            Q_ARG(str, message),
+        )
 
     async def _async_main(self) -> None:
         from winrt.windows.globalization import Language
         from winrt.windows.media.speechrecognition import (
+            SpeechRecognitionConfidence,
             SpeechRecognitionResultStatus,
             SpeechRecognizer,
         )
 
+        recognizer = None
         try:
-            recognizer = SpeechRecognizer(Language("ja-JP"))
-        except Exception:
-            recognizer = SpeechRecognizer()
-
-        compile_result = await recognizer.compile_constraints_async()
-        if int(compile_result.status) != 0:
-            self.error.emit("日本語の音声認識を初期化できません（Windows の音声パックを確認）")
-            recognizer.close()
-            return
-
-        session = recognizer.continuous_recognition_session
-        session_active = False
-
-        def on_result(_sender, args) -> None:
             try:
-                result = args.result
-                if result.status == SpeechRecognitionResultStatus.MICROPHONE_UNAVAILABLE:
-                    if not self._stop_event.is_set():
-                        _open_microphone_settings()
-                        self.error.emit(_MICROPHONE_ERROR_MESSAGE)
-                    return
-                if result.status != SpeechRecognitionResultStatus.SUCCESS:
-                    return
-                text = str(result.text or "").strip()
-                if text:
-                    self.transcript_received.emit(text)
-            except Exception as exc:
-                if _is_speech_privacy_error(exc):
-                    if not self._stop_event.is_set():
-                        _open_speech_privacy_settings()
-                        self.error.emit(_PRIVACY_ERROR_MESSAGE)
-                    return
-                self.error.emit(f"音声認識エラー: {exc}")
+                recognizer = SpeechRecognizer(Language("ja-JP"))
+            except Exception:
+                recognizer = SpeechRecognizer()
 
-        result_token = session.add_result_generated(on_result)
+            compile_result = await recognizer.compile_constraints_async()
+            if int(compile_result.status) != 0:
+                self._schedule_error(
+                    "日本語の音声認識を初期化できません（Windows の音声パックを確認）"
+                )
+                return
 
-        try:
             while not self._stop_event.is_set():
-                if self._want_listening and not self._pause_event.is_set():
-                    if not session_active:
-                        session_active = await self._start_continuous_session(session)
-                        if not session_active:
-                            break
-                elif session_active:
-                    await session.stop_async()
-                    session_active = False
-                await asyncio.sleep(0.05)
-        finally:
-            session.remove_result_generated(result_token)
-            if session_active:
+                if not self._want_listening or self._pause_event.is_set():
+                    await asyncio.sleep(0.05)
+                    continue
+
                 try:
-                    await session.stop_async()
+                    result = await recognizer.recognize_async()
+                except Exception as exc:
+                    if self._stop_event.is_set():
+                        break
+                    if _is_speech_privacy_error(exc):
+                        _open_speech_privacy_settings()
+                        self._schedule_error(_PRIVACY_ERROR_MESSAGE)
+                        break
+                    self._schedule_error(f"音声認識エラー: {exc}")
+                    await asyncio.sleep(0.3)
+                    continue
+
+                if self._stop_event.is_set() or self._pause_event.is_set():
+                    continue
+
+                text = str(getattr(result, "text", "") or "").strip()
+                confidence = getattr(result, "confidence", None)
+                status = result.status
+
+                if text and confidence != SpeechRecognitionConfidence.REJECTED:
+                    self._schedule_transcript(text)
+                    continue
+
+                err_msg = _winrt_status_message(status)
+                if err_msg:
+                    self._schedule_error(err_msg)
+                    if status in (
+                        SpeechRecognitionResultStatus.MICROPHONE_UNAVAILABLE,
+                        SpeechRecognitionResultStatus.NETWORK_FAILURE,
+                        SpeechRecognitionResultStatus.TOPIC_LANGUAGE_NOT_SUPPORTED,
+                    ):
+                        break
+        finally:
+            if recognizer is not None:
+                try:
+                    recognizer.close()
                 except Exception:
                     pass
-            recognizer.close()
 
 
 class _SrSpeechWorker(_SpeechWorkerBase):
