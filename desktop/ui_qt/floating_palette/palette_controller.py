@@ -91,6 +91,7 @@ class PaletteController:
         self._speech.transcript_received.connect(self._on_speech_transcript)
         self._speech.error.connect(self._on_speech_error)
         self._speech.listening_changed.connect(self._on_speech_listening_changed)
+        self._speech.phase_changed.connect(self._on_speech_phase_changed)
         self._speech_confirm_open = False
         self._windows_speech_active = False
         self._settings_overlay_active = False
@@ -498,6 +499,7 @@ class PaletteController:
             self._windows_speech_active = False
         self._speech.stop()
         self.tool_window.format_panel.set_speech_active(False)
+        self.tool_window.format_panel.set_speech_phase("idle")
 
     def _on_format_speech_toggled(self, on: bool) -> None:
         if load_speech_input_mode() == SPEECH_MODE_WINDOWS:
@@ -515,6 +517,7 @@ class PaletteController:
         if not self._ensure_speech_target_editing():
             self.tool_window.format_panel.set_speech_active(False)
             return
+        self.tool_window.format_panel.set_speech_phase("preparing")
         self._speech.start()
 
     def _on_windows_speech_toggled(self, on: bool) -> None:
@@ -527,10 +530,18 @@ class PaletteController:
             self.tool_window.format_panel.set_speech_active(False)
             h.warn(self._main, "音声入力", "テキストボックスを選択してください")
             return
-        if not self._ensure_speech_target_editing():
+        if not self._ensure_speech_target_editing(caret_at_end=True):
             self.tool_window.format_panel.set_speech_active(False)
             return
-        QTimer.singleShot(200, self._launch_windows_voice_typing)
+        QTimer.singleShot(0, self._prepare_windows_voice_typing)
+
+    def _prepare_windows_voice_typing(self) -> None:
+        """テキスト末尾にカーソルを置いてから Windows 音声入力を起動する。"""
+        fp = self.tool_window.format_panel
+        if not fp.is_speech_checked():
+            return
+        self._focus_speech_target_at_end()
+        QTimer.singleShot(150, self._launch_windows_voice_typing)
 
     def _launch_windows_voice_typing(self) -> None:
         from ui_qt import helpers as h
@@ -541,6 +552,7 @@ class PaletteController:
         if toggle_windows_voice_typing():
             self._windows_speech_active = True
             fp.set_speech_active(True)
+            fp.set_speech_phase("windows")
             return
         fp.set_speech_active(False)
         h.warn(
@@ -550,12 +562,17 @@ class PaletteController:
             "Windows の音声設定とマイク許可を確認してください。",
         )
 
-    def _ensure_speech_target_editing(self) -> bool:
+    def _ensure_speech_target_editing(self, *, caret_at_end: bool = False) -> bool:
         for stack in self._stacks():
             if stack.text_layer.selected_box():
-                stack.text_layer.edit_selected()
+                stack.text_layer.edit_selected(caret_at_end=caret_at_end)
                 return True
         return False
+
+    def _focus_speech_target_at_end(self) -> None:
+        for stack in self._stacks():
+            if stack.text_layer.focus_selected_caret_at_end():
+                return
 
     def _on_speech_transcript(self, text: str) -> None:
         chunk = str(text or "").strip()
@@ -563,6 +580,7 @@ class PaletteController:
             return
         self._speech.pause()
         self._speech_confirm_open = True
+        self.tool_window.format_panel.set_speech_phase("paused")
         try:
             dlg = SpeechConfirmDialog(self._main, chunk)
             result = dlg.exec()
@@ -592,6 +610,16 @@ class PaletteController:
 
     def _on_speech_listening_changed(self, on: bool) -> None:
         self.tool_window.format_panel.set_speech_active(on)
+
+    def _on_speech_phase_changed(self, phase: str) -> None:
+        self.tool_window.format_panel.set_speech_phase(phase)
+        status = {
+            "preparing": "音声入力: マイクを準備しています…",
+            "recognizing": "音声入力: 認識中 — 話してください",
+            "paused": "音声入力: 認識結果を確認中",
+        }.get(phase)
+        if status and hasattr(self._main, "show_app_message"):
+            self._main.show_app_message(status, level="info")
 
     def register_stack(self, stack: CropInkImageStack) -> None:
         """新規タイル生成後に呼ぶ。"""

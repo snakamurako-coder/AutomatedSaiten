@@ -19,6 +19,7 @@ from models.text_annotation_repo import (
     TEXT_STYLE_TEMPLATES,
     resolve_text_style,
 )
+from ui_qt.style import COLORS
 
 
 class FormatPalettePanel(QWidget):
@@ -83,9 +84,17 @@ class FormatPalettePanel(QWidget):
         btn_row.addWidget(self._speech_btn, 1)
         btn_row.addWidget(del_btn, 1)
         root.addLayout(btn_row)
+
+        self._speech_status_label = QLabel("")
+        self._speech_status_label.setObjectName("PaletteHintLabel")
+        self._speech_status_label.setWordWrap(True)
+        self._speech_status_label.hide()
+        root.addWidget(self._speech_status_label)
+
         root.addStretch()
 
         self._loading = False
+        self._speech_phase = "idle"
         self._style: dict[str, Any] = dict(TEXT_STYLE_TEMPLATES["A"])
         self._text_palette_colors: tuple[str, ...] = TEXT_PALETTE_COLORS
         self._rebuild_color_swatches()
@@ -191,12 +200,47 @@ class FormatPalettePanel(QWidget):
 
     def set_speech_active(self, on: bool) -> None:
         if self._speech_btn.isChecked() == on:
-            self._update_speech_label(on)
+            if not on:
+                self.set_speech_phase("idle")
             return
         self._speech_btn.blockSignals(True)
         self._speech_btn.setChecked(on)
         self._speech_btn.blockSignals(False)
-        self._update_speech_label(on)
+        if not on:
+            self.set_speech_phase("idle")
 
-    def _update_speech_label(self, on: bool) -> None:
-        self._speech_btn.setText("音声入力中…" if on else "音声入力")
+    def set_speech_phase(self, phase: str) -> None:
+        """音声入力の状態表示（idle / preparing / recognizing / paused / windows）。"""
+        self._speech_phase = str(phase or "idle")
+        btn_text = "音声入力"
+        status = ""
+        accent = False
+        if self._speech_phase == "preparing":
+            btn_text = "準備中…"
+            status = "マイクを準備しています…"
+            accent = True
+        elif self._speech_phase == "recognizing":
+            btn_text = "認識中…"
+            status = "話してください。区切りで少し黙ると認識します。"
+            accent = True
+        elif self._speech_phase == "paused":
+            btn_text = "確認中…"
+            status = "認識結果の確認中です。"
+            accent = True
+        elif self._speech_phase == "windows":
+            btn_text = "音声入力中…"
+            status = "Windows 音声入力を使用中です。"
+            accent = True
+        self._speech_btn.setText(btn_text)
+        if accent:
+            self._speech_btn.setStyleSheet(
+                f"QPushButton {{ background: {COLORS['accent_soft']}; font-weight: 600; }}"
+            )
+        else:
+            self._speech_btn.setStyleSheet("")
+        if status:
+            self._speech_status_label.setText(status)
+            self._speech_status_label.show()
+        else:
+            self._speech_status_label.clear()
+            self._speech_status_label.hide()

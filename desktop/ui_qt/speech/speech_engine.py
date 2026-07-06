@@ -95,6 +95,7 @@ class _SpeechBridge(QObject):
     transcript_received = Signal(str)
     error = Signal(str)
     finished = Signal()
+    phase_changed = Signal(str)
 
 
 class _SpeechWorkerBase:
@@ -168,6 +169,7 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
 
         from ui_qt.speech.google_stt import RequestError, UnknownValueError, recognize_pcm
 
+        self._bridge.phase_changed.emit("preparing")
         # soundcard は COM を使うため、メインスレッドでは import しない
         import soundcard as sc
 
@@ -177,6 +179,7 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
             self._bridge.error.emit(f"マイクを開けません: {exc}")
             return
 
+        self._bridge.phase_changed.emit("recognizing")
         empty_streak = 0
         with microphone.recorder(samplerate=self._SAMPLE_RATE, channels=1) as recorder:
             while not self._stop_event.is_set():
@@ -262,11 +265,14 @@ class _SrSpeechWorker(_SpeechWorkerBase):
             self._bridge.error.emit(f"マイクを開けません: {exc}")
             return
 
+        self._bridge.phase_changed.emit("preparing")
         with microphone as source:
             try:
                 recognizer.adjust_for_ambient_noise(source, duration=0.4)
             except Exception:
                 pass
+
+            self._bridge.phase_changed.emit("recognizing")
 
             while not self._stop_event.is_set():
                 if not self._want_listening or self._pause_event.is_set():
@@ -310,6 +316,7 @@ class SpeechEngine(QWidget):
     transcript_received = Signal(str)
     error = Signal(str)
     listening_changed = Signal(bool)
+    phase_changed = Signal(str)
     availability_changed = Signal(bool)
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -318,8 +325,10 @@ class SpeechEngine(QWidget):
         self._bridge.transcript_received.connect(self.transcript_received)
         self._bridge.error.connect(self._on_worker_error)
         self._bridge.finished.connect(self._on_worker_finished)
+        self._bridge.phase_changed.connect(self._on_worker_phase)
         self._worker: _SpeechWorkerBase | None = None
         self._listening = False
+        self._phase = "idle"
         self._paused = False
         self._want_listening = False
         self.availability_changed.emit(self.is_available())
@@ -332,6 +341,9 @@ class SpeechEngine(QWidget):
     def is_listening(self) -> bool:
         return self._listening
 
+    def phase(self) -> str:
+        return self._phase
+
     def start(self) -> None:
         ok, message = _availability_message()
         if not ok:
@@ -339,6 +351,7 @@ class SpeechEngine(QWidget):
             return
         self._want_listening = True
         self._paused = False
+        self._set_phase("preparing")
         if self._worker is not None and self._worker.is_running():
             self._worker.request_start()
             self._set_listening(True)
@@ -358,6 +371,7 @@ class SpeechEngine(QWidget):
             self._worker.request_stop()
             self._worker.wait(5000)
             self._worker = None
+        self._set_phase("idle")
         self._set_listening(False)
 
     def pause(self) -> None:
@@ -365,7 +379,7 @@ class SpeechEngine(QWidget):
         self._paused = True
         if self._worker is not None:
             self._worker.request_pause()
-        self._set_listening(False)
+        self._set_phase("paused")
 
     def resume(self) -> None:
         """一時停止後に認識を再開。"""
@@ -373,6 +387,7 @@ class SpeechEngine(QWidget):
         if self._worker is not None and self._worker.is_running():
             self._worker.request_resume()
         if self._want_listening:
+            self._set_phase("recognizing")
             self._set_listening(True)
 
     def _set_listening(self, on: bool) -> None:
@@ -381,12 +396,27 @@ class SpeechEngine(QWidget):
         self._listening = on
         self.listening_changed.emit(on)
 
+    def _set_phase(self, phase: str) -> None:
+        phase = str(phase or "idle")
+        if self._phase == phase:
+            return
+        self._phase = phase
+        self.phase_changed.emit(phase)
+
+    def _on_worker_phase(self, phase: str) -> None:
+        if not self._want_listening or self._paused:
+            return
+        self._set_phase(phase)
+
     def _on_worker_error(self, message: str) -> None:
         msg = str(message or "").strip()
         if msg:
             self.error.emit(msg)
 
     def _on_worker_finished(self) -> None:
-        self._set_listening(False)
-        if self._want_listening and not self._paused:
-            self._spawn_worker()
+        if not self._want_listening or self._paused:
+            self._set_phase("idle")
+            self._set_listening(False)
+            return
+        self._set_phase("preparing")
+        self._spawn_worker()

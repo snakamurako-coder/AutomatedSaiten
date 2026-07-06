@@ -182,11 +182,28 @@ class TextBoxWidget(QFrame):
         self._apply_style()
         self._apply_geometry()
 
-    def start_editing(self) -> None:
+    def start_editing(self, *, caret_at_end: bool = False) -> None:
         if not self._selected:
             self.selected.emit(self.box_id)
         self._set_editing_mode(True)
-        QTimer.singleShot(0, self._focus_editor)
+        if caret_at_end:
+            QTimer.singleShot(0, self._focus_editor_at_end)
+        else:
+            QTimer.singleShot(0, self._focus_editor)
+
+    def focus_caret_at_end(self) -> None:
+        """編集中のテキスト末尾へカーソルを移動してフォーカスする。"""
+        if not self._editing:
+            self._set_editing_mode(True)
+        self._focus_editor_at_end()
+
+    def _focus_editor_at_end(self) -> None:
+        if not self._editing:
+            return
+        self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
+        cursor = self._editor.textCursor()
+        cursor.movePosition(QTextCursor.MoveOperation.End)
+        self._editor.setTextCursor(cursor)
 
     def _focus_editor(self) -> None:
         if not self._editing:

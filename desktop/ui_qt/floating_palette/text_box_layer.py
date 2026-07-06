@@ -155,9 +155,18 @@ class TextBoxLayer(QWidget):
             w.apply_style_dict(style)
             self._notify_changed()
 
-    def edit_selected(self) -> None:
+    def edit_selected(self, *, caret_at_end: bool = False) -> None:
         if self._selected_id and self._selected_id in self._widgets:
-            self._widgets[self._selected_id].start_editing()
+            self._widgets[self._selected_id].start_editing(caret_at_end=caret_at_end)
+
+    def focus_selected_caret_at_end(self) -> bool:
+        if not self._selected_id:
+            return False
+        w = self._widgets.get(self._selected_id)
+        if w is None:
+            return False
+        w.focus_caret_at_end()
+        return True
 
     def finish_all_editing(self) -> None:
         for w in self._widgets.values():
