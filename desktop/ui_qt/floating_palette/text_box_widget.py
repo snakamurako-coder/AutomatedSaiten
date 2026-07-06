@@ -45,7 +45,7 @@ _CORNER_CURSORS = {
 class _CornerHandle(QFrame):
     """選択時に四隅へ表示するリサイズ用グラバー。"""
 
-    def __init__(self, corner: str, owner: TextBoxWidget) -> None:
+    def __init__(self, corner: str, owner: "TextBoxWidget") -> None:
         super().__init__(owner)
         self._corner = corner
         self._owner = owner
@@ -111,11 +111,7 @@ class TextBoxWidget(QFrame):
         self.setMouseTracking(True)
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(0)
-
-        self._body = QFrame()
+        self._body = QFrame(self)
         self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._body.setMouseTracking(True)
         body_lay = QVBoxLayout(self._body)
@@ -154,7 +150,6 @@ class TextBoxWidget(QFrame):
         self._text_stack.addWidget(self._editor)
         self._text_stack.setCurrentWidget(self._display_label)
         body_lay.addWidget(self._text_stack, 1)
-        root.addWidget(self._body, 1)
 
         self._handles: dict[str, _CornerHandle] = {
             corner: _CornerHandle(corner, self) for corner in ("tl", "tr", "bl", "br")
@@ -394,6 +389,7 @@ class TextBoxWidget(QFrame):
             self._display_label.setText(
                 str(self._box.get("text") if self._box.get("text") is not None else self._editor.toPlainText())
             )
+        self._update_handles()
 
     def _setup_tight_document(self) -> None:
         doc = self._editor.document()
@@ -454,32 +450,103 @@ class TextBoxWidget(QFrame):
         self._press_moved = False
         self._moving = False
 
+    def _begin_resize(self, corner: str, global_pos: QPoint) -> None:
+        if not self._selected:
+            self.selected.emit(self.box_id)
+        self._press_origin = None
+        self._moving = False
+        self._resizing = True
+        self._resize_corner = corner
+        self._resize_origin = global_pos
+        ox = float(self._box.get("x") or 0)
+        oy = float(self._box.get("y") or 0)
+        ow = float(self._box.get("width") or _MIN_NATIVE_W)
+        oh = float(self._box.get("height") or _MIN_NATIVE_H)
+        self._resize_orig_box = (ox, oy, ow, oh)
+        self.grabMouse()
+
+    def _update_resize(self, global_pos: QPoint) -> None:
+        if not self._resizing or self._resize_corner is None or self._resize_orig_box is None:
+            return
+        delta = global_pos - self._resize_origin
+        ds = self._scale
+        dx = delta.x() * ds
+        dy = delta.y() * ds
+        ox, oy, ow, oh = self._resize_orig_box
+        x, y, w, h = ox, oy, ow, oh
+        corner = self._resize_corner
+
+        if corner in ("br", "tr"):
+            w = max(_MIN_NATIVE_W, ow + dx)
+        if corner in ("bl", "tl"):
+            w = max(_MIN_NATIVE_W, ow - dx)
+            x = ox + ow - w
+        if corner in ("br", "bl"):
+            h = max(_MIN_NATIVE_H, oh + dy)
+        if corner in ("tr", "tl"):
+            h = max(_MIN_NATIVE_H, oh - dy)
+            y = oy + oh - h
+
+        self._box["x"] = x
+        self._box["y"] = y
+        self._box["width"] = w
+        self._box["height"] = h
+        self._apply_geometry()
+
+    def _end_resize(self) -> None:
+        if self._resizing:
+            self.changed.emit()
+        if self.mouseGrabber() is self:
+            self.releaseMouse()
+        self._resizing = False
+        self._resize_corner = None
+        self._resize_orig_box = None
+
+    def _point_in_body(self, pos: QPoint) -> bool:
+        return self._body.geometry().contains(pos)
+
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton and not self._editing:
+            if not self._point_in_body(event.position().toPoint()):
+                super().mousePressEvent(event)
+                return
             self._begin_pointer(event.globalPosition().toPoint())
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._resizing:
+            self._update_resize(event.globalPosition().toPoint())
+            event.accept()
+            return
         if event.buttons() & Qt.LeftButton:
             self._update_move_drag(event.globalPosition().toPoint())
             if self._moving:
                 event.accept()
                 return
-        if not self._editing:
+        if not self._editing and self._point_in_body(event.position().toPoint()):
             self.setCursor(Qt.CursorShape.SizeAllCursor)
+        else:
+            self.unsetCursor()
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            self._end_pointer()
+            if self._resizing:
+                self._end_resize()
+            else:
+                self._end_pointer()
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
     def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and not self._editing:
+        if (
+            event.button() == Qt.LeftButton
+            and not self._editing
+            and self._point_in_body(event.position().toPoint())
+        ):
             self.selected.emit(self.box_id)
             self.start_editing()
             event.accept()
