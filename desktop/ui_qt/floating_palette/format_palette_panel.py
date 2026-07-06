@@ -181,8 +181,8 @@ class FormatPalettePanel(QWidget):
     def set_speech_mode(self, mode: str) -> None:
         if mode == "windows":
             self._speech_btn.setToolTip(
-                "Windows 音声入力（Win+H）を起動。"
-                "画面上部の音声入力バーで話すと、テキストボックスに直接入力されます。"
+                "テキストボックス選択中は Windows 音声入力（Win+H）。"
+                "未選択時はアプリ内認識で話し、確定後に配置場所をクリック。"
             )
         else:
             self._speech_btn.setToolTip(

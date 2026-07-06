@@ -555,17 +555,29 @@ class PaletteController:
             self._on_tool_changed(TOOL_TEXT)
 
     def _on_format_speech_toggled(self, on: bool) -> None:
-        if load_speech_input_mode() == SPEECH_MODE_WINDOWS:
+        if not on:
+            if self._windows_speech_active:
+                self._stop_speech()
+            else:
+                self._finalize_app_speech()
+            return
+        if (
+            load_speech_input_mode() == SPEECH_MODE_WINDOWS
+            and self._has_selected_text_box()
+        ):
             self._on_windows_speech_toggled(on)
             return
-        if not on:
-            self._finalize_app_speech()
-            return
+        self._start_app_speech()
+
+    def _start_app_speech(self) -> None:
+        """アプリ内認識を開始（未選択時は確認後に配置場所をクリック）。"""
         self._cancel_speech_placement()
         if self._has_selected_text_box():
             if not self._ensure_speech_target_editing():
                 self.tool_window.format_panel.set_speech_active(False)
                 return
+        else:
+            self.tool_window.show_text_mode()
         self.tool_window.format_panel.set_speech_phase("preparing")
         self._speech_manual_finalize = False
         self._speech.start()
@@ -590,18 +602,8 @@ class PaletteController:
             self._speech_manual_finalize = False
 
     def _on_windows_speech_toggled(self, on: bool) -> None:
-        from ui_qt import helpers as h
-
         if not on:
             self._stop_speech()
-            return
-        if not self._has_selected_text_box():
-            self.tool_window.format_panel.set_speech_active(False)
-            h.warn(
-                self._main,
-                "音声入力",
-                "Windows 音声入力はテキストボックスを選択してからご利用ください",
-            )
             return
         if not self._ensure_speech_target_editing():
             self.tool_window.format_panel.set_speech_active(False)
