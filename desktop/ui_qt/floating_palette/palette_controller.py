@@ -227,16 +227,38 @@ class PaletteController:
         if not self._page:
             return
         for stack in self._page.palette_ink_stacks():
+            self._bind_stack(stack)
+
+    def _bind_stack(self, stack: CropInkImageStack) -> None:
+        self._unbind_stack(stack)
+        stack.set_before_ink_draw(self.finish_all_text_editing)
+
+        def on_image_clicked() -> None:
+            self._on_stack_image_clicked(stack)
+
+        stack._palette_on_image_clicked = on_image_clicked  # type: ignore[attr-defined]
+        stack.text_layer.selection_changed.connect(self._on_text_selection)
+        stack.image_clicked.connect(on_image_clicked)
+        color, width, alpha = self.tool_window.current_brush()
+        stack.set_palm_rejection(self._palm_rejection)
+        stack.set_show_ink(self._show_ink)
+        stack.set_show_text(self._show_text)
+        stack.set_eraser_mode(self._eraser_mode)
+        stack.set_tool_mode(self._tool)
+        stack.set_brush(color, width, alpha)
+
+    def _unbind_stack(self, stack: CropInkImageStack) -> None:
+        try:
+            stack.text_layer.selection_changed.disconnect(self._on_text_selection)
+        except (RuntimeError, TypeError):
+            pass
+        handler = getattr(stack, "_palette_on_image_clicked", None)
+        if handler is not None:
             try:
-                stack.text_layer.selection_changed.disconnect(self._on_text_selection)
+                stack.image_clicked.disconnect(handler)
             except (RuntimeError, TypeError):
                 pass
-            try:
-                stack.image_clicked.disconnect(self._on_stack_image_clicked)
-            except (RuntimeError, TypeError):
-                pass
-            stack.text_layer.selection_changed.connect(self._on_text_selection)
-            stack.image_clicked.connect(self._on_stack_image_clicked)
+            delattr(stack, "_palette_on_image_clicked")
 
     def _stacks(self) -> list[CropInkImageStack]:
         if not self._page:
@@ -274,15 +296,13 @@ class PaletteController:
         self.tool_window.show_text_mode()
         self.tool_window.format_panel.load_style(box.get("style") or {})
 
-    def _on_stack_image_clicked(self) -> None:
-        sender = self.sender()
-        if isinstance(sender, CropInkImageStack):
-            self._active_stack = sender
+    def _on_stack_image_clicked(self, stack: CropInkImageStack) -> None:
+        self._active_stack = stack
         if self._tool != TOOL_TEXT:
             return
-        for stack in self._stacks():
-            stack.text_layer.finish_all_editing()
-            stack.text_layer.clear_selection()
+        for s in self._stacks():
+            s.text_layer.finish_all_editing()
+            s.text_layer.clear_selection()
 
     def _resolve_active_stack(self) -> CropInkImageStack | None:
         if self._active_stack is not None and self._active_stack in self._stacks():
@@ -453,13 +473,4 @@ class PaletteController:
 
     def register_stack(self, stack: CropInkImageStack) -> None:
         """新規タイル生成後に呼ぶ。"""
-        stack.set_before_ink_draw(self.finish_all_text_editing)
-        stack.text_layer.selection_changed.connect(self._on_text_selection)
-        stack.image_clicked.connect(self._on_stack_image_clicked)
-        color, width, alpha = self.tool_window.current_brush()
-        stack.set_palm_rejection(self._palm_rejection)
-        stack.set_show_ink(self._show_ink)
-        stack.set_show_text(self._show_text)
-        stack.set_eraser_mode(self._eraser_mode)
-        stack.set_tool_mode(self._tool)
-        stack.set_brush(color, width, alpha)
+        self._bind_stack(stack)
