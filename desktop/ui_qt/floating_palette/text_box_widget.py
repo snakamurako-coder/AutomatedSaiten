@@ -142,6 +142,11 @@ class TextBoxWidget(QFrame):
         self._set_editing_mode(True)
         QTimer.singleShot(0, self._focus_editor)
 
+    def _focus_editor(self) -> None:
+        if not self._editing:
+            return
+        self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
+
     def finish_editing(self) -> None:
         if not self._editing:
             return

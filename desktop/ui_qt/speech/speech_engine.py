@@ -141,6 +141,7 @@ class SpeechEngine(QWidget):
         self._channel = None
         self._ready = False
         self._listening = False
+        self._paused = False
         self._start_pending = False
         self._want_listening = False
 
@@ -214,10 +215,23 @@ class SpeechEngine(QWidget):
         self._run_js("window.speechStart && window.speechStart();")
 
     def stop(self) -> None:
+        self._paused = False
         self._want_listening = False
         self._start_pending = False
         self._run_js("window.speechStop && window.speechStop();")
         self._set_listening(False)
+
+    def pause(self) -> None:
+        """確認ダイアログ表示中など、認識だけ一時停止（音声入力トグルはオンのまま）。"""
+        self._paused = True
+        self._run_js("window.speechStop && window.speechStop();")
+        self._set_listening(False)
+
+    def resume(self) -> None:
+        """一時停止後に認識を再開。"""
+        self._paused = False
+        if self._want_listening and self._ready and not self._listening:
+            self._begin_recognition()
 
     def _set_listening(self, on: bool) -> None:
         if self._listening == on:
@@ -255,6 +269,6 @@ class SpeechEngine(QWidget):
             QTimer.singleShot(120, self._restart_if_wanted)
 
     def _restart_if_wanted(self) -> None:
-        if not self._want_listening or self._listening:
+        if self._paused or not self._want_listening or self._listening:
             return
         self._begin_recognition()

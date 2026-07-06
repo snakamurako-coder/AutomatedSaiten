@@ -18,6 +18,7 @@ from ui_qt.floating_palette.palette_prefs import (
 )
 from ui_qt.floating_palette.tool_palette_window import MODE_DRAW, MODE_TEXT, ToolPaletteWindow
 from ui_qt.speech import SpeechEngine
+from ui_qt.speech.speech_confirm_dialog import SpeechConfirmDialog, SpeechConfirmResult
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.stylus_prefs import load_stylus_prefs
 
@@ -84,6 +85,7 @@ class PaletteController:
         self._speech.transcript_received.connect(self._on_speech_transcript)
         self._speech.error.connect(self._on_speech_error)
         self._speech.listening_changed.connect(self._on_speech_listening_changed)
+        self._speech_confirm_open = False
         fp.set_speech_available(SpeechEngine.is_available())
 
         self.tool_window.set_view_mode(str(prefs.get("view_mode") or "simple"))
@@ -352,9 +354,25 @@ class PaletteController:
         return False
 
     def _on_speech_transcript(self, text: str) -> None:
-        for stack in self._stacks():
-            if stack.text_layer.append_transcript_to_selected(text):
-                return
+        chunk = str(text or "").strip()
+        if not chunk or self._speech_confirm_open:
+            return
+        self._speech.pause()
+        self._speech_confirm_open = True
+        try:
+            dlg = SpeechConfirmDialog(self._main, chunk)
+            result = dlg.exec()
+            if result == SpeechConfirmResult.ACCEPT:
+                for stack in self._stacks():
+                    if stack.text_layer.append_transcript_to_selected(chunk):
+                        break
+                self._speech.resume()
+            elif result == SpeechConfirmResult.RETRY:
+                self._speech.resume()
+            else:
+                self._stop_speech()
+        finally:
+            self._speech_confirm_open = False
 
     def _on_speech_error(self, message: str) -> None:
         from ui_qt import helpers as h
