@@ -80,10 +80,8 @@ class SettingsDialog(QDialog):
         )
         root.addWidget(self._tabs, 1)
 
-        self._build_ocr_tab(cfg)
-        self._build_api_tab(cfg)
-        self._build_stylus_tab(cfg)
-        self._build_text_tab()
+        self._build_ocr_feature_tab(cfg)
+        self._build_drawing_tools_tab(cfg)
         self._build_speech_tab(cfg)
         self._build_misc_tab(cfg)
 
@@ -106,13 +104,15 @@ class SettingsDialog(QDialog):
             lay.addWidget(h.caption_label(caption))
         return page, lay
 
-    def _build_ocr_tab(self, cfg: dict) -> None:
+    def _build_ocr_feature_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page(
-            "OCR エンジンと Tesseract のパスを設定します。Vision API は③テキスト化で使用します。"
+            "OCR（光学文字認識）は、答案画像に写っている手書き・活字の文字を"
+            "テキストデータに変換する機能です。③テキスト化ステップで使用します。"
         )
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(10)
+
+        ocr_form = QFormLayout()
+        ocr_form.setContentsMargins(0, 0, 0, 0)
+        ocr_form.setSpacing(10)
 
         engine_row = QVBoxLayout()
         self.engine_tesseract = QRadioButton("Tesseract（ローカル・無料）")
@@ -123,42 +123,42 @@ class SettingsDialog(QDialog):
             self.engine_tesseract.setChecked(True)
         engine_row.addWidget(self.engine_tesseract)
         engine_row.addWidget(self.engine_vision)
-        form.addRow("OCR エンジン", engine_row)
+        ocr_form.addRow("OCR エンジン", engine_row)
 
         tess_row = QHBoxLayout()
         self.tesseract_edit = QLineEdit(cfg.get("tesseract_cmd") or "")
         tess_row.addWidget(self.tesseract_edit, 1)
         tess_row.addWidget(h.button("参照…", self._browse_tesseract))
-        form.addRow("Tesseract 実行ファイル", tess_row)
-        form.addRow("", h.caption_label("未指定の場合は PATH 上の tesseract を使用します。"))
+        ocr_form.addRow("Tesseract 実行ファイル", tess_row)
+        ocr_form.addRow("", h.caption_label("未指定の場合は PATH 上の tesseract を使用します。"))
+        lay.addLayout(ocr_form)
 
-        lay.addLayout(form)
-        lay.addStretch()
-        self._tabs.addTab(page, "OCR")
-
-    def _build_api_tab(self, cfg: dict) -> None:
-        page, lay = self._tab_page(
-            "API キーは desktop/config.json に保存されます（Git には含めないでください）。"
+        lay.addWidget(h.caption_label("API キー"))
+        lay.addWidget(
+            h.caption_label(
+                "API キーは desktop/config.json に保存されます（Git には含めないでください）。"
+            )
         )
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-        form.setSpacing(10)
+
+        api_form = QFormLayout()
+        api_form.setContentsMargins(0, 0, 0, 0)
+        api_form.setSpacing(10)
 
         vision_row = QHBoxLayout()
         self.vision_edit = QLineEdit(cfg.get("vision_api_key") or "")
         self.vision_edit.setEchoMode(QLineEdit.Password)
         vision_row.addWidget(self.vision_edit, 1)
         vision_row.addWidget(h.button("接続確認", self._test_vision))
-        form.addRow("Vision API キー", vision_row)
+        api_form.addRow("Vision API キー", vision_row)
 
         gemini_row = QHBoxLayout()
         self.gemini_edit = QLineEdit(cfg.get("gemini_api_key") or "")
         self.gemini_edit.setEchoMode(QLineEdit.Password)
         gemini_row.addWidget(self.gemini_edit, 1)
         gemini_row.addWidget(h.button("接続確認", self._test_gemini))
-        form.addRow("Gemini API キー", gemini_row)
-        form.addRow("", h.caption_label("Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。"))
-        form.addRow(
+        api_form.addRow("Gemini API キー", gemini_row)
+        api_form.addRow("", h.caption_label("Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。"))
+        api_form.addRow(
             "",
             h.caption_label(
                 "Vision API キーは「HTTP リファラー（ウェブサイト）」制限では使えません。"
@@ -166,31 +166,21 @@ class SettingsDialog(QDialog):
                 "設定後は「適用して保存」または「保存して閉じる」を押してください。"
             ),
         )
-
-        lay.addLayout(form)
+        lay.addLayout(api_form)
         lay.addStretch()
-        self._tabs.addTab(page, "API キー")
+        self._tabs.addTab(page, "OCR機能")
 
-    def _build_stylus_tab(self, cfg: dict) -> None:
-        page, lay = self._tab_page("スタイラス入力と手書きレイヤーの動作を設定します。")
-        form = QFormLayout()
-        form.setContentsMargins(0, 0, 0, 0)
-
-        self.palm_rejection_check = QCheckBox("パームリジェクション（指・手のひらを無視）")
-        self.palm_rejection_check.setChecked(bool(cfg.get("stylus_palm_rejection", True)))
-        self.palm_rejection_check.setToolTip(
-            "ON: スタイラスペンのみ手書き（指・マウスは選択操作）\n"
-            "OFF: 指・タッチペン・マウスでも手書き可能"
-        )
-        form.addRow("", self.palm_rejection_check)
-
-        lay.addLayout(form)
-        lay.addStretch()
-        self._tabs.addTab(page, "スタイラス")
-
-    def _build_text_tab(self) -> None:
+    def _build_drawing_tools_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page(
-            "書式タブで選べるテンプレート文字色（6色）。B パターンの背景は文字色の補色になります。"
+            "描画ツールで注釈するテキストの色やスタイラス入力の動作を設定します。"
+            "各色のサンプルをクリックすると、色選択ダイアログで細かく色を設定できます。"
+        )
+
+        lay.addWidget(h.caption_label("テキスト注釈"))
+        lay.addWidget(
+            h.caption_label(
+                "書式タブで選べるテンプレート文字色（6色）。B パターンの背景は文字色の補色になります。"
+            )
         )
 
         palette_row = QHBoxLayout()
@@ -210,9 +200,23 @@ class SettingsDialog(QDialog):
         palette_row.addWidget(reset_btn)
         palette_row.addStretch()
         lay.addLayout(palette_row)
-        lay.addStretch()
         self._refresh_text_palette_btns()
-        self._tabs.addTab(page, "テキスト注釈")
+
+        lay.addWidget(h.caption_label("スタイラス"))
+        stylus_form = QFormLayout()
+        stylus_form.setContentsMargins(0, 0, 0, 0)
+
+        self.palm_rejection_check = QCheckBox("パームリジェクション（指・手のひらを無視）")
+        self.palm_rejection_check.setChecked(bool(cfg.get("stylus_palm_rejection", True)))
+        self.palm_rejection_check.setToolTip(
+            "ON: スタイラスペンのみ手書き（指・マウスは選択操作）\n"
+            "OFF: 指・タッチペン・マウスでも手書き可能"
+        )
+        stylus_form.addRow("", self.palm_rejection_check)
+
+        lay.addLayout(stylus_form)
+        lay.addStretch()
+        self._tabs.addTab(page, "描画ツール")
 
     def _build_speech_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page("テキストボックスへの音声入力方法を選びます。")
