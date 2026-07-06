@@ -121,7 +121,7 @@ class _WinrtSpeechWorker(_SpeechWorkerBase):
             except Exception as exc:
                 self.error.emit(f"音声認識エラー: {exc}")
 
-        session.result_generated += on_result
+        result_token = session.add_result_generated(on_result)
 
         try:
             while not self._stop_event.is_set():
@@ -134,6 +134,7 @@ class _WinrtSpeechWorker(_SpeechWorkerBase):
                     session_active = False
                 await asyncio.sleep(0.05)
         finally:
+            session.remove_result_generated(result_token)
             if session_active:
                 try:
                     await session.stop_async()
