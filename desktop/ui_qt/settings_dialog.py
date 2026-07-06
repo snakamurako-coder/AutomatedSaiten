@@ -26,8 +26,8 @@ from PySide6.QtWidgets import (
 from config import CONFIG_PATH, load_config, save_config
 from ui_qt.speech.speech_prefs import (
     DEFAULT_SPEECH_MODE,
+    SPEECH_MODE_APP,
     SPEECH_MODE_WINDOWS,
-    save_speech_input_mode,
 )
 from services.gemini_rubric import test_gemini_api_key
 from services.ocr import test_vision_api_key
@@ -287,22 +287,22 @@ class SettingsDialog(QDialog):
             self.tesseract_edit.setText(path)
 
     def _collect(self) -> dict:
+        speech_mode = SPEECH_MODE_APP
+        if sys.platform == "win32" and self.speech_windows is not None and self.speech_windows.isChecked():
+            speech_mode = SPEECH_MODE_WINDOWS
         return {
             "vision_api_key": self.vision_edit.text().strip(),
             "ocr_engine": "vision" if self.engine_vision.isChecked() else "tesseract",
             "default_orientation": self.orientation_combo.currentText(),
             "tesseract_cmd": self.tesseract_edit.text().strip(),
             "gemini_api_key": self.gemini_edit.text().strip(),
+            "speech_input_mode": speech_mode,
         }
 
     def _persist_settings(self) -> bool:
         cfg = load_config()
         cfg.update(self._collect())
         cfg["stylus_palm_rejection"] = self.palm_rejection_check.isChecked()
-        if sys.platform == "win32" and self.speech_windows is not None and self.speech_windows.isChecked():
-            save_speech_input_mode(SPEECH_MODE_WINDOWS)
-        else:
-            save_speech_input_mode(SPEECH_MODE_APP)
         if cfg["ocr_engine"] == "vision" and not cfg["vision_api_key"]:
             h.warn(self, "設定エラー", "OCR エンジンが Vision API の場合、Vision API キーを入力してください。")
             return False
