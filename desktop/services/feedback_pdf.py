@@ -284,6 +284,71 @@ def _draw_ink_strokes_pdf(page: fitz.Page, strokes: list[dict[str, Any]]) -> Non
         start_cap.commit()
 
 
+def build_feedback_pdf_document(
+    warped_path: str,
+    fields: list[dict[str, Any]],
+    output_slots: list[dict[str, Any]],
+    field_marks: dict[str, dict[str, Any]],
+    totals: dict[str, Any],
+    style: dict[str, Any],
+    *,
+    ink_strokes: list[dict[str, Any]] | None = None,
+    text_annotations: list[dict[str, Any]] | None = None,
+    jpeg_quality: int = 92,
+) -> fitz.Document:
+    """個票 PDF をメモリ上に構築する。呼び出し側で close() すること。"""
+    bgr = imread_bgr(warped_path)
+    if bgr is None:
+        raise ValueError(f"補正画像を読み込めません: {warped_path}")
+
+    h_px, w_px = bgr.shape[:2]
+    ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
+    if not ok:
+        raise ValueError("補正画像の JPEG エンコードに失敗しました")
+
+    doc = fitz.open()
+    page = doc.new_page(width=w_px, height=h_px)
+    page.insert_image(fitz.Rect(0, 0, w_px, h_px), stream=bytes(buf))
+
+    for f in fields:
+        marks = field_marks.get(f["id"]) or field_marks.get(f.get("displayName") or "") or {}
+        _draw_mark_pdf(
+            page,
+            float(f["x"]),
+            float(f["y"]),
+            float(f["width"]),
+            float(f["height"]),
+            str(marks.get("judgment") or ""),
+            marks.get("score"),
+            style,
+        )
+    for slot in output_slots:
+        _draw_total_pdf(page, slot, totals.get(slot["slotKey"]), style)
+    if text_annotations:
+        _draw_text_annotations_pdf(page, text_annotations)
+    if ink_strokes:
+        _draw_ink_strokes_pdf(page, ink_strokes)
+    return doc
+
+
+def rasterize_pdf_bytes(pdf_bytes: bytes, *, scale: float = 2.0) -> Image.Image:
+    """ベクトル PDF をプレビュー用にラスター化する（拡大しても線・文字が滑らか）。"""
+    from PIL import Image
+
+    doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+    try:
+        page = doc[0]
+        matrix = fitz.Matrix(float(scale), float(scale))
+        pix = page.get_pixmap(matrix=matrix, alpha=False)
+        return Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
+    finally:
+        doc.close()
+
+
+def pdf_document_to_bytes(doc: fitz.Document) -> bytes:
+    return doc.tobytes(deflate=True, garbage=3)
+
+
 def render_feedback_pdf(
     warped_path: str,
     fields: list[dict[str, Any]],
@@ -298,42 +363,21 @@ def render_feedback_pdf(
     jpeg_quality: int = 92,
 ) -> Path:
     """補正画像を背景ラスター、上物をベクトルとして PDF に書き出す。"""
-    bgr = imread_bgr(warped_path)
-    if bgr is None:
-        raise ValueError(f"補正画像を読み込めません: {warped_path}")
-
-    h_px, w_px = bgr.shape[:2]
-    ok, buf = cv2.imencode(".jpg", bgr, [int(cv2.IMWRITE_JPEG_QUALITY), int(jpeg_quality)])
-    if not ok:
-        raise ValueError("補正画像の JPEG エンコードに失敗しました")
-
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    doc = fitz.open()
+    doc = build_feedback_pdf_document(
+        warped_path,
+        fields,
+        output_slots,
+        field_marks,
+        totals,
+        style,
+        ink_strokes=ink_strokes,
+        text_annotations=text_annotations,
+        jpeg_quality=jpeg_quality,
+    )
     try:
-        page = doc.new_page(width=w_px, height=h_px)
-        page.insert_image(fitz.Rect(0, 0, w_px, h_px), stream=bytes(buf))
-
-        for f in fields:
-            marks = field_marks.get(f["id"]) or field_marks.get(f.get("displayName") or "") or {}
-            _draw_mark_pdf(
-                page,
-                float(f["x"]),
-                float(f["y"]),
-                float(f["width"]),
-                float(f["height"]),
-                str(marks.get("judgment") or ""),
-                marks.get("score"),
-                style,
-            )
-        for slot in output_slots:
-            _draw_total_pdf(page, slot, totals.get(slot["slotKey"]), style)
-        if text_annotations:
-            _draw_text_annotations_pdf(page, text_annotations)
-        if ink_strokes:
-            _draw_ink_strokes_pdf(page, ink_strokes)
-
         doc.save(str(out_path))
     finally:
         doc.close()

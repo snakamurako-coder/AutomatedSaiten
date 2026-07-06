@@ -35,10 +35,13 @@ from models.output_repo import (
     save_output_slots,
 )
 from models.test_repo import get_test_info
+from services.feedback_exporter import (
+    rasterize_feedback_preview,
+    render_feedback_preview,
+)
 from services.feedback_renderer import (
     _load_rows_with_extras,
     batch_generate_feedback,
-    render_feedback_for_row,
 )
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import ZoomControls
@@ -94,7 +97,7 @@ class Step10Page(QWidget):
         self.app = app
         self._slot_print_modes: dict[str, str] = {}
         self._rows: list[dict[str, Any]] = []
-        self._preview_image = None
+        self._preview_state: dict[str, Any] | None = None
         self._preview_scroll: QScrollArea | None = None
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -252,6 +255,10 @@ class Step10Page(QWidget):
         self.preview_zoom = ZoomControls(min_pct=10, max_pct=400, value=100)
         self.preview_zoom.connect_zoom_changed(self._update_preview_pixmap)
         lay.addWidget(self.preview_zoom)
+        self.preview_mode_label = h.caption_label(
+            "出力形式が PDF のとき、プレビューでもベクトル合成の見た目を表示します。"
+        )
+        lay.addWidget(self.preview_mode_label)
 
         preview_scroll = _PreviewScrollArea()
         preview_scroll.setWidgetResizable(False)
@@ -286,7 +293,7 @@ class Step10Page(QWidget):
         lay.addWidget(
             h.caption_label(
                 "PDF は手書き・テキストボックス・判定マークをベクトル描画します。"
-                "プレビューは参考表示（ラスター）です。"
+                "「1件プレビュー」でも PDF 形式時はその見た目を確認できます。"
             )
         )
         ctrl = QHBoxLayout()
@@ -483,43 +490,74 @@ class Step10Page(QWidget):
             return
         row = self._rows[idx]
         test_id = self.app.active_test_id
+        export_format = str(self.export_format_combo.currentData() or "pdf")
+        self._preview_state = None
         self.preview_host.set_pixmap(None)
         self.preview_host.set_placeholder("合成中…")
 
-        def done(img, err):
+        def done(result, err):
             if err:
                 self.preview_host.set_placeholder(
                     "「1件プレビュー」で個票の合成結果を確認できます"
                 )
+                self.preview_mode_label.setText(
+                    "出力形式が PDF のとき、プレビューでもベクトル合成の見た目を表示します。"
+                )
                 h.error(self, "プレビューエラー", str(err))
                 return
-            self._preview_image = img
+            self._preview_state = result
+            if result.get("mode") == "pdf":
+                self.preview_mode_label.setText(
+                    "プレビュー: PDF ベクトル合成 — ズームを上げると手書き・文字の鮮明さを確認できます"
+                )
+            else:
+                fmt_label = "JPEG" if export_format == "jpeg" else "PNG"
+                self.preview_mode_label.setText(f"プレビュー: {fmt_label} ラスター出力")
             self._fit_preview_zoom_to_viewport()
             self._update_preview_pixmap()
 
-        h.run_in_thread(self, lambda: render_feedback_for_row(test_id, row), done)
+        h.run_in_thread(
+            self,
+            lambda: render_feedback_preview(test_id, row, export_format),
+            done,
+        )
 
     def _fit_preview_zoom_to_viewport(self) -> None:
         """ビューポート幅に収まる倍率を初期設定（全体が見えるように）。"""
-        if self._preview_image is None or self._preview_scroll is None:
+        if self._preview_state is None or self._preview_scroll is None:
             return
+        native_w, _native_h = self._preview_state["native_size"]
         vw = max(120, self._preview_scroll.viewport().width() - 4)
-        iw = max(1, self._preview_image.width)
+        iw = max(1, int(native_w))
         pct = max(10, min(400, int(vw / iw * 100)))
         self.preview_zoom.set_zoom_value(pct)
 
     def _update_preview_pixmap(self) -> None:
         if self._preview_scroll is None:
             return
-        if self._preview_image is None:
+        if self._preview_state is None:
             self.preview_host.set_pixmap(None)
             self._apply_preview_scroll_height(72, 480)
             return
         zoom = max(10, min(400, self.preview_zoom.zoom_value())) / 100.0
-        pix = pil_to_qpixmap(self._preview_image)
-        w = max(1, int(round(pix.width() * zoom)))
-        h = max(1, int(round(pix.height() * zoom)))
-        scaled = pix.scaled(w, h, Qt.AspectRatioMode.KeepAspectRatio, Qt.SmoothTransformation)
+        native_w, native_h = self._preview_state["native_size"]
+        target_w = max(1, int(round(native_w * zoom)))
+        target_h = max(1, int(round(native_h * zoom)))
+
+        if self._preview_state.get("mode") == "pdf":
+            img = rasterize_feedback_preview(
+                self._preview_state, zoom_pct=self.preview_zoom.zoom_value()
+            )
+        else:
+            img = self._preview_state["image"]
+
+        pix = pil_to_qpixmap(img)
+        scaled = pix.scaled(
+            target_w,
+            target_h,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
         scaled.setDevicePixelRatio(1.0)
         self.preview_host.set_pixmap(scaled)
         self._apply_preview_scroll_height(scaled.height(), scaled.width())

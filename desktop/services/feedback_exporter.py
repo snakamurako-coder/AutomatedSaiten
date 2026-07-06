@@ -11,7 +11,12 @@ from models.ink_repo import collect_warped_ink_strokes
 from models.output_repo import get_feedback_export_format, get_feedback_style
 from models.text_annotation_repo import collect_warped_text_annotations
 from models.test_repo import get_test_info
-from services.feedback_pdf import render_feedback_pdf
+from services.feedback_pdf import (
+    build_feedback_pdf_document,
+    pdf_document_to_bytes,
+    rasterize_pdf_bytes,
+    render_feedback_pdf,
+)
 from services.feedback_renderer import build_feedback_payload, render_feedback_image
 
 FeedbackExportFormat = Literal["pdf", "jpeg", "png"]
@@ -104,3 +109,68 @@ def export_feedback_row(
 
 def _safe_name(value: str) -> str:
     return "".join(c for c in str(value or "") if c not in '\\/:*?"<>|').strip() or "無名"
+
+
+def render_feedback_preview(
+    test_id: str,
+    row: dict[str, Any],
+    fmt: FeedbackExportFormat | str | None = None,
+) -> dict[str, Any]:
+    """1 件プレビュー用。PDF 形式時はベクトル PDF を生成し、表示用に高解像度ラスター化する。"""
+    export_fmt = normalize_export_format(fmt)  # type: ignore[assignment]
+    data = gather_row_render_data(test_id, row)
+    payload = data["payload"]
+
+    if export_fmt == "pdf":
+        doc = build_feedback_pdf_document(
+            data["warped_path"],
+            payload["fields"],
+            payload["outputSlots"],
+            payload["fieldMarks"],
+            payload["totals"],
+            data["style"],
+            ink_strokes=data["ink_strokes"],
+            text_annotations=data["text_annotations"],
+        )
+        try:
+            page = doc[0]
+            native_size = (int(round(page.rect.width)), int(round(page.rect.height)))
+            pdf_bytes = pdf_document_to_bytes(doc)
+        finally:
+            doc.close()
+        return {
+            "mode": "pdf",
+            "pdf_bytes": pdf_bytes,
+            "native_size": native_size,
+            "image": rasterize_pdf_bytes(pdf_bytes, scale=2.0),
+        }
+
+    image = render_feedback_image(
+        data["warped_path"],
+        payload["fields"],
+        payload["outputSlots"],
+        payload["fieldMarks"],
+        payload["totals"],
+        style=data["style"],
+        ink_strokes=data["ink_strokes"],
+        text_annotations=data["text_annotations"],
+    )
+    return {
+        "mode": "raster",
+        "pdf_bytes": None,
+        "native_size": image.size,
+        "image": image,
+    }
+
+
+def rasterize_feedback_preview(
+    preview: dict[str, Any],
+    *,
+    zoom_pct: float,
+) -> Image.Image:
+    """プレビュー表示倍率に応じて PDF を再ラスター化する（ズーム時もベクトルの鮮明さを維持）。"""
+    zoom = max(0.1, float(zoom_pct) / 100.0)
+    if preview.get("mode") == "pdf" and preview.get("pdf_bytes"):
+        scale = max(2.0, zoom * 2.0)
+        return rasterize_pdf_bytes(preview["pdf_bytes"], scale=scale)
+    return preview["image"]
