@@ -72,7 +72,7 @@ class FormatPalettePanel(QWidget):
         self._speech_btn.setCheckable(True)
         self._speech_btn.setToolTip(
             "マイクで音声をテキストに追加"
-            "（話したあと少し間を空けると認識されます・Windows 音声設定が必要）"
+            "（要ネット・話したあと少し間を空けると認識されます）"
         )
         self._speech_btn.toggled.connect(self._on_speech_toggled)
         del_btn = QPushButton("削除")

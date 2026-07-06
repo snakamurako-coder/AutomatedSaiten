@@ -509,8 +509,14 @@ class PaletteController:
     def _on_speech_error(self, message: str) -> None:
         from ui_qt import helpers as h
 
+        msg = str(message or "").strip()
+        if not msg:
+            return
+        if msg.startswith("音声が検出されません"):
+            h.warn(self._main, "音声入力", msg)
+            return
         self._stop_speech()
-        h.warn(self._main, "音声入力", message)
+        h.warn(self._main, "音声入力", msg)
 
     def _on_speech_listening_changed(self, on: bool) -> None:
         self.tool_window.format_panel.set_speech_active(on)

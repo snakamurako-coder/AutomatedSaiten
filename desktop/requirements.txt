@@ -7,8 +7,6 @@ requests>=2.31.0
 pytesseract>=0.3.10
 pymupdf>=1.24.0
 PySide6>=6.7.0
-winrt-Windows.Media.SpeechRecognition>=2.0.0; sys_platform == "win32"
-winrt-Windows.Foundation>=2.0.0; sys_platform == "win32"
-winrt-Windows.Globalization>=2.0.0; sys_platform == "win32"
-SpeechRecognition>=3.10.0; sys_platform != "win32"
+SpeechRecognition>=3.10.0
+soundcard>=0.4.2; sys_platform == "win32"
 PyAudio>=0.2.14; sys_platform != "win32"
