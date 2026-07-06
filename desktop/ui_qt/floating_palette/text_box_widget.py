@@ -1,4 +1,4 @@
-"""テキストボックス1件の UI。"""
+"""テキストボックス1件の UI（移動・ダブルクリック編集・自動サイズ）。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from PySide6.QtGui import (
     QColor,
     QCursor,
     QFont,
+    QFontMetrics,
     QMouseEvent,
     QPalette,
     QTextBlockFormat,
@@ -26,66 +27,20 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.text_annotation_repo import DEFAULT_TEXT_STYLE, resolve_text_style
+from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
 
-_INNER_PAD_PX = 1
-_HANDLE_PX = 12
+_FIXED_FONT_PT = 14
 _DRAG_THRESHOLD_PX = 4
-_LONG_PRESS_MS = 500
-_CORNER_CURSORS = {
-    "tl": Qt.CursorShape.SizeFDiagCursor,
-    "tr": Qt.CursorShape.SizeBDiagCursor,
-    "bl": Qt.CursorShape.SizeBDiagCursor,
-    "br": Qt.CursorShape.SizeFDiagCursor,
-}
-
-
-class _ResizeHandle(QFrame):
-    """四隅のサイズ調整グラバー。"""
-
-    resized = Signal(str, QPoint)
-
-    def __init__(self, corner: str, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._corner = corner
-        self.setFixedSize(_HANDLE_PX, _HANDLE_PX)
-        self.setCursor(_CORNER_CURSORS.get(corner, Qt.CursorShape.SizeFDiagCursor))
-        self.setStyleSheet(
-            "background: #2563eb; border: 1px solid white; border-radius: 2px;"
-        )
-        self._origin = QPoint()
-        self._dragging = False
-
-    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton:
-            self._dragging = True
-            self._origin = event.globalPosition().toPoint()
-            event.accept()
-            return
-        super().mousePressEvent(event)
-
-    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._dragging and event.buttons() & Qt.LeftButton:
-            delta = event.globalPosition().toPoint() - self._origin
-            self._origin = event.globalPosition().toPoint()
-            self.resized.emit(self._corner, delta)
-            event.accept()
-            return
-        super().mouseMoveEvent(event)
-
-    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        self._dragging = False
-        event.accept()
+_MIN_NATIVE_W = 32.0
+_MIN_NATIVE_H = 18.0
 
 
 class TextBoxWidget(QFrame):
-    """選択可能なテキストボックス（移動・リサイズ・編集）。"""
+    """選択・移動・編集可能なテキストボックス。"""
 
     changed = Signal()
     selected = Signal(str)
     editing_finished = Signal(str)
-    request_edit = Signal(str)
-    request_delete = Signal(str)
 
     def __init__(
         self,
@@ -100,20 +55,13 @@ class TextBoxWidget(QFrame):
         self._selected = False
         self._editing = False
         self._text_tool_mode = False
-        self._syncing_text = False
         self._moving = False
         self._move_origin = QPoint()
         self._press_origin: QPoint | None = None
         self._press_moved = False
         self._suppress_focus_check = False
-        self._long_press_fired = False
-        self._long_press_timer = QTimer(self)
-        self._long_press_timer.setSingleShot(True)
-        self._long_press_timer.setInterval(_LONG_PRESS_MS)
-        self._long_press_timer.timeout.connect(self._on_long_press)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
-        self._apply_geometry()
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
 
         root = QVBoxLayout(self)
@@ -121,10 +69,10 @@ class TextBoxWidget(QFrame):
         root.setSpacing(0)
 
         self._body = QFrame()
-        self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._body.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self._body.setMouseTracking(True)
         body_lay = QVBoxLayout(self._body)
-        body_lay.setContentsMargins(_INNER_PAD_PX, _INNER_PAD_PX, _INNER_PAD_PX, _INNER_PAD_PX)
+        body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(0)
 
         self._editor = QPlainTextEdit(str(box.get("text") or ""))
@@ -132,7 +80,7 @@ class TextBoxWidget(QFrame):
         self._editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self._editor.setFrameShape(QFrame.NoFrame)
         self._editor.setAutoFillBackground(False)
-        self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.NoWrap)
         self._editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._editor.viewport().setAutoFillBackground(False)
@@ -143,39 +91,27 @@ class TextBoxWidget(QFrame):
 
         self._display_label = QLabel(str(box.get("text") or ""))
         self._display_label.setObjectName("TextBoxDisplayLabel")
-        self._display_label.setWordWrap(True)
+        self._display_label.setWordWrap(False)
         self._display_label.setAutoFillBackground(False)
-        self._display_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._display_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
         self._display_label.setContentsMargins(0, 0, 0, 0)
-        self._display_label.setMouseTracking(True)
         self._display_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._display_label.setStyleSheet(
             "background: transparent; border: none; padding: 0px; margin: 0px;"
         )
-        self._display_label.installEventFilter(self)
 
         self._text_stack = QStackedWidget()
-        self._text_stack.setMouseTracking(True)
         self._text_stack.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._text_stack.installEventFilter(self)
         self._text_stack.addWidget(self._display_label)
         self._text_stack.addWidget(self._editor)
         self._text_stack.setCurrentWidget(self._display_label)
         body_lay.addWidget(self._text_stack)
         self._body.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._body.installEventFilter(self)
         root.addWidget(self._body)
-
-        self._resize_handles: dict[str, _ResizeHandle] = {}
-        for corner in ("tl", "tr", "bl", "br"):
-            handle = _ResizeHandle(corner, self)
-            handle.resized.connect(self._on_resize_drag)
-            handle.hide()
-            self._resize_handles[corner] = handle
 
         self._setup_tight_document()
         self._apply_style()
-        self._layout_handles()
+        self._fit_to_content()
 
     @property
     def box_id(self) -> str:
@@ -183,6 +119,7 @@ class TextBoxWidget(QFrame):
 
     def box_data(self) -> dict[str, Any]:
         self._box["text"] = self._editor.toPlainText()
+        self._fit_to_content()
         data = copy.deepcopy(self._box)
         if isinstance(data.get("style"), dict):
             data["style"] = resolve_text_style(data["style"])
@@ -190,23 +127,14 @@ class TextBoxWidget(QFrame):
 
     def set_selected(self, on: bool) -> None:
         self._selected = bool(on)
-        for handle in self._resize_handles.values():
-            handle.setVisible(self._selected and self._text_tool_mode)
         if not self._selected and self._editing:
             self.finish_editing()
-        self._apply_geometry()
         self._apply_style()
-        self._layout_handles()
-        if self.isVisible():
-            self._update_hover_cursor(self.mapFromGlobal(QCursor.pos()))
 
     def set_display_scale(self, scale: float) -> None:
         self._scale = max(0.01, float(scale))
-        self._apply_geometry()
-        self._layout_handles()
-
-    def global_frame_rect(self) -> Any:
-        return self.frameGeometry().translated(self.mapToGlobal(QPoint(0, 0)).toPoint())
+        self._apply_style()
+        self._fit_to_content()
 
     def start_editing(self) -> None:
         if not self._selected:
@@ -226,12 +154,6 @@ class TextBoxWidget(QFrame):
         self.changed.emit()
         self.editing_finished.emit(self.box_id)
 
-    def _focus_editor(self) -> None:
-        if not self._editing:
-            return
-        self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
-        self._editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
-
     def is_editing(self) -> bool:
         return self._editing
 
@@ -240,8 +162,6 @@ class TextBoxWidget(QFrame):
         if self._text_tool_mode == enabled:
             return
         self._text_tool_mode = enabled
-        for handle in self._resize_handles.values():
-            handle.setVisible(self._selected and self._text_tool_mode)
         self._apply_style()
 
     def append_transcript(self, text: str) -> None:
@@ -257,7 +177,13 @@ class TextBoxWidget(QFrame):
         cursor.movePosition(QTextCursor.MoveOperation.End)
         self._editor.setTextCursor(cursor)
         self._box["text"] = new_text
+        self._fit_to_content()
         self.changed.emit()
+
+    def apply_style_dict(self, style: dict[str, Any]) -> None:
+        merged = {**dict(self._box.get("style") or {}), **style}
+        self._box["style"] = resolve_text_style(merged)
+        self._apply_style()
 
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
@@ -272,81 +198,12 @@ class TextBoxWidget(QFrame):
             self._display_label.setText(text)
             self._text_stack.setCurrentWidget(self._display_label)
         self._apply_style()
-
-    def _point_on_handle(self, local_pos: QPoint) -> bool:
-        for handle in self._resize_handles.values():
-            if handle.isVisible() and handle.geometry().contains(local_pos):
-                return True
-        return False
-
-    def _update_hover_cursor(self, local_pos: QPoint) -> None:
-        if self._editing or self._moving:
-            return
-        if self._point_on_handle(local_pos):
-            self.unsetCursor()
-            return
-        self.setCursor(Qt.CursorShape.SizeAllCursor)
+        self._fit_to_content()
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if watched is self._editor:
-            if event.type() == QEvent.Type.FocusOut:
-                QTimer.singleShot(0, self._check_editing_finished)
-            return super().eventFilter(watched, event)
-
-        if self._editing:
-            return super().eventFilter(watched, event)
-
-        if watched in (self._body, self._display_label, self._text_stack):
-            et = event.type()
-            if et == QEvent.Type.MouseMove and isinstance(event, QMouseEvent):
-                pos = self.mapFromGlobal(event.globalPosition().toPoint())
-                self._update_hover_cursor(pos)
+        if watched is self._editor and event.type() == QEvent.Type.FocusOut:
+            QTimer.singleShot(0, self._check_editing_finished)
         return super().eventFilter(watched, event)
-
-    def _on_long_press(self) -> None:
-        if self._moving or self._editing or self._press_moved:
-            return
-        self._long_press_fired = True
-        self.selected.emit(self.box_id)
-        self.start_editing()
-
-    def _begin_pointer(self, global_pos: QPoint) -> None:
-        self._long_press_fired = False
-        if not self._selected:
-            self.selected.emit(self.box_id)
-        self._press_origin = global_pos
-        self._press_moved = False
-        self._moving = False
-        self._long_press_timer.start()
-
-    def _update_move_drag(self, global_pos: QPoint) -> None:
-        if self._press_origin is None or self._editing:
-            return
-        if not self._press_moved:
-            delta = global_pos - self._press_origin
-            if (
-                abs(delta.x()) <= _DRAG_THRESHOLD_PX
-                and abs(delta.y()) <= _DRAG_THRESHOLD_PX
-            ):
-                return
-            self._long_press_timer.stop()
-            self._press_moved = True
-            self._moving = True
-            self._move_origin = global_pos
-            return
-        if self._moving:
-            delta = global_pos - self._move_origin
-            self._move_origin = global_pos
-            self._on_move_drag(delta)
-
-    def _end_pointer(self) -> None:
-        self._long_press_timer.stop()
-        if self._press_moved:
-            self.changed.emit()
-        self._long_press_fired = False
-        self._press_origin = None
-        self._press_moved = False
-        self._moving = False
 
     def _check_editing_finished(self) -> None:
         if self._suppress_focus_check or not self._editing:
@@ -363,7 +220,7 @@ class TextBoxWidget(QFrame):
 
     def _style(self) -> dict[str, Any]:
         st = self._box.get("style") or {}
-        merged = dict(DEFAULT_TEXT_STYLE)
+        merged = dict(TEXT_STYLE_TEMPLATE_A)
         if isinstance(st, dict):
             merged.update(st)
         return resolve_text_style(merged)
@@ -371,83 +228,60 @@ class TextBoxWidget(QFrame):
     def _apply_geometry(self) -> None:
         x = int(float(self._box.get("x") or 0) / self._scale)
         y = int(float(self._box.get("y") or 0) / self._scale)
-        w = max(40, int(float(self._box.get("width") or 120) / self._scale))
-        h = max(24, int(float(self._box.get("height") or 36) / self._scale))
+        w = max(8, int(float(self._box.get("width") or _MIN_NATIVE_W) / self._scale))
+        h = max(8, int(float(self._box.get("height") or _MIN_NATIVE_H) / self._scale))
         self.setGeometry(x, y, w, h)
 
-    def _layout_handles(self) -> None:
-        w, h = self.width(), self.height()
-        s = _HANDLE_PX
-        positions = {
-            "tl": (0, 0),
-            "tr": (max(0, w - s), 0),
-            "bl": (0, max(0, h - s)),
-            "br": (max(0, w - s), max(0, h - s)),
-        }
-        for corner, handle in self._resize_handles.items():
-            handle.move(*positions[corner])
+    def _content_font(self) -> QFont:
+        font = QFont()
+        disp_pt = max(8, int(round(_FIXED_FONT_PT / self._scale)))
+        font.setPointSize(disp_pt)
+        return font
+
+    def _fit_to_content(self) -> None:
+        font = self._content_font()
+        fm = QFontMetrics(font)
+        text = self._editor.toPlainText() if self._editing else self._display_label.text()
+        lines = text.split("\n") if text else [""]
+        line_h = fm.height()
+        max_w = max((fm.horizontalAdvance(line) for line in lines), default=fm.horizontalAdvance(" "))
+        self._box["width"] = max(_MIN_NATIVE_W, float(max_w))
+        self._box["height"] = max(_MIN_NATIVE_H, float(line_h * max(1, len(lines))))
+        self._apply_geometry()
 
     def _apply_style(self) -> None:
         st = self._style()
-        border = st.get("borderColor") or "#2563eb"
-        bw = int(st.get("borderWidth", 2))
-        ba = float(st.get("borderAlpha", 1.0))
+        fa = float(st.get("fillAlpha", 0))
         fill = st.get("fillColor") or "#ffffff"
-        fa = float(st.get("fillAlpha", 0.85))
         tc = st.get("textColor") or "#111827"
-        fs = int(st.get("fontSize") or 14)
-        chrome = self._text_tool_mode
 
-        if chrome:
-            if self._editing:
-                bg = f"rgba({_hex_rgb(fill)}, {max(fa, 0.92)})" if fa > 0 else "rgba(255, 255, 255, 0.92)"
-                border_css = "2px solid #2563eb"
-            elif self._selected:
-                bg = f"rgba({_hex_rgb(fill)}, {max(fa, 0.75)})" if fa > 0 else "rgba(255, 255, 255, 0.75)"
-                border_css = "1px solid #2563eb"
-            else:
-                bg = f"rgba({_hex_rgb(fill)}, {max(fa, 0.35)})" if fa > 0 else "rgba(255, 255, 255, 0.35)"
-                border_css = "1px dashed rgba(37, 99, 235, 0.7)"
+        bg = "transparent" if fa <= 0 else f"rgba({_hex_rgb(fill)}, {fa})"
+        if self._text_tool_mode:
+            border_css = (
+                "1px solid #2563eb"
+                if self._selected or self._editing
+                else "1px dashed rgba(37, 99, 235, 0.55)"
+            )
         else:
-            bg = "transparent" if fa <= 0 else f"rgba({_hex_rgb(fill)}, {fa})"
-            if self._selected:
-                border_css = "1px solid #2563eb"
-            elif bw > 0 and ba > 0:
-                border_css = f"{bw}px solid rgba({_hex_rgb(border)}, {ba})"
-            else:
-                border_css = "none"
+            border_css = "none"
 
         self._body.setStyleSheet(
-            f"QFrame {{ background: {bg}; border: {border_css}; border-radius: 2px; }}"
+            f"QFrame {{ background: {bg}; border: {border_css}; border-radius: 0px; }}"
         )
-        font = QFont()
-        disp_pt = max(8, int(round(fs / self._scale)))
-        font.setPointSize(disp_pt)
-        font.setBold(bool(st.get("bold")))
-        font.setUnderline(bool(st.get("underline")))
+        font = self._content_font()
         self._editor.setFont(font)
         self._display_label.setFont(font)
         tc_color = QColor(str(tc))
         pal = self._editor.palette()
         pal.setColor(QPalette.ColorRole.Text, tc_color)
-        if chrome and self._editing:
-            pal.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255, 235))
-        else:
-            pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
+        pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
         self._editor.setPalette(pal)
-        editor_bg = (
-            "rgba(255, 255, 255, 0.92)"
-            if chrome and self._editing
-            else "transparent"
-        )
-        editor_css = (
-            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: {editor_bg}; "
+        css = (
+            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: transparent; "
             f"border: none; padding: 0px; margin: 0px; }}"
         )
-        self._editor.setStyleSheet(editor_css)
-        self._editor.viewport().setStyleSheet(
-            f"background: {editor_bg}; border: none;"
-        )
+        self._editor.setStyleSheet(css)
+        self._editor.viewport().setStyleSheet("background: transparent; border: none;")
         label_css = (
             f"QLabel#TextBoxDisplayLabel {{ color: {tc}; background: transparent; "
             f"border: none; padding: 0px; margin: 0px; }}"
@@ -456,17 +290,14 @@ class TextBoxWidget(QFrame):
         label_pal = self._display_label.palette()
         label_pal.setColor(QPalette.ColorRole.WindowText, tc_color)
         self._display_label.setPalette(label_pal)
-        align = str(st.get("align") or "left")
-        self._set_editor_alignment(align)
-        self._set_label_alignment(align)
-        self._sync_display_text()
-
-    def _sync_display_text(self) -> None:
-        text = str(
-            self._box.get("text") if self._box.get("text") is not None else self._editor.toPlainText()
-        )
+        self._display_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        option = self._editor.document().defaultTextOption()
+        option.setAlignment(Qt.AlignmentFlag.AlignLeft)
+        self._editor.document().setDefaultTextOption(option)
         if not self._editing:
-            self._display_label.setText(text)
+            self._display_label.setText(
+                str(self._box.get("text") if self._box.get("text") is not None else self._editor.toPlainText())
+            )
 
     def _setup_tight_document(self) -> None:
         doc = self._editor.document()
@@ -487,82 +318,49 @@ class TextBoxWidget(QFrame):
         finally:
             self._editor.blockSignals(False)
 
-    def _set_label_alignment(self, align: str) -> None:
-        if align == "center":
-            self._display_label.setAlignment(Qt.AlignmentFlag.AlignHCenter | Qt.AlignmentFlag.AlignTop)
-        elif align == "right":
-            self._display_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignTop)
-        else:
-            self._display_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-
-    def _set_editor_alignment(self, align: str) -> None:
-        option = self._editor.document().defaultTextOption()
-        if align == "center":
-            option.setAlignment(Qt.AlignmentFlag.AlignHCenter)
-        elif align == "right":
-            option.setAlignment(Qt.AlignmentFlag.AlignRight)
-        else:
-            option.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self._editor.document().setDefaultTextOption(option)
-
-    def apply_style_dict(self, style: dict[str, Any]) -> None:
-        merged = {**dict(self._box.get("style") or {}), **style}
-        self._box["style"] = resolve_text_style(merged)
-        self._apply_style()
-
     def _on_text_changed(self) -> None:
-        if self._syncing_text:
-            return
         self._box["text"] = self._editor.toPlainText()
+        self._fit_to_content()
         self.changed.emit()
 
-    def _on_move_drag(self, delta: QPoint) -> None:
-        ds = self._scale
-        self._box["x"] = float(self._box.get("x") or 0) + delta.x() * ds
-        self._box["y"] = float(self._box.get("y") or 0) + delta.y() * ds
-        self._apply_geometry()
+    def _begin_pointer(self, global_pos: QPoint) -> None:
+        if not self._selected:
+            self.selected.emit(self.box_id)
+        self._press_origin = global_pos
+        self._press_moved = False
+        self._moving = False
 
-    def _on_resize_drag(self, corner: str, delta: QPoint) -> None:
-        ds = self._scale
-        dx = delta.x() * ds
-        dy = delta.y() * ds
-        x = float(self._box.get("x") or 0)
-        y = float(self._box.get("y") or 0)
-        w = float(self._box.get("width") or 120)
-        h = float(self._box.get("height") or 36)
+    def _update_move_drag(self, global_pos: QPoint) -> None:
+        if self._press_origin is None or self._editing:
+            return
+        if not self._press_moved:
+            delta = global_pos - self._press_origin
+            if (
+                abs(delta.x()) <= _DRAG_THRESHOLD_PX
+                and abs(delta.y()) <= _DRAG_THRESHOLD_PX
+            ):
+                return
+            self._press_moved = True
+            self._moving = True
+            self._move_origin = global_pos
+            return
+        if self._moving:
+            delta = global_pos - self._move_origin
+            self._move_origin = global_pos
+            ds = self._scale
+            self._box["x"] = float(self._box.get("x") or 0) + delta.x() * ds
+            self._box["y"] = float(self._box.get("y") or 0) + delta.y() * ds
+            self._apply_geometry()
 
-        if corner == "br":
-            w = max(40.0, w + dx)
-            h = max(20.0, h + dy)
-        elif corner == "bl":
-            nw = max(40.0, w - dx)
-            x += w - nw
-            w = nw
-            h = max(20.0, h + dy)
-        elif corner == "tr":
-            w = max(40.0, w + dx)
-            nh = max(20.0, h - dy)
-            y += h - nh
-            h = nh
-        elif corner == "tl":
-            nw = max(40.0, w - dx)
-            nh = max(20.0, h - dy)
-            x += w - nw
-            y += h - nh
-            w, h = nw, nh
-
-        self._box["x"] = x
-        self._box["y"] = y
-        self._box["width"] = w
-        self._box["height"] = h
-        self._apply_geometry()
-        self._layout_handles()
+    def _end_pointer(self) -> None:
+        if self._press_moved:
+            self.changed.emit()
+        self._press_origin = None
+        self._press_moved = False
+        self._moving = False
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton and not self._editing:
-            if self._point_on_handle(event.position().toPoint()):
-                super().mousePressEvent(event)
-                return
             self._begin_pointer(event.globalPosition().toPoint())
             event.accept()
             return
@@ -574,26 +372,29 @@ class TextBoxWidget(QFrame):
             if self._moving:
                 event.accept()
                 return
-        self._update_hover_cursor(event.position().toPoint())
+        if not self._editing:
+            self.setCursor(Qt.CursorShape.SizeAllCursor)
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
             self._end_pointer()
-            self._update_hover_cursor(event.position().toPoint())
             event.accept()
             return
         super().mouseReleaseEvent(event)
 
+    def mouseDoubleClickEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() == Qt.LeftButton and not self._editing:
+            self.selected.emit(self.box_id)
+            self.start_editing()
+            event.accept()
+            return
+        super().mouseDoubleClickEvent(event)
+
     def leaveEvent(self, event) -> None:  # noqa: N802
-        self._long_press_timer.stop()
         if not self._moving:
             self.unsetCursor()
         super().leaveEvent(event)
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        self._layout_handles()
 
 
 def _hex_rgb(hex_color: str) -> str:

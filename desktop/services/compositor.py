@@ -185,40 +185,24 @@ def render_text_annotation_layer(
     canvas_size = (int(size[0] * sf), int(size[1] * sf))
     layer = Image.new("RGBA", canvas_size, (0, 0, 0, 0))
     draw = ImageDraw.Draw(layer)
-    pad = 1 * work_scale
+    pad = 0
     for box in annotations or []:
         st = resolve_text_style(box.get("style") or {})
         x = float(box.get("x") or 0) * work_scale
         y = float(box.get("y") or 0) * work_scale
-        w = max(20.0, float(box.get("width") or 120) * work_scale)
-        h = max(12.0, float(box.get("height") or 36) * work_scale)
-        fill = hex_to_rgba(st.get("fillColor") or "#ffffff", float(st.get("fillAlpha") or 0.85))
-        border = hex_to_rgba(st.get("borderColor") or "#2563eb", float(st.get("borderAlpha") or 1.0))
-        bw = max(0, round(float(st.get("borderWidth") or 2) * work_scale))
+        w = max(20.0, float(box.get("width") or 32) * work_scale)
+        h = max(12.0, float(box.get("height") or 18) * work_scale)
+        fill = hex_to_rgba(st.get("fillColor") or "#ffffff", float(st.get("fillAlpha") or 0))
         rect = [x, y, x + w, y + h]
-        radius = max(2, round(4 * work_scale))
         if float(st.get("fillAlpha") or 0) > 0:
-            if bw > 0 and float(st.get("borderAlpha") or 0) > 0:
-                draw.rounded_rectangle(rect, radius=radius, fill=fill, outline=border, width=bw)
-            else:
-                draw.rounded_rectangle(rect, radius=radius, fill=fill)
-        elif bw > 0 and float(st.get("borderAlpha") or 0) > 0:
-            draw.rounded_rectangle(rect, radius=radius, outline=border, width=bw)
+            draw.rounded_rectangle(rect, radius=0, fill=fill)
         text = str(box.get("text") or "").strip()
         if not text:
             continue
         fs = max(8, int(float(st.get("fontSize") or 14) * work_scale))
-        font = _load_annotation_font(fs, bold=bool(st.get("bold")))
+        font = _load_annotation_font(fs, bold=False)
         tc = hex_to_rgba(st.get("textColor") or "#111827", 1.0)
-        tx, ty = x + pad, y + pad
-        if st.get("vertical"):
-            cy = ty
-            for ch in text.replace("\n", ""):
-                draw.text((tx, cy), ch, font=font, fill=tc)
-                bbox = font.getbbox(ch)
-                cy += (bbox[3] - bbox[1]) + 2
-        else:
-            draw.text((tx, ty), text, font=font, fill=tc)
+        draw.text((x + pad, y + pad), text, font=font, fill=tc)
     if sf > 1:
         return layer.resize(size, _RESAMPLE)
     return layer

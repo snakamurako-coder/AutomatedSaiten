@@ -9,22 +9,6 @@ from typing import Any
 
 from models.database import connect
 
-DEFAULT_TEXT_STYLE: dict[str, Any] = {
-    "borderColor": "#2563eb",
-    "borderWidth": 2,
-    "borderAlpha": 1.0,
-    "fillColor": "#ffffff",
-    "fillAlpha": 0.85,
-    "textColor": "#111827",
-    "fontSize": 14,
-    "fontFamily": "meiryo.ttc",
-    "bold": False,
-    "underline": False,
-    "vertical": False,
-    "align": "left",
-    "templateId": "",
-}
-
 TEXT_PALETTE_COLORS: tuple[str, ...] = (
     "#111827",
     "#dc2626",
@@ -34,32 +18,30 @@ TEXT_PALETTE_COLORS: tuple[str, ...] = (
     "#9333ea",
 )
 
-# パターンA: 背景・枠なし（文字のみ、不透明）
-TEXT_STYLE_TEMPLATE_A: dict[str, Any] = {
-    "templateId": "A",
-    "borderWidth": 0,
-    "borderAlpha": 0.0,
-    "fillAlpha": 0.0,
+DEFAULT_TEXT_STYLE: dict[str, Any] = {
     "textColor": TEXT_PALETTE_COLORS[0],
     "fontSize": 14,
-    "bold": False,
-    "underline": False,
-    "vertical": False,
-    "align": "left",
+    "fontFamily": "meiryo.ttc",
+    "templateId": "A",
+    "fillAlpha": 0.0,
+    "borderWidth": 0,
+    "borderAlpha": 0.0,
 }
 
-# パターンB: 文字色の補色を半透明背景に（fillColor は resolve で決定）
-TEXT_STYLE_TEMPLATE_B: dict[str, Any] = {
-    "templateId": "B",
+TEXT_STYLE_TEMPLATE_A: dict[str, Any] = {
+    "templateId": "A",
+    "textColor": TEXT_PALETTE_COLORS[0],
+    "fillAlpha": 0.0,
     "borderWidth": 0,
     "borderAlpha": 0.0,
-    "fillAlpha": 0.2,
+}
+
+TEXT_STYLE_TEMPLATE_B: dict[str, Any] = {
+    "templateId": "B",
     "textColor": TEXT_PALETTE_COLORS[0],
-    "fontSize": 14,
-    "bold": False,
-    "underline": False,
-    "vertical": False,
-    "align": "left",
+    "fillAlpha": 0.2,
+    "borderWidth": 0,
+    "borderAlpha": 0.0,
 }
 
 TEXT_STYLE_TEMPLATES: dict[str, dict[str, Any]] = {
@@ -107,15 +89,15 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def new_text_box(x: float, y: float, *, width: float = 120.0, height: float = 36.0) -> dict[str, Any]:
+def new_text_box(x: float, y: float) -> dict[str, Any]:
     return {
         "id": str(uuid.uuid4()),
         "x": float(x),
         "y": float(y),
-        "width": float(width),
-        "height": float(height),
+        "width": 32.0,
+        "height": 18.0,
         "text": "",
-        "style": dict(DEFAULT_TEXT_STYLE),
+        "style": dict(TEXT_STYLE_TEMPLATE_A),
     }
 
 
