@@ -395,9 +395,13 @@ def batch_generate_feedback(
 ) -> dict[str, Any]:
     """全結果行の個票を生成して 個票/ フォルダに保存する。"""
     from services.feedback_exporter import (
+        COMBINED_PDF_FILENAME,
+        export_combined_feedback_pdf,
         export_feedback_row,
         feedback_filename,
+        is_combined_pdf_export,
         normalize_export_format,
+        per_file_export_format,
     )
 
     slots = get_output_slots(test_id)
@@ -410,10 +414,34 @@ def batch_generate_feedback(
     fmt = normalize_export_format(export_format)
     out_dir = test_feedback(test_id)
     out_dir.mkdir(parents=True, exist_ok=True)
-    saved = 0
     skipped: list[str] = []
     errors: list[dict[str, str]] = []
     total = len(rows)
+
+    if is_combined_pdf_export(fmt):
+        combined_path = out_dir / COMBINED_PDF_FILENAME
+        page_count, skipped, errors = export_combined_feedback_pdf(
+            test_id,
+            rows,
+            combined_path,
+            on_progress=on_progress,
+        )
+        from models.test_repo import touch_progress
+
+        touch_progress(test_id, 10, "個票出力済み")
+        return {
+            "saved": page_count,
+            "skipped": skipped,
+            "errors": errors,
+            "outputDir": str(out_dir),
+            "exportFormat": fmt,
+            "combined": True,
+            "combinedFile": str(combined_path),
+            "pageCount": page_count,
+        }
+
+    file_fmt = per_file_export_format(fmt)
+    saved = 0
 
     for i, row in enumerate(rows):
         name = str(row.get("fileName") or "")
@@ -426,8 +454,8 @@ def batch_generate_feedback(
         try:
             sid = _safe_name(row.get("studentId") or "不明")
             sname = _safe_name(row.get("name") or row.get("fileName") or "")
-            out_path = out_dir / feedback_filename(sid, sname, fmt)
-            export_feedback_row(test_id, row, out_path, fmt)
+            out_path = out_dir / feedback_filename(sid, sname, file_fmt)
+            export_feedback_row(test_id, row, out_path, file_fmt)
             saved += 1
         except Exception as e:
             errors.append({"fileName": name, "error": str(e)})
@@ -441,4 +469,5 @@ def batch_generate_feedback(
         "errors": errors,
         "outputDir": str(out_dir),
         "exportFormat": fmt,
+        "combined": False,
     }

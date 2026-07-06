@@ -36,6 +36,7 @@ from models.output_repo import (
 )
 from models.test_repo import get_test_info
 from services.feedback_exporter import (
+    is_pdf_export_format,
     rasterize_feedback_preview,
     render_feedback_preview,
 )
@@ -284,16 +285,17 @@ class Step10Page(QWidget):
         fmt_row = QHBoxLayout()
         fmt_row.addWidget(QLabel("出力形式"))
         self.export_format_combo = QComboBox()
-        self.export_format_combo.addItem("PDF（推奨・手書き・文字が鮮明）", "pdf")
-        self.export_format_combo.addItem("JPEG", "jpeg")
-        self.export_format_combo.addItem("PNG", "png")
+        self.export_format_combo.addItem("PDF（推奨・1枚ずつ）", "pdf")
+        self.export_format_combo.addItem("PDF（全件を1ファイル）", "pdf_combined")
+        self.export_format_combo.addItem("JPEG（1枚ずつ）", "jpeg")
+        self.export_format_combo.addItem("PNG（1枚ずつ）", "png")
         self.export_format_combo.currentIndexChanged.connect(self._on_export_format_changed)
         fmt_row.addWidget(self.export_format_combo, 1)
         lay.addLayout(fmt_row)
         lay.addWidget(
             h.caption_label(
-                "PDF は手書き・テキストボックス・判定マークをベクトル描画します。"
-                "「1件プレビュー」でも PDF 形式時はその見た目を確認できます。"
+                "PDF は手書き・テキストをベクトル描画します。"
+                "「1件プレビュー」は選択行1件のみ表示（全件1ファイル PDF でも同様）。"
             )
         )
         ctrl = QHBoxLayout()
@@ -506,13 +508,13 @@ class Step10Page(QWidget):
                 h.error(self, "プレビューエラー", str(err))
                 return
             self._preview_state = result
-            if result.get("mode") == "pdf":
+            if is_pdf_export_format(export_format):
                 self.preview_mode_label.setText(
-                    "プレビュー: PDF ベクトル合成 — ズームを上げると手書き・文字の鮮明さを確認できます"
+                    "プレビュー: PDF ベクトル合成（選択行1件）— ズームで鮮明さを確認できます"
                 )
             else:
                 fmt_label = "JPEG" if export_format == "jpeg" else "PNG"
-                self.preview_mode_label.setText(f"プレビュー: {fmt_label} ラスター出力")
+                self.preview_mode_label.setText(f"プレビュー: {fmt_label} ラスター出力（選択行1件）")
             self._fit_preview_zoom_to_viewport()
             self._update_preview_pixmap()
 
@@ -608,11 +610,24 @@ class Step10Page(QWidget):
             return
         assert result is not None
         fmt = result.get("exportFormat") or "pdf"
-        fmt_label = {"pdf": "PDF", "jpeg": "JPEG", "png": "PNG"}.get(fmt, fmt.upper())
-        msg = (
-            f"形式: {fmt_label} / 生成 {result['saved']} 件 / "
-            f"スキップ {len(result['skipped'])} 件 / エラー {len(result['errors'])} 件\n"
-            f"保存先: {result['outputDir']}"
-        )
+        fmt_labels = {
+            "pdf": "PDF（1枚ずつ）",
+            "pdf_combined": "PDF（全件1ファイル）",
+            "jpeg": "JPEG（1枚ずつ）",
+            "png": "PNG（1枚ずつ）",
+        }
+        fmt_label = fmt_labels.get(fmt, fmt.upper())
+        if result.get("combined"):
+            msg = (
+                f"形式: {fmt_label} / {result.get('pageCount', result['saved'])} ページ / "
+                f"スキップ {len(result['skipped'])} 件 / エラー {len(result['errors'])} 件\n"
+                f"ファイル: {result.get('combinedFile') or result['outputDir']}"
+            )
+        else:
+            msg = (
+                f"形式: {fmt_label} / 生成 {result['saved']} 件 / "
+                f"スキップ {len(result['skipped'])} 件 / エラー {len(result['errors'])} 件\n"
+                f"保存先: {result['outputDir']}"
+            )
         self.batch_status.setText(msg.replace("\n", " — "))
         h.info(self, "一括生成完了", msg)

@@ -13,7 +13,7 @@ from models.test_repo import touch_progress_conn
 STYLE_STATE_KEY = "feedback_style"
 EXPORT_FORMAT_STATE_KEY = "feedback_export_format"
 DEFAULT_FEEDBACK_EXPORT_FORMAT = "pdf"
-VALID_FEEDBACK_EXPORT_FORMATS = frozenset({"pdf", "jpeg", "png"})
+VALID_FEEDBACK_EXPORT_FORMATS = frozenset({"pdf", "pdf_combined", "jpeg", "png"})
 
 DEFAULT_FEEDBACK_STYLE: dict[str, Any] = {
     "mark": {
