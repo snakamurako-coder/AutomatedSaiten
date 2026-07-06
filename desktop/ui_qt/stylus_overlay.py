@@ -892,3 +892,11 @@ class CropInkImageStack(QWidget):
 
     def set_brush(self, color: str, width: float, alpha: float) -> None:
         self.ink_overlay.set_brush(color, width, alpha)
+
+    def clear_ink(self) -> None:
+        """手書きストロークをすべて消去。"""
+        self.ink_overlay.clear_strokes()
+
+    def clear_all_text_boxes(self) -> None:
+        """テキストボックスをすべて消去。"""
+        self.text_layer.clear_all()

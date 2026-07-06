@@ -45,6 +45,8 @@ class ToolPaletteWindow(QWidget):
     show_text_changed = Signal(bool)
     view_mode_changed = Signal(str)
     minimize_requested = Signal()
+    clear_ink_requested = Signal()
+    clear_text_boxes_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(
@@ -161,6 +163,18 @@ class ToolPaletteWindow(QWidget):
         self._draw_hint.setObjectName("PaletteHintLabel")
         self._draw_hint.setWordWrap(True)
         draw_lay.addWidget(self._draw_hint)
+
+        clear_row = QVBoxLayout()
+        clear_row.setSpacing(4)
+        self._clear_ink_btn = QPushButton("選択画像のペン描写を全消去")
+        self._clear_ink_btn.setToolTip("最後にクリックした画像の手書きをすべて消去")
+        self._clear_ink_btn.clicked.connect(self.clear_ink_requested.emit)
+        clear_row.addWidget(self._clear_ink_btn)
+        self._clear_text_btn = QPushButton("選択画像のテキストボックスを全消去")
+        self._clear_text_btn.setToolTip("最後にクリックした画像のテキストボックスをすべて消去")
+        self._clear_text_btn.clicked.connect(self.clear_text_boxes_requested.emit)
+        clear_row.addWidget(self._clear_text_btn)
+        draw_lay.addLayout(clear_row)
 
         self._detail_frame = QFrame()
         self._detail_frame.setObjectName("FloatingPaletteSection")

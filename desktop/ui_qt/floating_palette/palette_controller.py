@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from PySide6.QtCore import QPoint, QRect, Qt
-from PySide6.QtWidgets import QApplication, QPushButton, QScrollArea, QWidget
+from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
 
 from ui_qt.floating_palette.palette_prefs import (
     TOOL_ERASER,
@@ -86,7 +86,11 @@ class PaletteController:
         self._speech.error.connect(self._on_speech_error)
         self._speech.listening_changed.connect(self._on_speech_listening_changed)
         self._speech_confirm_open = False
+        self._active_stack: CropInkImageStack | None = None
         fp.set_speech_available(SpeechEngine.is_available())
+
+        self.tool_window.clear_ink_requested.connect(self._on_clear_active_ink)
+        self.tool_window.clear_text_boxes_requested.connect(self._on_clear_active_text_boxes)
 
         self.tool_window.set_view_mode(str(prefs.get("view_mode") or "simple"))
         self.tool_window.set_brush(
@@ -144,6 +148,7 @@ class PaletteController:
         self._stop_speech()
         self._page = None
         self._step_id = None
+        self._active_stack = None
         self.tool_window.hide()
         self.fab.hide()
 
@@ -262,15 +267,78 @@ class PaletteController:
         if not box:
             self._stop_speech()
             return
+        for stack in self._stacks():
+            if stack.text_layer.selected_box():
+                self._active_stack = stack
+                break
         self.tool_window.show_text_mode()
         self.tool_window.format_panel.load_style(box.get("style") or {})
 
     def _on_stack_image_clicked(self) -> None:
+        sender = self.sender()
+        if isinstance(sender, CropInkImageStack):
+            self._active_stack = sender
         if self._tool != TOOL_TEXT:
             return
         for stack in self._stacks():
             stack.text_layer.finish_all_editing()
             stack.text_layer.clear_selection()
+
+    def _resolve_active_stack(self) -> CropInkImageStack | None:
+        if self._active_stack is not None and self._active_stack in self._stacks():
+            return self._active_stack
+        for stack in self._stacks():
+            if stack.text_layer.selected_box():
+                self._active_stack = stack
+                return stack
+        return None
+
+    def _on_clear_active_ink(self) -> None:
+        stack = self._resolve_active_stack()
+        if stack is None:
+            from ui_qt import helpers as h
+
+            h.warn(self._main, "消去", "対象の画像をクリックして選択してください")
+            return
+        if not stack.ink_overlay.strokes():
+            from ui_qt import helpers as h
+
+            h.warn(self._main, "消去", "選択中の画像にペン描写がありません")
+            return
+        ans = QMessageBox.question(
+            self._main,
+            "確認",
+            "選択中の画像のペン描写をすべて消去しますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        stack.clear_ink()
+
+    def _on_clear_active_text_boxes(self) -> None:
+        self._stop_speech()
+        stack = self._resolve_active_stack()
+        if stack is None:
+            from ui_qt import helpers as h
+
+            h.warn(self._main, "消去", "対象の画像をクリックして選択してください")
+            return
+        if not stack.text_layer.annotations():
+            from ui_qt import helpers as h
+
+            h.warn(self._main, "消去", "選択中の画像にテキストボックスがありません")
+            return
+        ans = QMessageBox.question(
+            self._main,
+            "確認",
+            "選択中の画像のテキストボックスをすべて消去しますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ans != QMessageBox.StandardButton.Yes:
+            return
+        stack.clear_all_text_boxes()
 
     def _on_brush_changed(self, color: str, width: float, alpha: float) -> None:
         for stack in self._stacks():

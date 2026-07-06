@@ -173,6 +173,17 @@ class TextBoxLayer(QWidget):
         self._persist_annotations()
         self.selection_changed.emit(None)
 
+    def clear_all(self) -> None:
+        """画像上のテキストボックスをすべて削除。"""
+        if not self._annotations and not self._widgets:
+            return
+        self.finish_all_editing()
+        self._annotations = []
+        self._selected_id = None
+        self._rebuild_widgets(from_widgets=False)
+        self._persist_annotations()
+        self.selection_changed.emit(None)
+
     def place_box_at(self, display_x: float, display_y: float) -> dict[str, Any]:
         nx = max(0.0, min(self._native_w, display_x * self._scale_x))
         ny = max(0.0, min(self._native_h, display_y * self._scale_y))
