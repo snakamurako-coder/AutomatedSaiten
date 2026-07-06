@@ -845,7 +845,18 @@ class CropInkImageStack(QWidget):
         if not self._is_text_placement_event(event):
             return super().eventFilter(watched, event)
         if watched is self.text_layer and isinstance(event, QMouseEvent):
-            return super().eventFilter(watched, event)
+            if self.text_layer.is_placing():
+                return super().eventFilter(watched, event)
+            et = event.type()
+            if et in (
+                QEvent.Type.MouseButtonPress,
+                QEvent.Type.MouseMove,
+                QEvent.Type.MouseButtonRelease,
+            ):
+                pos = event.position()
+                lx, ly = int(pos.x()), int(pos.y())
+                if self.text_layer.childAt(lx, ly) is not None:
+                    return super().eventFilter(watched, event)
         local = (
             event.position()
             if watched is self.text_layer

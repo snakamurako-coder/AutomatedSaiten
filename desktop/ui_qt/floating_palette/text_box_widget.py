@@ -67,7 +67,7 @@ class TextBoxWidget(QFrame):
         root.setSpacing(0)
 
         self._body = QFrame()
-        self._body.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self._body.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._body.setMouseTracking(True)
         body_lay = QVBoxLayout(self._body)
         body_lay.setContentsMargins(0, 0, 0, 0)
@@ -91,7 +91,7 @@ class TextBoxWidget(QFrame):
         self._display_label.setObjectName("TextBoxDisplayLabel")
         self._display_label.setWordWrap(True)
         self._display_label.setAutoFillBackground(False)
-        self._display_label.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self._display_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._display_label.setContentsMargins(0, 0, 0, 0)
         self._display_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._display_label.setStyleSheet(
@@ -99,13 +99,13 @@ class TextBoxWidget(QFrame):
         )
 
         self._text_stack = QStackedWidget()
+        self._text_stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self._text_stack.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._text_stack.addWidget(self._display_label)
         self._text_stack.addWidget(self._editor)
         self._text_stack.setCurrentWidget(self._display_label)
-        body_lay.addWidget(self._text_stack)
-        self._body.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        root.addWidget(self._body)
+        body_lay.addWidget(self._text_stack, 1)
+        root.addWidget(self._body, 1)
 
         self._setup_tight_document()
         self._apply_style()
@@ -228,9 +228,14 @@ class TextBoxWidget(QFrame):
     def _apply_geometry(self) -> None:
         x = int(float(self._box.get("x") or 0) / self._scale)
         y = int(float(self._box.get("y") or 0) / self._scale)
-        w = max(8, int(float(self._box.get("width") or _MIN_NATIVE_W) / self._scale))
-        h = max(8, int(float(self._box.get("height") or _MIN_NATIVE_H) / self._scale))
+        w = max(16, int(float(self._box.get("width") or _MIN_NATIVE_W) / self._scale))
+        h = max(16, int(float(self._box.get("height") or _MIN_NATIVE_H) / self._scale))
         self.setGeometry(x, y, w, h)
+        self._body.setMinimumSize(w, h)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._body.resize(self.width(), self.height())
 
     def _content_font(self) -> QFont:
         font = QFont()
@@ -245,12 +250,19 @@ class TextBoxWidget(QFrame):
         tc = st.get("textColor") or "#111827"
 
         bg = "transparent" if fa <= 0 else f"rgba({_hex_rgb(fill)}, {fa})"
-        if self._text_tool_mode:
-            border_css = (
-                "1px solid #2563eb"
-                if self._selected or self._editing
-                else "1px dashed rgba(37, 99, 235, 0.55)"
-            )
+        chrome = self._text_tool_mode or self._selected or self._editing
+        if chrome:
+            if self._editing:
+                bg = "rgba(255, 255, 255, 0.92)" if fa <= 0 else bg
+                border_css = "2px solid #2563eb"
+            elif self._selected:
+                border_css = "1px solid #2563eb"
+                if fa <= 0:
+                    bg = "rgba(255, 255, 255, 0.35)"
+            else:
+                border_css = "1px dashed rgba(37, 99, 235, 0.55)"
+                if fa <= 0:
+                    bg = "rgba(255, 255, 255, 0.2)"
         else:
             border_css = "none"
 
@@ -263,14 +275,20 @@ class TextBoxWidget(QFrame):
         tc_color = QColor(str(tc))
         pal = self._editor.palette()
         pal.setColor(QPalette.ColorRole.Text, tc_color)
-        pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
+        if self._editing:
+            pal.setColor(QPalette.ColorRole.Base, QColor(255, 255, 255, 240))
+        else:
+            pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
         self._editor.setPalette(pal)
+        editor_bg = "rgba(255, 255, 255, 0.92)" if self._editing else "transparent"
         css = (
-            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: transparent; "
+            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: {editor_bg}; "
             f"border: none; padding: 0px; margin: 0px; }}"
         )
         self._editor.setStyleSheet(css)
-        self._editor.viewport().setStyleSheet("background: transparent; border: none;")
+        self._editor.viewport().setStyleSheet(
+            f"background: {editor_bg}; border: none;"
+        )
         label_css = (
             f"QLabel#TextBoxDisplayLabel {{ color: {tc}; background: transparent; "
             f"border: none; padding: 0px; margin: 0px; }}"

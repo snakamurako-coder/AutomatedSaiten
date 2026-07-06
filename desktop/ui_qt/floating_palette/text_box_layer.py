@@ -212,7 +212,8 @@ class TextBoxLayer(QWidget):
         if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
             if self._placing:
                 return True
-            if self.childAt(lx, ly) is not None:
+            child = self.childAt(lx, ly)
+            if child is not None and child is not self._rubber:
                 return False
             self._begin_place_drag(local_pos)
             return True
@@ -325,7 +326,10 @@ class TextBoxLayer(QWidget):
             w.selected.connect(self._on_widget_selected)
             w.editing_finished.connect(self._on_widget_editing_finished)
             w.set_selected(bid == self._selected_id)
+            w.show()
+            w.raise_()
             self._widgets[bid] = w
+        self._rubber.raise_()
 
     def _on_widget_selected(self, box_id: str) -> None:
         self.select_box(box_id)
@@ -351,6 +355,10 @@ class TextBoxLayer(QWidget):
                 event.accept()
                 return
         if event.button() == Qt.LeftButton and not self._placing:
+            child = self.childAt(int(event.position().x()), int(event.position().y()))
+            if child is not None and child is not self._rubber:
+                super().mousePressEvent(event)
+                return
             self.finish_all_editing()
             self.clear_selection()
             event.accept()
