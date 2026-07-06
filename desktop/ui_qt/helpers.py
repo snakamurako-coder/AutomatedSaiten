@@ -8,8 +8,9 @@ from typing import Any, Callable
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Qt
 from PySide6.QtGui import QImage, QPixmap
-from PySide6.QtWidgets import QLabel, QMessageBox, QPushButton, QWidget
+from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
+from ui_qt.app_notify import notify_error, notify_info, notify_warn
 from ui_qt.style import set_role, set_variant
 
 
@@ -85,18 +86,18 @@ def pil_to_qpixmap(pil_image) -> QPixmap:
     return QPixmap.fromImage(QImage(ImageQt(pil_image.convert("RGBA"))))
 
 
-# --- ダイアログ ---
+# --- 通知（非モーダル・音声なし） ---
 
 def info(parent: QWidget | None, title: str, message: str) -> None:
-    QMessageBox.information(parent, title, message)
+    notify_info(parent, title, message)
 
 
 def warn(parent: QWidget | None, title: str, message: str) -> None:
-    QMessageBox.warning(parent, title, message)
+    notify_warn(parent, title, message)
 
 
 def error(parent: QWidget | None, title: str, message: str) -> None:
-    QMessageBox.critical(parent, title, message)
+    notify_error(parent, title, message)
 
 
 # --- ウィジェット生成ショートカット ---

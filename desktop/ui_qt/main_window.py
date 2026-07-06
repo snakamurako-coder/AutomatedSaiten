@@ -34,7 +34,7 @@ from ui_qt.pages.step10 import Step10Page
 from ui_qt.pages.step_manual import StepManualPage
 from ui_qt.floating_palette.palette_controller import PaletteController
 from ui_qt.settings_dialog import open_settings_dialog
-from ui_qt.style import set_variant
+from ui_qt.style import COLORS, set_variant
 
 
 class MainWindow(QMainWindow):
@@ -104,7 +104,22 @@ class MainWindow(QMainWindow):
 
         self._refresh_ocr_status()
         self.palette_controller = PaletteController(self)
+        self.statusBar().showMessage("準備完了")
         self.load_step(0)
+
+    def show_app_message(self, text: str, *, level: str = "info") -> None:
+        """画面下部ステータスバーへ非モーダル通知（システム音なし）。"""
+        from ui_qt.app_notify import message_timeout_ms
+
+        color = {
+            "info": COLORS["text_secondary"],
+            "warn": "#b45309",
+            "error": COLORS["danger"],
+        }.get(level, COLORS["text_secondary"])
+        self.statusBar().setStyleSheet(
+            f"QStatusBar {{ color: {color}; font-size: 11px; }}"
+        )
+        self.statusBar().showMessage(text, message_timeout_ms(level))
 
     # --- サイドバー ---
 

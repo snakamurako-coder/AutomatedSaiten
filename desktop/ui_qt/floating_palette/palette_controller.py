@@ -93,6 +93,7 @@ class PaletteController:
         self._speech.listening_changed.connect(self._on_speech_listening_changed)
         self._speech_confirm_open = False
         self._windows_speech_active = False
+        self._settings_overlay_active = False
         self._active_stack: CropInkImageStack | None = None
         self._active_result_id: int | None = None
         self.refresh_speech_prefs()
@@ -132,6 +133,8 @@ class PaletteController:
         """描画ツールまたは FAB を前面表示（グリッド描画後などに呼ぶ）。"""
         if self._step_id not in self.ACTIVE_STEPS:
             return
+        if self._settings_overlay_active:
+            return
         prefs = load_palette_prefs()
         if prefs.get("minimized"):
             self.tool_window.hide()
@@ -143,6 +146,16 @@ class PaletteController:
             self.tool_window.show()
             self.tool_window.raise_()
             self.tool_window.activateWindow()
+
+    def set_settings_overlay_active(self, active: bool) -> None:
+        """詳細設定を最前面にする間、描画ツールの常に手前を一時解除する。"""
+        self._settings_overlay_active = bool(active)
+        for win in (self.tool_window, self.fab):
+            win.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, not self._settings_overlay_active)
+            if win.isVisible():
+                win.show()
+        if not self._settings_overlay_active:
+            self.ensure_palette_visible()
 
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page

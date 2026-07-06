@@ -5,7 +5,7 @@ from __future__ import annotations
 import sys
 from typing import Callable
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -44,6 +44,7 @@ class SettingsDialog(QDialog):
     def __init__(self, parent: QWidget | None = None, on_saved: Callable[[], None] | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("詳細設定")
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.resize(560, 420)
         self._on_saved = on_saved
         self._api_test_token = 0
@@ -304,13 +305,15 @@ class SettingsDialog(QDialog):
         cfg.update(self._collect())
         cfg["stylus_palm_rejection"] = self.palm_rejection_check.isChecked()
         if cfg["ocr_engine"] == "vision" and not cfg["vision_api_key"]:
-            h.warn(self, "設定エラー", "OCR エンジンが Vision API の場合、Vision API キーを入力してください。")
+            self.status_label.setText(
+                "設定エラー: OCR エンジンが Vision API の場合、Vision API キーを入力してください。"
+            )
             return False
         try:
             save_config(cfg)
             save_text_palette_colors(self._text_palette_colors)
         except OSError as e:
-            h.error(self, "保存失敗", str(e))
+            self.status_label.setText(f"保存失敗: {e}")
             return False
         if self._on_saved:
             self._on_saved()
@@ -324,7 +327,7 @@ class SettingsDialog(QDialog):
     def _on_save(self) -> None:
         if not self._persist_settings():
             return
-        h.info(self, "保存完了", "詳細設定を保存しました。")
+        self.status_label.setText("詳細設定を保存しました。")
         self.accept()
 
     def _run_api_test(self, label: str, worker: Callable[[], str]) -> None:
@@ -336,11 +339,9 @@ class SettingsDialog(QDialog):
             if token != self._api_test_token:
                 return
             if err:
-                self.status_label.setText(str(err))
-                h.error(self, f"{label} — 失敗", str(err))
+                self.status_label.setText(f"{label} — 失敗: {err}")
             else:
-                self.status_label.setText(msg)
-                h.info(self, f"{label} — OK", msg)
+                self.status_label.setText(f"{label} — OK: {msg}")
 
         h.run_in_thread(self, worker, done)
 
@@ -348,12 +349,9 @@ class SettingsDialog(QDialog):
             if token != self._api_test_token:
                 return
             if self.status_label.text().endswith("を確認中…"):
-                self.status_label.setText(f"{label} — 応答がありません（タイムアウト）")
-                h.error(
-                    self,
-                    f"{label} — タイムアウト",
-                    "40 秒以内に応答がありませんでした。\n"
-                    "インターネット接続、ファイアウォール、プロキシ、API キー制限を確認してください。",
+                self.status_label.setText(
+                    f"{label} — タイムアウト: 40 秒以内に応答がありませんでした。"
+                    " インターネット接続、ファイアウォール、プロキシ、API キー制限を確認してください。"
                 )
 
         QTimer.singleShot(40_000, watchdog)
@@ -361,18 +359,25 @@ class SettingsDialog(QDialog):
     def _test_vision(self) -> None:
         key = self.vision_edit.text().strip()
         if not key:
-            h.warn(self, "未入力", "Vision API キーを入力してください。")
+            self.status_label.setText("未入力: Vision API キーを入力してください。")
             return
         self._run_api_test("Vision API", lambda: test_vision_api_key(key))
 
     def _test_gemini(self) -> None:
         key = self.gemini_edit.text().strip()
         if not key:
-            h.warn(self, "未入力", "Gemini API キーを入力してください。")
+            self.status_label.setText("未入力: Gemini API キーを入力してください。")
             return
         self._run_api_test("Gemini API", lambda: test_gemini_api_key(key))
 
 
 def open_settings_dialog(parent: QWidget | None = None, on_saved: Callable[[], None] | None = None) -> None:
-    dlg = SettingsDialog(parent, on_saved=on_saved)
-    dlg.exec()
+    palette = getattr(parent, "palette_controller", None) if parent is not None else None
+    if palette is not None:
+        palette.set_settings_overlay_active(True)
+    try:
+        dlg = SettingsDialog(parent, on_saved=on_saved)
+        dlg.exec()
+    finally:
+        if palette is not None:
+            palette.set_settings_overlay_active(False)
