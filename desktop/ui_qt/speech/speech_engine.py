@@ -1,128 +1,204 @@
-"""非表示 QWebEngineView で Web Speech API を利用する音声入力エンジン。"""
+"""プラットフォーム別マイク音声認識エンジン（Windows: WinRT / その他: SpeechRecognition）。"""
 
 from __future__ import annotations
 
-from PySide6.QtCore import QUrl, Signal, Slot, QTimer
+import asyncio
+import sys
+import threading
+
+from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import QWidget
 
-from ui_qt.speech.speech_bridge import SpeechRecognitionBridge
+_WINRT_AVAILABLE = False
+if sys.platform == "win32":
+    try:
+        import winrt.windows.foundation  # noqa: F401
+        import winrt.windows.globalization  # noqa: F401
+        import winrt.windows.media.speechrecognition  # noqa: F401
 
-_WEBENGINE_AVAILABLE = False
+        _WINRT_AVAILABLE = True
+    except ImportError:
+        pass
+
+_SR_AVAILABLE = False
 try:
-    from PySide6.QtWebChannel import QWebChannel
-    from PySide6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
-    from PySide6.QtWebEngineWidgets import QWebEngineView
+    import speech_recognition  # noqa: F401
 
-    _WEBENGINE_AVAILABLE = True
+    _SR_AVAILABLE = True
 except ImportError:
-    QWebChannel = None  # type: ignore[assignment,misc]
-    QWebEnginePage = None  # type: ignore[assignment,misc]
-    QWebEngineProfile = None  # type: ignore[assignment,misc]
-    QWebEngineView = None  # type: ignore[assignment,misc]
+    pass
 
-_SPEECH_HTML = """<!DOCTYPE html>
-<html lang="ja">
-<head>
-  <meta charset="utf-8">
-  <title>Speech</title>
-</head>
-<body>
-<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
-<script>
-(function () {
-  var bridge = null;
-  var rec = null;
-  var listening = false;
+_PYAUDIO_AVAILABLE = False
+if _SR_AVAILABLE:
+    try:
+        import pyaudio  # noqa: F401
 
-  function postError(msg) {
-    if (bridge) bridge.onError(String(msg || "error"));
-  }
-
-  function ensureRecognition() {
-    var SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) {
-      postError("Web Speech API が利用できません");
-      return null;
-    }
-    var r = new SR();
-    r.lang = "ja-JP";
-    r.interimResults = false;
-    r.continuous = true;
-    r.maxAlternatives = 1;
-    r.onresult = function (e) {
-      var text = "";
-      for (var i = e.resultIndex; i < e.results.length; i++) {
-        if (e.results[i].isFinal) {
-          text += e.results[i][0].transcript;
-        }
-      }
-      if (text && bridge) bridge.onFinalText(text);
-    };
-    r.onerror = function (e) {
-      postError(e.error || "recognition-error");
-    };
-    r.onend = function () {
-      listening = false;
-      if (bridge) bridge.onEnded();
-    };
-    return r;
-  }
-
-  window.speechStart = function () {
-    if (listening) return;
-    rec = ensureRecognition();
-    if (!rec) return;
-    try {
-      rec.start();
-      listening = true;
-    } catch (err) {
-      postError(err.message || "start-failed");
-    }
-  };
-
-  window.speechStop = function () {
-    if (!rec || !listening) return;
-    try {
-      rec.stop();
-    } catch (err) {
-      postError(err.message || "stop-failed");
-    }
-    listening = false;
-  };
-
-  new QWebChannel(qt.webChannelTransport, function (channel) {
-    bridge = channel.objects.bridge;
-    bridge.onReady();
-  });
-})();
-</script>
-</body>
-</html>
-"""
+        _PYAUDIO_AVAILABLE = True
+    except ImportError:
+        pass
 
 
-if _WEBENGINE_AVAILABLE:
+def _availability_message() -> tuple[bool, str]:
+    if _WINRT_AVAILABLE:
+        return True, ""
+    if _SR_AVAILABLE and _PYAUDIO_AVAILABLE:
+        return True, ""
+    if sys.platform == "win32":
+        return (
+            False,
+            "音声認識パッケージが未インストールです。"
+            " pip install winrt-Windows.Media.SpeechRecognition "
+            "winrt-Windows.Foundation winrt-Windows.Globalization",
+        )
+    if not _SR_AVAILABLE:
+        return False, "SpeechRecognition が未インストールです（pip install SpeechRecognition）"
+    return False, "PyAudio が未インストールです（pip install PyAudio）"
 
-    class _SpeechWebPage(QWebEnginePage):
-        def __init__(self, profile: QWebEngineProfile, parent=None) -> None:
-            super().__init__(profile, parent)
+
+class _SpeechWorkerBase(QThread):
+    transcript_received = Signal(str)
+    error = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._stop_event = threading.Event()
+        self._pause_event = threading.Event()
+        self._want_listening = False
+
+    def request_start(self) -> None:
+        self._want_listening = True
+        self._pause_event.clear()
+
+    def request_stop(self) -> None:
+        self._want_listening = False
+        self._pause_event.clear()
+        self._stop_event.set()
+
+    def request_pause(self) -> None:
+        self._pause_event.set()
+
+    def request_resume(self) -> None:
+        self._pause_event.clear()
+
+
+class _WinrtSpeechWorker(_SpeechWorkerBase):
+    def run(self) -> None:
+        try:
+            asyncio.run(self._async_main())
+        except Exception as exc:
+            if not self._stop_event.is_set():
+                self.error.emit(f"音声認識エラー: {exc}")
+
+    async def _async_main(self) -> None:
+        from winrt.windows.globalization import Language
+        from winrt.windows.media.speechrecognition import (
+            SpeechRecognitionResultStatus,
+            SpeechRecognizer,
+        )
+
+        try:
+            recognizer = SpeechRecognizer(Language("ja-JP"))
+        except Exception:
+            recognizer = SpeechRecognizer()
+
+        compile_result = await recognizer.compile_constraints_async()
+        if int(compile_result.status) != 0:
+            self.error.emit("日本語の音声認識を初期化できません（Windows の音声パックを確認）")
+            recognizer.close()
+            return
+
+        session = recognizer.continuous_recognition_session
+        session_active = False
+
+        def on_result(_sender, args) -> None:
             try:
-                from PySide6.QtWebEngineCore import QWebEnginePermission
+                result = args.result
+                if result.status != SpeechRecognitionResultStatus.SUCCESS:
+                    return
+                text = str(result.text or "").strip()
+                if text:
+                    self.transcript_received.emit(text)
+            except Exception as exc:
+                self.error.emit(f"音声認識エラー: {exc}")
 
-                self.permissionRequested.connect(self._on_permission)  # type: ignore[attr-defined]
-                self._PermissionType = QWebEnginePermission.PermissionType
-            except (ImportError, AttributeError):
-                self._PermissionType = None
+        session.result_generated += on_result
 
-        def _on_permission(self, permission) -> None:
-            if self._PermissionType is None:
-                return
-            if permission.permissionType() == self._PermissionType.MediaAudioCapture:
-                permission.grant()
+        try:
+            while not self._stop_event.is_set():
+                if self._want_listening and not self._pause_event.is_set():
+                    if not session_active:
+                        await session.start_async()
+                        session_active = True
+                elif session_active:
+                    await session.stop_async()
+                    session_active = False
+                await asyncio.sleep(0.05)
+        finally:
+            if session_active:
+                try:
+                    await session.stop_async()
+                except Exception:
+                    pass
+            recognizer.close()
+
+
+class _SrSpeechWorker(_SpeechWorkerBase):
+    def run(self) -> None:
+        import speech_recognition as sr
+
+        recognizer = sr.Recognizer()
+        recognizer.dynamic_energy_threshold = True
+        recognizer.pause_threshold = 0.8
+
+        try:
+            microphone = sr.Microphone()
+        except OSError as exc:
+            self.error.emit(f"マイクを開けません: {exc}")
+            return
+
+        with microphone as source:
+            try:
+                recognizer.adjust_for_ambient_noise(source, duration=0.4)
+            except Exception:
+                pass
+
+            while not self._stop_event.is_set():
+                if not self._want_listening or self._pause_event.is_set():
+                    self.msleep(50)
+                    continue
+                try:
+                    audio = recognizer.listen(source, timeout=0.8, phrase_time_limit=20)
+                except sr.WaitTimeoutError:
+                    continue
+                except Exception as exc:
+                    if not self._stop_event.is_set():
+                        self.error.emit(f"録音エラー: {exc}")
+                    break
+
+                if self._stop_event.is_set() or self._pause_event.is_set():
+                    continue
+
+                try:
+                    text = recognizer.recognize_google(audio, language="ja-JP")
+                except sr.UnknownValueError:
+                    continue
+                except sr.RequestError as exc:
+                    self.error.emit(f"音声認識エラー: {exc}")
+                    continue
+
+                chunk = str(text or "").strip()
+                if chunk:
+                    self.transcript_received.emit(chunk)
+
+
+def _create_worker(parent: QWidget | None) -> _SpeechWorkerBase:
+    if _WINRT_AVAILABLE:
+        return _WinrtSpeechWorker(parent)
+    return _SrSpeechWorker(parent)
 
 
 class SpeechEngine(QWidget):
-    """Chromium Web Speech API を使った音声認識（Google 無料 STT・要ネット）。"""
+    """マイク音声認識（Windows: オフライン WinRT / その他: Google STT・要ネット）。"""
 
     transcript_received = Signal(str)
     error = Signal(str)
@@ -131,107 +207,67 @@ class SpeechEngine(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._bridge = SpeechRecognitionBridge(self)
-        self._bridge.ready.connect(self._on_bridge_ready)
-        self._bridge.final_text.connect(self._on_final_text)
-        self._bridge.error.connect(self._on_error)
-        self._bridge.ended.connect(self._on_ended)
-
-        self._view = None
-        self._channel = None
-        self._ready = False
+        self._worker: _SpeechWorkerBase | None = None
         self._listening = False
         self._paused = False
-        self._start_pending = False
         self._want_listening = False
-
-        if _WEBENGINE_AVAILABLE:
-            self._init_webview()
-        else:
-            self.availability_changed.emit(False)
+        self.availability_changed.emit(self.is_available())
 
     @staticmethod
     def is_available() -> bool:
-        return _WEBENGINE_AVAILABLE
+        ok, _ = _availability_message()
+        return ok
 
     def is_listening(self) -> bool:
         return self._listening
 
-    def _init_webview(self) -> None:
-        profile = QWebEngineProfile.defaultProfile()
-        self._view = QWebEngineView(self)
-        page = _SpeechWebPage(profile, self._view)
-        self._view.setPage(page)
-        self._view.setFixedSize(1, 1)
-        self._view.hide()
-
-        self._channel = QWebChannel(self)
-        self._channel.registerObject("bridge", self._bridge)
-        page.setWebChannel(self._channel)
-
-        page.loadFinished.connect(self._on_load_finished)
-        base = QUrl("https://local.automatedsaiten/speech/")
-        page.setHtml(_SPEECH_HTML, base)
-        self.availability_changed.emit(True)
-
-    def _on_load_finished(self, ok: bool) -> None:
-        if not ok:
-            self.error.emit("音声認識ページの読み込みに失敗しました")
-            self.availability_changed.emit(False)
-
-    @Slot()
-    def _on_bridge_ready(self) -> None:
-        self._ready = True
-        if self._start_pending or self._want_listening:
-            self._start_pending = False
-            if not self._listening:
-                self._begin_recognition()
-
-    def _run_js(self, script: str) -> None:
-        if self._view is None:
-            return
-        page = self._view.page()
-        if page is not None:
-            page.runJavaScript(script)
-
     def start(self) -> None:
-        if not _WEBENGINE_AVAILABLE or self._view is None:
-            self.error.emit(
-                "PySide6-Addons が未インストールです。"
-                " pip install PySide6-Addons を実行してください。"
-            )
+        ok, message = _availability_message()
+        if not ok:
+            self.error.emit(message)
             return
         self._want_listening = True
-        if self._listening:
+        self._paused = False
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.request_start()
+            self._set_listening(True)
             return
-        if not self._ready:
-            self._start_pending = True
-            return
-        self._begin_recognition()
+        self._spawn_worker()
 
-    def _begin_recognition(self) -> None:
-        self._listening = True
-        self.listening_changed.emit(True)
-        self._run_js("window.speechStart && window.speechStart();")
+    def _spawn_worker(self) -> None:
+        self._worker = _create_worker(self)
+        self._worker.transcript_received.connect(self.transcript_received)
+        self._worker.error.connect(self._on_worker_error)
+        self._worker.finished.connect(self._on_worker_finished)
+        self._worker.request_start()
+        self._worker.start()
+        self._set_listening(True)
 
     def stop(self) -> None:
-        self._paused = False
         self._want_listening = False
-        self._start_pending = False
-        self._run_js("window.speechStop && window.speechStop();")
+        self._paused = False
+        if self._worker is not None:
+            self._worker.request_stop()
+            if not self._worker.wait(5000):
+                self._worker.terminate()
+                self._worker.wait(1000)
+            self._worker = None
         self._set_listening(False)
 
     def pause(self) -> None:
         """確認ダイアログ表示中など、認識だけ一時停止（音声入力トグルはオンのまま）。"""
         self._paused = True
-        self._run_js("window.speechStop && window.speechStop();")
+        if self._worker is not None:
+            self._worker.request_pause()
         self._set_listening(False)
 
     def resume(self) -> None:
         """一時停止後に認識を再開。"""
         self._paused = False
-        if self._want_listening and self._ready and not self._listening:
-            self._begin_recognition()
+        if self._worker is not None and self._worker.isRunning():
+            self._worker.request_resume()
+        if self._want_listening:
+            self._set_listening(True)
 
     def _set_listening(self, on: bool) -> None:
         if self._listening == on:
@@ -239,36 +275,12 @@ class SpeechEngine(QWidget):
         self._listening = on
         self.listening_changed.emit(on)
 
-    @Slot(str)
-    def _on_final_text(self, text: str) -> None:
-        chunk = str(text or "").strip()
-        if chunk:
-            self.transcript_received.emit(chunk)
-
-    @Slot(str)
-    def _on_error(self, message: str) -> None:
+    def _on_worker_error(self, message: str) -> None:
         msg = str(message or "").strip()
-        if msg in ("aborted", "no-speech"):
-            return
-        self._set_listening(False)
-        if msg == "not-allowed":
-            self.error.emit("マイクの使用が許可されていません")
-            return
-        if msg == "network":
-            self.error.emit("音声認識にはネットワーク接続が必要です")
-            return
-        if msg == "service-not-allowed":
-            self.error.emit("Web Speech API が利用できません（Chromium 設定を確認）")
-            return
-        self.error.emit(f"音声認識エラー: {msg}")
+        if msg:
+            self.error.emit(msg)
 
-    @Slot()
-    def _on_ended(self) -> None:
+    def _on_worker_finished(self) -> None:
         self._set_listening(False)
-        if self._want_listening and self._ready:
-            QTimer.singleShot(120, self._restart_if_wanted)
-
-    def _restart_if_wanted(self) -> None:
-        if self._paused or not self._want_listening or self._listening:
-            return
-        self._begin_recognition()
+        if self._want_listening and not self._paused:
+            self._spawn_worker()

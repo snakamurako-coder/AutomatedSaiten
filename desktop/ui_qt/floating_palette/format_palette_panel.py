@@ -71,7 +71,7 @@ class FormatPalettePanel(QWidget):
         self._speech_btn = QPushButton("音声入力")
         self._speech_btn.setCheckable(True)
         self._speech_btn.setToolTip(
-            "Web Speech API で音声をテキストに追加（要ネット・マイク・PySide6-Addons）"
+            "マイクで音声をテキストに追加（Windows 標準音声認識・要マイク許可）"
         )
         self._speech_btn.toggled.connect(self._on_speech_toggled)
         del_btn = QPushButton("削除")
