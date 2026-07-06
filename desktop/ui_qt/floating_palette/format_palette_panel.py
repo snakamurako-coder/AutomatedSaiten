@@ -77,6 +77,7 @@ class FormatPalettePanel(QWidget):
         )
         self._speech_btn.toggled.connect(self._on_speech_toggled)
         del_btn = QPushButton("削除")
+        del_btn.setToolTip("選択中のテキストボックスを削除（Del キーでも可）")
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self.delete_requested.emit)
         btn_row.addWidget(done_btn, 1)

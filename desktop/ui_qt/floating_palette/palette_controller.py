@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Protocol
 
 from PySide6.QtCore import QPoint, QRect, QTimer, Qt
+from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
 
 from ui_qt.floating_palette.palette_prefs import (
@@ -104,6 +105,11 @@ class PaletteController:
 
         self.tool_window.clear_ink_requested.connect(self._on_clear_active_ink)
         self.tool_window.clear_text_boxes_requested.connect(self._on_clear_active_text_boxes)
+
+        for parent in (self._main, self.tool_window):
+            shortcut = QShortcut(QKeySequence.StandardKey.Delete, parent)
+            shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+            shortcut.activated.connect(self._on_delete_selected_text_hotkey)
 
         self.tool_window.set_view_mode(str(prefs.get("view_mode") or "simple"))
         self.tool_window.set_brush(
@@ -477,6 +483,16 @@ class PaletteController:
             if stack.text_layer.selected_box():
                 stack.text_layer.delete_selected()
                 return
+
+    def _on_delete_selected_text_hotkey(self) -> None:
+        """選択中のテキストボックスを Del で削除（文字編集中はエディタに任せる）。"""
+        if self._tool != TOOL_TEXT:
+            return
+        if any(stack.text_layer.has_editing_focus() for stack in self._stacks()):
+            return
+        if not self._has_selected_text_box():
+            return
+        self._on_format_delete()
 
     def refresh_speech_prefs(self) -> None:
         mode = load_speech_input_mode()
