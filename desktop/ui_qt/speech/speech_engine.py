@@ -19,6 +19,15 @@ _PRIVACY_ERROR_MESSAGE = (
     "（従来の設定名: 「入力とカスタム入力の設定を使う」／「私を理解する」）\n\n"
     "設定画面を開きました。有効にしたら、もう一度音声入力をお試しください。"
 )
+_MICROPHONE_ERROR_MESSAGE = (
+    "マイクの使用が許可されていません。\n\n"
+    "設定 → プライバシーとセキュリティ → マイク\n"
+    "で「マイクへのアクセス」をオンにし、"
+    "一覧の「Python」（python.exe）をオンにしてください。\n\n"
+    "（ターミナルから python main.py で起動している場合、"
+    "アプリ名ではなく Python が表示されます）\n\n"
+    "設定画面を開きました。許可後、アプリを再起動してお試しください。"
+)
 
 _WINRT_AVAILABLE = False
 if sys.platform == "win32":
@@ -91,6 +100,23 @@ def _open_speech_privacy_settings() -> None:
         except OSError:
             continue
     subprocess.Popen(["cmd", "/c", "start", "", "ms-settings:privacy-speech"], shell=False)
+
+
+def _open_microphone_settings() -> None:
+    if sys.platform != "win32":
+        return
+    for uri in (
+        "ms-settings:privacy-microphone",
+        "ms-settings:privacy",
+    ):
+        try:
+            os_startfile = getattr(__import__("os"), "startfile", None)
+            if os_startfile is not None:
+                os_startfile(uri)
+                return
+        except OSError:
+            continue
+    subprocess.Popen(["cmd", "/c", "start", "", "ms-settings:privacy-microphone"], shell=False)
 
 
 def _emit_speech_error(worker: _SpeechWorkerBase, exc: BaseException) -> None:
@@ -171,6 +197,11 @@ class _WinrtSpeechWorker(_SpeechWorkerBase):
         def on_result(_sender, args) -> None:
             try:
                 result = args.result
+                if result.status == SpeechRecognitionResultStatus.MICROPHONE_UNAVAILABLE:
+                    if not self._stop_event.is_set():
+                        _open_microphone_settings()
+                        self.error.emit(_MICROPHONE_ERROR_MESSAGE)
+                    return
                 if result.status != SpeechRecognitionResultStatus.SUCCESS:
                     return
                 text = str(result.text or "").strip()
