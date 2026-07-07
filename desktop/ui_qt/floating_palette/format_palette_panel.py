@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QSpinBox,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -70,13 +72,24 @@ class FormatPalettePanel(QWidget):
         size_lbl = QLabel("サイズ")
         size_lbl.setFixedWidth(48)
         size_row.addWidget(size_lbl)
-        self._size_spin = QSpinBox()
-        self._size_spin.setRange(6, 72)
-        self._size_spin.setSuffix(" pt")
-        self._size_spin.setToolTip("選択範囲またはカーソル位置の文字サイズ")
+        self._size_spin = self._make_pt_spin(
+            "選択範囲またはカーソル位置の文字サイズ"
+        )
         self._size_spin.valueChanged.connect(self._on_size_changed)
-        size_row.addWidget(self._size_spin, 1)
+        size_row.addWidget(self._size_spin)
+        size_row.addStretch()
         root.addLayout(size_row)
+
+        spacing_row = QHBoxLayout()
+        spacing_row.setSpacing(6)
+        spacing_lbl = QLabel("行間")
+        spacing_lbl.setFixedWidth(48)
+        spacing_row.addWidget(spacing_lbl)
+        self._line_spacing_spin = self._make_pt_spin("改行後の行の高さ（ポイント）")
+        self._line_spacing_spin.valueChanged.connect(self._on_line_spacing_changed)
+        spacing_row.addWidget(self._line_spacing_spin)
+        spacing_row.addStretch()
+        root.addLayout(spacing_row)
 
         self._detail_format_frame = QFrame()
         detail_lay = QHBoxLayout(self._detail_format_frame)
@@ -85,9 +98,9 @@ class FormatPalettePanel(QWidget):
         deco_lbl = QLabel("装飾")
         deco_lbl.setFixedWidth(48)
         detail_lay.addWidget(deco_lbl)
-        self._bold_btn = self._make_deco_btn("B", "太字")
-        self._italic_btn = self._make_deco_btn("I", "イタリック")
-        self._underline_btn = self._make_deco_btn("U", "下線")
+        self._bold_btn = self._make_deco_btn("太字", "太字", bold=True)
+        self._italic_btn = self._make_deco_btn("イタリック", "イタリック", italic=True)
+        self._underline_btn = self._make_deco_btn("下線", "下線", underline=True)
         self._bold_btn.clicked.connect(lambda: self._emit_toggle("toggleBold"))
         self._italic_btn.clicked.connect(lambda: self._emit_toggle("toggleItalic"))
         self._underline_btn.clicked.connect(lambda: self._emit_toggle("toggleUnderline"))
@@ -139,17 +152,41 @@ class FormatPalettePanel(QWidget):
             {
                 "color": TEXT_PALETTE_COLORS[0],
                 "fontSize": 14,
+                "lineSpacing": 14,
                 "bold": False,
                 "italic": False,
                 "underline": False,
             }
         )
 
-    def _make_deco_btn(self, label: str, tooltip: str) -> QPushButton:
+    def _make_pt_spin(self, tooltip: str) -> QSpinBox:
+        spin = QSpinBox()
+        spin.setRange(6, 72)
+        spin.setSuffix(" pt")
+        spin.setToolTip(tooltip)
+        fm = QFontMetrics(spin.font())
+        frame = spin.style().pixelMetric(QStyle.PixelMetric.PM_SpinBoxFrameWidth, None, spin)
+        spin.setFixedWidth(fm.horizontalAdvance("14 pt") + frame * 2 + 20)
+        return spin
+
+    def _make_deco_btn(
+        self,
+        label: str,
+        tooltip: str,
+        *,
+        bold: bool = False,
+        italic: bool = False,
+        underline: bool = False,
+    ) -> QPushButton:
         btn = QPushButton(label)
         btn.setObjectName("ToolSegmentBtn")
         btn.setCheckable(True)
         btn.setToolTip(tooltip)
+        font = QFont(btn.font())
+        font.setBold(bold)
+        font.setItalic(italic)
+        font.setUnderline(underline)
+        btn.setFont(font)
         return btn
 
     def set_detailed_controls_visible(self, visible: bool) -> None:
@@ -214,6 +251,11 @@ class FormatPalettePanel(QWidget):
             return
         self.char_format_changed.emit({"fontSize": int(value)})
 
+    def _on_line_spacing_changed(self, value: int) -> None:
+        if self._loading_char:
+            return
+        self.char_format_changed.emit({"lineSpacing": int(value)})
+
     def _emit_toggle(self, key: str) -> None:
         if self._loading_char:
             return
@@ -232,6 +274,14 @@ class FormatPalettePanel(QWidget):
             self._size_spin.blockSignals(True)
             self._size_spin.setValue(max(6, min(72, size)))
             self._size_spin.blockSignals(False)
+            spacing = int(
+                state.get("lineSpacing")
+                or self._style.get("lineSpacing")
+                or size
+            )
+            self._line_spacing_spin.blockSignals(True)
+            self._line_spacing_spin.setValue(max(6, min(72, spacing)))
+            self._line_spacing_spin.blockSignals(False)
             self._bold_btn.blockSignals(True)
             self._italic_btn.blockSignals(True)
             self._underline_btn.blockSignals(True)
@@ -259,6 +309,11 @@ class FormatPalettePanel(QWidget):
             {
                 "color": str(self._style.get("textColor") or self._text_palette_colors[0]),
                 "fontSize": int(self._style.get("fontSize") or 14),
+                "lineSpacing": int(
+                    self._style.get("lineSpacing")
+                    or self._style.get("fontSize")
+                    or 14
+                ),
                 "bold": False,
                 "italic": False,
                 "underline": False,

@@ -21,6 +21,7 @@ TEXT_PALETTE_COLORS: tuple[str, ...] = (
 DEFAULT_TEXT_STYLE: dict[str, Any] = {
     "textColor": TEXT_PALETTE_COLORS[0],
     "fontSize": 14,
+    "lineSpacing": 14,
     "fontFamily": "meiryo.ttc",
     "templateId": "A",
     "fillAlpha": 0.0,

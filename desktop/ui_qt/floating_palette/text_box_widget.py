@@ -198,9 +198,22 @@ class TextBoxWidget(QFrame):
         pt = fmt.fontPointSize()
         if pt <= 0:
             pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
+        block_fmt = cursor.blockFormat()
+        lh = float(block_fmt.lineHeight())
+        lh_type = block_fmt.lineHeightType()
+        if (
+            lh > 0
+            and lh_type == int(QTextBlockFormat.LineHeightTypes.FixedHeight.value)
+        ):
+            line_spacing = int(round(lh))
+        else:
+            line_spacing = int(
+                round(float(st.get("lineSpacing") or st.get("fontSize") or _DEFAULT_FONT_PT))
+            )
         return {
             "color": tc,
             "fontSize": int(round(pt)),
+            "lineSpacing": line_spacing,
             "bold": fmt.fontWeight() >= int(QFont.Weight.Bold),
             "italic": fmt.fontItalic(),
             "underline": fmt.fontUnderline(),
@@ -234,6 +247,12 @@ class TextBoxWidget(QFrame):
             fmt.setFontItalic(not cursor.charFormat().fontItalic())
         if changes.get("toggleUnderline"):
             fmt.setFontUnderline(not cursor.charFormat().fontUnderline())
+        if "lineSpacing" in changes:
+            pt = max(6.0, float(changes["lineSpacing"]))
+            style = dict(self._box.get("style") or {})
+            style["lineSpacing"] = pt
+            self._box["style"] = resolve_text_style(style)
+            self._apply_block_line_spacing(pt)
         if cursor.hasSelection():
             cursor.mergeCharFormat(fmt)
             self._editor.setTextCursor(cursor)
@@ -361,6 +380,7 @@ class TextBoxWidget(QFrame):
         self._apply_style()
         if self._editing:
             self._apply_default_char_format()
+        self._apply_block_line_spacing()
 
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
@@ -549,15 +569,22 @@ class TextBoxWidget(QFrame):
             self._update_display_content()
         self._update_handles()
 
-    def _setup_tight_document(self) -> None:
-        doc = self._editor.document()
-        doc.setDocumentMargin(0)
+    def _line_spacing_pt(self) -> float:
+        st = self._style()
+        return max(
+            6.0,
+            float(st.get("lineSpacing") or st.get("fontSize") or _DEFAULT_FONT_PT),
+        )
+
+    def _apply_block_line_spacing(self, pt: float | None = None) -> None:
+        line_pt = max(6.0, float(pt if pt is not None else self._line_spacing_pt()))
         block_fmt = QTextBlockFormat()
         block_fmt.setTopMargin(0)
         block_fmt.setBottomMargin(0)
         block_fmt.setLineHeight(
-            100.0, int(QTextBlockFormat.LineHeightTypes.ProportionalHeight.value)
+            line_pt, int(QTextBlockFormat.LineHeightTypes.FixedHeight.value)
         )
+        doc = self._editor.document()
         self._editor.blockSignals(True)
         try:
             block = doc.firstBlock()
@@ -567,6 +594,14 @@ class TextBoxWidget(QFrame):
                 block = block.next()
         finally:
             self._editor.blockSignals(False)
+        self._sync_editor_to_box()
+        if not self._editing:
+            self._update_display_content()
+
+    def _setup_tight_document(self) -> None:
+        doc = self._editor.document()
+        doc.setDocumentMargin(0)
+        self._apply_block_line_spacing()
 
     def _on_text_changed(self) -> None:
         self._sync_editor_to_box()
