@@ -12,6 +12,7 @@ VIEW_DETAILED = "detailed"
 TOOL_PEN = "pen"
 TOOL_ERASER = "eraser"
 TOOL_TEXT = "text"
+TOOL_PHRASE = "phrase"
 TOOL_NONE = "none"
 
 PALETTE_COLORS = ("#111827", "#dc2626", "#2563eb", "#16a34a", "#ea580c", "#9333ea")
@@ -85,9 +86,9 @@ def load_palette_prefs() -> dict[str, Any]:
     vm = str(out.get("view_mode") or VIEW_SIMPLE)
     out["view_mode"] = vm if vm in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
     lt = str(out.get("last_tool") or TOOL_NONE)
-    out["last_tool"] = lt if lt in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE) else TOOL_NONE
+    out["last_tool"] = lt if lt in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_PHRASE, TOOL_NONE) else TOOL_NONE
     lim = str(out.get("last_input_mode") or "draw")
-    out["last_input_mode"] = lim if lim in ("draw", "text") else "draw"
+    out["last_input_mode"] = lim if lim in ("draw", "text", "phrase") else "draw"
     return out
 
 

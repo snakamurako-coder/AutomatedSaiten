@@ -30,7 +30,12 @@ ERASER_MODE_STROKE = "stroke"
 TOOL_PEN = "pen"
 TOOL_ERASER = "eraser"
 TOOL_TEXT = "text"
+TOOL_PHRASE = "phrase"
 TOOL_NONE = "none"
+
+
+def _is_text_like_tool(mode: str) -> bool:
+    return mode in (TOOL_TEXT, TOOL_PHRASE)
 
 # PySide6 では pointerType は QTabletEvent ではなく QPointingDevice 側の列挙
 _Pen = QPointingDevice.PointerType.Pen
@@ -197,13 +202,13 @@ class InkOverlayWidget(QWidget):
 
     def set_tool_mode(self, mode: str) -> None:
         m = str(mode or TOOL_NONE).strip().lower()
-        if m not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE):
+        if m not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_PHRASE, TOOL_NONE):
             m = TOOL_NONE
         self._tool_mode = m
         self._software_eraser = m == TOOL_ERASER
 
     def _stylus_may_draw(self) -> bool:
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             return False
         if self._tool_mode == TOOL_ERASER:
             return False
@@ -212,14 +217,14 @@ class InkOverlayWidget(QWidget):
         return self._tool_mode in (TOOL_PEN, TOOL_NONE)
 
     def _pointer_may_draw(self) -> bool:
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             return False
         if self._palm_rejection:
             return False
         return self._tool_mode in (TOOL_PEN, TOOL_ERASER)
 
     def _emit_click_through(self) -> None:
-        if self._tool_mode != TOOL_TEXT:
+        if not _is_text_like_tool(self._tool_mode):
             self.click_through.emit()
 
     def set_brush(self, color: str, width: float, alpha: float) -> None:
@@ -498,7 +503,7 @@ class InkOverlayWidget(QWidget):
         return self._should_handle_tablet(event)
 
     def _should_erase_tablet(self, event: QTabletEvent) -> bool:
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             return False
         if not self._stylus_may_draw() and not self._software_eraser:
             return False
@@ -507,14 +512,14 @@ class InkOverlayWidget(QWidget):
     def _should_draw_mouse(self, event: QMouseEvent) -> bool:
         if is_eraser_mouse_event(event) or self._software_eraser:
             return False
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             return False
         if not self._pointer_may_draw():
             return False
         return True
 
     def _should_erase_mouse(self, event: QMouseEvent) -> bool:
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             return False
         if not self._pointer_may_draw() and not self._software_eraser:
             return False
@@ -584,7 +589,7 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             event.ignore()
             return
         if self._should_erase_tablet(event):
@@ -633,7 +638,7 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             event.ignore()
             return
         points = event.points()
@@ -845,7 +850,7 @@ class CropInkImageStack(QWidget):
         self._before_ink_draw = cb
 
     def _on_ink_click_through(self) -> None:
-        if self._tool_mode != TOOL_TEXT:
+        if not _is_text_like_tool(self._tool_mode):
             self.image_clicked.emit()
 
     def _map_to_text_layer(self, source: QWidget, pos) -> QPointF:
@@ -873,7 +878,7 @@ class CropInkImageStack(QWidget):
         return False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if self._tool_mode != TOOL_TEXT:
+        if not _is_text_like_tool(self._tool_mode):
             return super().eventFilter(watched, event)
         watched_layers = (
             self.container,
@@ -917,14 +922,18 @@ class CropInkImageStack(QWidget):
         if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
             if self.text_layer.try_speech_place_at(local, event):
                 return True
-        if self.text_layer.handle_placement_event(et, local, event):
+            if self.text_layer.try_phrase_place_at(local, event):
+                return True
+        if self._tool_mode == TOOL_TEXT and self.text_layer.handle_placement_event(
+            et, local, event
+        ):
             return True
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
         # 最背面: 画像。描画モードは手書きが最前面、テキストモードはテキストが最前面。
         self.image_label.lower()
-        if self._tool_mode == TOOL_TEXT:
+        if _is_text_like_tool(self._tool_mode):
             self.ink_overlay.raise_()
             self.text_layer.raise_()
         else:
@@ -946,9 +955,9 @@ class CropInkImageStack(QWidget):
         self._sync_input_routing()
 
     def _sync_input_routing(self) -> None:
-        """テキストモード: 手書きレイヤーはマウス透過。配置は text_layer と eventFilter で処理。"""
-        is_text = self._tool_mode == TOOL_TEXT
-        self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, is_text)
+        """テキスト系モード: 手書きレイヤーはマウス透過。配置は text_layer と eventFilter で処理。"""
+        is_text_like = _is_text_like_tool(self._tool_mode)
+        self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, is_text_like)
         self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, False)
 
     def set_show_ink(self, visible: bool) -> None:
@@ -968,9 +977,10 @@ class CropInkImageStack(QWidget):
     def set_tool_mode(self, mode: str) -> None:
         self._tool_mode = mode
         is_text = mode == TOOL_TEXT
+        is_text_like = _is_text_like_tool(mode)
         self.ink_overlay.set_tool_mode(mode)
         self.text_layer.set_placement_mode(is_text)
-        self.text_layer.set_text_tool_mode(is_text)
+        self.text_layer.set_text_tool_mode(is_text_like)
         self._sync_input_routing()
         self._sync_layer_order()
 

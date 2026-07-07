@@ -19,11 +19,13 @@ from PySide6.QtWidgets import (
 
 from ui_qt.crop_widgets import SliderSpinControls
 from ui_qt.floating_palette.format_palette_panel import FormatPalettePanel
+from ui_qt.floating_palette.phrase_palette_panel import PhrasePalettePanel
 from ui_qt.floating_palette.palette_prefs import (
     PALETTE_COLORS,
     TOOL_ERASER,
     TOOL_NONE,
     TOOL_PEN,
+    TOOL_PHRASE,
     TOOL_TEXT,
     VIEW_DETAILED,
     VIEW_SIMPLE,
@@ -32,6 +34,7 @@ from ui_qt.stylus_overlay import ERASER_MODE_PIXEL, ERASER_MODE_STROKE
 
 MODE_DRAW = "draw"
 MODE_TEXT = "text"
+MODE_PHRASE = "phrase"
 
 
 class ToolPaletteWindow(QWidget):
@@ -99,12 +102,18 @@ class ToolPaletteWindow(QWidget):
         self._mode_group = QButtonGroup(self)
         self._mode_draw_btn = self._make_tab_btn("描画")
         self._mode_text_btn = self._make_tab_btn("テキスト")
-        for i, btn in enumerate((self._mode_draw_btn, self._mode_text_btn)):
+        self._mode_phrase_btn = self._make_tab_btn("定型文")
+        for i, btn in enumerate(
+            (self._mode_draw_btn, self._mode_text_btn, self._mode_phrase_btn)
+        ):
             self._mode_group.addButton(btn, i)
             mode_row.addWidget(btn, 1)
         self._mode_draw_btn.setChecked(True)
         self._mode_draw_btn.toggled.connect(lambda c: c and self._switch_input_mode(MODE_DRAW))
         self._mode_text_btn.toggled.connect(lambda c: c and self._switch_input_mode(MODE_TEXT))
+        self._mode_phrase_btn.toggled.connect(
+            lambda c: c and self._switch_input_mode(MODE_PHRASE)
+        )
         root.addLayout(mode_row)
 
         self._stack = QStackedWidget()
@@ -242,8 +251,16 @@ class ToolPaletteWindow(QWidget):
         scroll.setWidget(self._format_panel)
         text_lay.addWidget(scroll, 1)
 
+        self._phrase_page = QWidget()
+        phrase_lay = QVBoxLayout(self._phrase_page)
+        phrase_lay.setContentsMargins(0, 0, 0, 0)
+        phrase_lay.setSpacing(0)
+        self._phrase_panel = PhrasePalettePanel()
+        phrase_lay.addWidget(self._phrase_panel, 1)
+
         self._stack.addWidget(self._draw_page)
         self._stack.addWidget(self._text_page)
+        self._stack.addWidget(self._phrase_page)
 
         self._view_mode = VIEW_SIMPLE
         self._input_mode = MODE_DRAW
@@ -260,6 +277,10 @@ class ToolPaletteWindow(QWidget):
     def format_panel(self) -> FormatPalettePanel:
         return self._format_panel
 
+    @property
+    def phrase_panel(self) -> PhrasePalettePanel:
+        return self._phrase_panel
+
     def _make_tab_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)
         btn.setObjectName("ToolSegmentBtn")
@@ -273,18 +294,26 @@ class ToolPaletteWindow(QWidget):
         return btn
 
     def _switch_input_mode(self, mode: str, *, emit: bool = True) -> None:
-        mode = mode if mode in (MODE_DRAW, MODE_TEXT) else MODE_DRAW
+        mode = mode if mode in (MODE_DRAW, MODE_TEXT, MODE_PHRASE) else MODE_DRAW
         self._input_mode = mode
-        self._stack.setCurrentWidget(self._text_page if mode == MODE_TEXT else self._draw_page)
-        self._title.setText("テキスト" if mode == MODE_TEXT else "描画")
-        if mode == MODE_DRAW:
-            self._mode_draw_btn.blockSignals(True)
-            self._mode_draw_btn.setChecked(True)
-            self._mode_draw_btn.blockSignals(False)
+        if mode == MODE_TEXT:
+            page = self._text_page
+            title = "テキスト"
+            active_btn = self._mode_text_btn
+        elif mode == MODE_PHRASE:
+            page = self._phrase_page
+            title = "定型文"
+            active_btn = self._mode_phrase_btn
         else:
-            self._mode_text_btn.blockSignals(True)
-            self._mode_text_btn.setChecked(True)
-            self._mode_text_btn.blockSignals(False)
+            page = self._draw_page
+            title = "描画"
+            active_btn = self._mode_draw_btn
+        self._stack.setCurrentWidget(page)
+        self._title.setText(title)
+        for btn in (self._mode_draw_btn, self._mode_text_btn, self._mode_phrase_btn):
+            btn.blockSignals(True)
+            btn.setChecked(btn is active_btn)
+            btn.blockSignals(False)
         if emit:
             self.input_mode_changed.emit(mode)
             self._emit_active_tool()
@@ -294,6 +323,9 @@ class ToolPaletteWindow(QWidget):
 
     def show_text_mode(self) -> None:
         self._switch_input_mode(MODE_TEXT)
+
+    def show_phrase_mode(self) -> None:
+        self._switch_input_mode(MODE_PHRASE)
 
     def current_input_mode(self) -> str:
         return self._input_mode
@@ -359,6 +391,8 @@ class ToolPaletteWindow(QWidget):
     def _emit_active_tool(self) -> None:
         if self._input_mode == MODE_TEXT:
             self.tool_changed.emit(TOOL_TEXT)
+        elif self._input_mode == MODE_PHRASE:
+            self.tool_changed.emit(TOOL_PHRASE)
         else:
             self._emit_draw_tool()
 
@@ -388,7 +422,9 @@ class ToolPaletteWindow(QWidget):
         self._draw_hint.setVisible(self._palm_rejection)
 
     def set_input_mode(self, mode: str) -> None:
-        self._switch_input_mode(mode if mode in (MODE_DRAW, MODE_TEXT) else MODE_DRAW)
+        self._switch_input_mode(
+            mode if mode in (MODE_DRAW, MODE_TEXT, MODE_PHRASE) else MODE_DRAW
+        )
 
     def set_draw_tool(self, tool: str) -> None:
         tool = tool if tool in (TOOL_PEN, TOOL_ERASER, TOOL_NONE) else TOOL_NONE
@@ -400,9 +436,12 @@ class ToolPaletteWindow(QWidget):
             self._emit_draw_tool()
 
     def set_tool(self, tool: str) -> None:
-        """後方互換: TOOL_TEXT ならテキストモード、それ以外は描画モード＋サブツール。"""
+        """後方互換: TOOL_TEXT / TOOL_PHRASE なら各モード、それ以外は描画モード＋サブツール。"""
         if tool == TOOL_TEXT:
             self.set_input_mode(MODE_TEXT)
+            return
+        if tool == TOOL_PHRASE:
+            self.set_input_mode(MODE_PHRASE)
             return
         self.set_input_mode(MODE_DRAW)
         self.set_draw_tool(tool)
@@ -419,6 +458,7 @@ class ToolPaletteWindow(QWidget):
         detailed = self._view_mode == VIEW_DETAILED
         self._detail_frame.setVisible(detailed)
         self._format_panel.set_detailed_controls_visible(detailed)
+        self._phrase_panel.set_view_mode(self._view_mode)
         self._view_btn.setText("簡易" if detailed else "詳細")
 
     def set_view_mode(self, mode: str) -> None:
@@ -475,4 +515,6 @@ class ToolPaletteWindow(QWidget):
     def current_tool(self) -> str:
         if self._input_mode == MODE_TEXT:
             return TOOL_TEXT
+        if self._input_mode == MODE_PHRASE:
+            return TOOL_PHRASE
         return self._draw_tool if not (self._palm_rejection and self._draw_tool == TOOL_PEN) else TOOL_NONE

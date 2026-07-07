@@ -15,6 +15,7 @@ from PySide6.QtWidgets import QFrame, QWidget
 
 from models.text_annotation_repo import new_text_box
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
+from ui_qt.floating_palette.text_rich import TEXT_FORMAT_HTML
 from ui_qt.stylus_overlay import is_pen_mouse_event, is_stylus_tablet_event
 
 _MIN_NATIVE_W = 40.0
@@ -53,6 +54,8 @@ class TextBoxLayer(QWidget):
         self._placement_mode = False
         self._speech_place_text: str | None = None
         self._speech_place_on_placed: Callable[[], None] | None = None
+        self._phrase_place_template: dict[str, Any] | None = None
+        self._phrase_place_on_placed: Callable[[], None] | None = None
         self._show_text = True
         self._text_tool_mode = False
         self._palm_rejection = True
@@ -294,6 +297,82 @@ class TextBoxLayer(QWidget):
     def clear_speech_place_text(self) -> None:
         self.set_speech_place_text(None)
 
+    def has_phrase_place_pending(self) -> bool:
+        return bool(self._phrase_place_template)
+
+    def set_phrase_place_template(
+        self,
+        template: dict[str, Any] | None,
+        *,
+        on_placed: Callable[[], None] | None = None,
+    ) -> None:
+        self._phrase_place_template = copy.deepcopy(template) if template else None
+        self._phrase_place_on_placed = on_placed if template else None
+        if self._phrase_place_template:
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif not self._placement_mode and not self._speech_place_text:
+            self.unsetCursor()
+
+    def clear_phrase_place_template(self) -> None:
+        self.set_phrase_place_template(None)
+
+    def try_phrase_place_at(self, local_pos: QPointF, event) -> bool:
+        if not self._phrase_place_template:
+            return False
+        et = event.type()
+        if et not in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+            return False
+        if isinstance(event, QMouseEvent) and event.button() != Qt.LeftButton:
+            return False
+        if self._reject_placement_event(event):
+            return False
+        lx, ly = int(local_pos.x()), int(local_pos.y())
+        if self.childAt(lx, ly) not in (None, self._rubber):
+            return False
+        return self._try_phrase_place_click(local_pos)
+
+    def _try_phrase_place_click(self, pos: QPointF) -> bool:
+        if not self._phrase_place_template:
+            return False
+        template = copy.deepcopy(self._phrase_place_template)
+        callback = self._phrase_place_on_placed
+        self._phrase_place_template = None
+        self._phrase_place_on_placed = None
+        if not self._placement_mode and not self._speech_place_text:
+            self.unsetCursor()
+        self.place_box_from_template(pos.x(), pos.y(), template)
+        if callback:
+            callback()
+        return True
+
+    def place_box_from_template(
+        self,
+        display_x: float,
+        display_y: float,
+        template: dict[str, Any],
+    ) -> dict[str, Any] | None:
+        tpl = copy.deepcopy(template)
+        nw = max(_MIN_NATIVE_W, float(tpl.get("width") or 120.0))
+        nh = max(_MIN_NATIVE_H, float(tpl.get("height") or 36.0))
+        nx = max(0.0, min(self._native_w - nw, display_x * self._scale_x))
+        ny = max(0.0, min(self._native_h - nh, display_y * self._scale_y))
+        box = new_text_box(nx, ny, width=nw, height=nh)
+        box["text"] = str(tpl.get("text") or "")
+        html = str(tpl.get("textHtml") or "").strip()
+        if html or str(tpl.get("textFormat") or "") == TEXT_FORMAT_HTML:
+            box["textHtml"] = html
+            box["textFormat"] = TEXT_FORMAT_HTML
+        box["style"] = copy.deepcopy(tpl.get("style") or {})
+        self._undo_begin()
+        self._sync_annotations_from_widgets()
+        self._annotations.append(copy.deepcopy(box))
+        self._rebuild_widgets(from_widgets=False)
+        self.select_box(str(box["id"]))
+        self._persist_annotations()
+        self._undo_commit()
+        bid = str(box["id"])
+        return self._widgets[bid].box_data() if bid in self._widgets else box
+
     def try_speech_place_at(self, local_pos: QPointF, event) -> bool:
         if not self._speech_place_text:
             return False
@@ -361,6 +440,8 @@ class TextBoxLayer(QWidget):
 
         if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
             if self._try_speech_place_click(local_pos):
+                return True
+            if self._try_phrase_place_click(local_pos):
                 return True
 
         lx, ly = int(local_pos.x()), int(local_pos.y())
@@ -522,6 +603,9 @@ class TextBoxLayer(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
             if self._try_speech_place_click(event.position()):
+                event.accept()
+                return
+            if self._try_phrase_place_click(event.position()):
                 event.accept()
                 return
         if self._placement_mode and event.button() == Qt.LeftButton:

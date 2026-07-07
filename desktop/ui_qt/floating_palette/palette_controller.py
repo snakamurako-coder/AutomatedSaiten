@@ -13,13 +13,25 @@ from ui_qt.floating_palette.palette_prefs import (
     TOOL_ERASER,
     TOOL_NONE,
     TOOL_PEN,
+    TOOL_PHRASE,
     TOOL_TEXT,
     VIEW_DETAILED,
     load_palette_prefs,
     load_text_palette_colors,
     save_palette_prefs,
 )
-from ui_qt.floating_palette.tool_palette_window import MODE_DRAW, MODE_TEXT, ToolPaletteWindow
+from ui_qt.floating_palette.phrase_template_prefs import (
+    add_phrase_template,
+    load_phrase_templates,
+    phrase_from_text_box,
+    touch_recent_phrase,
+)
+from ui_qt.floating_palette.tool_palette_window import (
+    MODE_DRAW,
+    MODE_PHRASE,
+    MODE_TEXT,
+    ToolPaletteWindow,
+)
 from ui_qt.speech import SpeechEngine
 from ui_qt.speech.speech_confirm_dialog import SpeechConfirmDialog, SpeechConfirmResult
 from ui_qt.speech.speech_prefs import (
@@ -77,6 +89,7 @@ class PaletteController:
         self.tool_window.set_palm_rejection(self._palm_rejection)
 
         fp = self.tool_window.format_panel
+        pp = self.tool_window.phrase_panel
         self.tool_window.tool_changed.connect(self._on_tool_changed)
         self.tool_window.brush_changed.connect(self._on_brush_changed)
         self.tool_window.eraser_mode_changed.connect(self._on_eraser_mode_changed)
@@ -90,6 +103,9 @@ class PaletteController:
         fp.edit_requested.connect(self._on_format_edit)
         fp.delete_requested.connect(self._on_format_delete)
         fp.speech_toggled.connect(self._on_format_speech_toggled)
+        pp.phrase_selected.connect(self._on_phrase_selected)
+        pp.copy_from_textbox_requested.connect(self._on_copy_phrase_from_textbox)
+        pp.placement_cancel_requested.connect(self._cancel_phrase_placement)
         self.fab.clicked.connect(self._restore_from_fab)
 
         self._speech = SpeechEngine(main_window)
@@ -136,6 +152,8 @@ class PaletteController:
         saved_tool = self._normalize_saved_tool(str(prefs.get("last_tool") or TOOL_NONE))
         if saved_mode == MODE_TEXT or saved_tool == TOOL_TEXT:
             self.tool_window.set_input_mode(MODE_TEXT)
+        elif saved_mode == MODE_PHRASE or saved_tool == TOOL_PHRASE:
+            self.tool_window.set_input_mode(MODE_PHRASE)
         else:
             self.tool_window.set_input_mode(MODE_DRAW)
             self.tool_window.set_draw_tool(saved_tool)
@@ -150,7 +168,7 @@ class PaletteController:
     def _normalize_saved_tool(self, tool: str) -> str:
         if self._palm_rejection and tool == TOOL_PEN:
             return TOOL_NONE
-        if tool not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_NONE):
+        if tool not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_PHRASE, TOOL_NONE):
             return TOOL_NONE
         return tool
 
@@ -185,7 +203,7 @@ class PaletteController:
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page
         self._step_id = step_id
-        if self.tool_window.current_input_mode() == MODE_TEXT:
+        if self.tool_window.current_input_mode() in (MODE_TEXT, MODE_PHRASE):
             self.tool_window.show_draw_mode()
         self._connect_stacks()
         self._apply_to_stacks()
@@ -418,11 +436,15 @@ class PaletteController:
     def _on_tool_changed(self, tool: str) -> None:
         prev = self._tool
         self._tool = tool
-        if prev == TOOL_TEXT and tool != TOOL_TEXT:
+        text_like = (TOOL_TEXT, TOOL_PHRASE)
+        if prev in text_like and tool not in text_like:
             self.finish_all_text_editing()
-        if tool != TOOL_TEXT:
+            self._cancel_phrase_placement()
+        if tool not in text_like:
             for stack in self._stacks():
                 stack.text_layer.clear_selection()
+        if tool != TOOL_PHRASE:
+            self._cancel_phrase_placement()
         self._apply_to_stacks()
 
     def _set_active_stack(self, stack: CropInkImageStack) -> None:
@@ -447,12 +469,17 @@ class PaletteController:
             if stack.text_layer.selected_box():
                 self._set_active_stack(stack)
                 break
-        self.tool_window.show_text_mode()
-        self.tool_window.format_panel.load_style(box.get("style") or {})
+        if self.tool_window.current_input_mode() != MODE_PHRASE:
+            self.tool_window.show_text_mode()
+            self.tool_window.format_panel.load_style(box.get("style") or {})
 
     def _on_stack_image_clicked(self, stack: CropInkImageStack) -> None:
         self._set_active_stack(stack)
-        if self._tool != TOOL_TEXT:
+        if self._tool not in (TOOL_TEXT, TOOL_PHRASE):
+            return
+        if self._tool == TOOL_PHRASE and any(
+            s.text_layer.has_phrase_place_pending() for s in self._stacks()
+        ):
             return
         for s in self._stacks():
             s.text_layer.finish_all_editing()
@@ -588,7 +615,7 @@ class PaletteController:
 
     def _on_delete_selected_text_hotkey(self) -> None:
         """選択中のテキストボックスを Del で削除（文字編集中はエディタに任せる）。"""
-        if self._tool != TOOL_TEXT:
+        if self._tool not in (TOOL_TEXT, TOOL_PHRASE):
             return
         if any(stack.text_layer.has_editing_focus() for stack in self._stacks()):
             return
@@ -632,6 +659,72 @@ class PaletteController:
         self._pending_speech_text = None
         for stack in self._stacks():
             stack.text_layer.clear_speech_place_text()
+
+    def _phrase_template_by_id(self, phrase_id: str) -> dict[str, Any] | None:
+        pid = str(phrase_id or "").strip()
+        if not pid:
+            return None
+        for tpl in load_phrase_templates():
+            if str(tpl.get("id")) == pid:
+                return tpl
+        return None
+
+    def _cancel_phrase_placement(self) -> None:
+        self.tool_window.phrase_panel.set_pending_phrase(None)
+        for stack in self._stacks():
+            stack.text_layer.clear_phrase_place_template()
+
+    def _on_phrase_selected(self, phrase_id: str) -> None:
+        template = self._phrase_template_by_id(phrase_id)
+        if template is None:
+            return
+        self._stop_speech()
+        self.finish_all_text_editing()
+        self._cancel_phrase_placement()
+        self.tool_window.phrase_panel.set_pending_phrase(phrase_id)
+
+        def on_placed(pid: str = phrase_id) -> None:
+            self._on_phrase_placed(pid)
+
+        for stack in self._stacks():
+            stack.text_layer.set_phrase_place_template(template, on_placed=on_placed)
+        if hasattr(self._main, "show_app_message"):
+            self._main.show_app_message(
+                "定型文: 貼り付ける場所をクリックしてください",
+                level="info",
+            )
+
+    def _on_phrase_placed(self, phrase_id: str) -> None:
+        touch_recent_phrase(phrase_id)
+        self.tool_window.phrase_panel.set_pending_phrase(None)
+        self.tool_window.phrase_panel.reload_templates()
+        for stack in self._stacks():
+            stack.text_layer.clear_phrase_place_template()
+
+    def _on_copy_phrase_from_textbox(self) -> None:
+        box: dict[str, Any] | None = None
+        for stack in self._stacks():
+            selected = stack.text_layer.selected_box()
+            if selected:
+                box = selected
+                self._set_active_stack(stack)
+                break
+        if box is None:
+            from ui_qt import helpers as h
+
+            h.warn(
+                self._main,
+                "定型文",
+                "コピー元のテキストボックスを選択してください",
+            )
+            return
+        tpl = add_phrase_template(phrase_from_text_box(box))
+        self.tool_window.phrase_panel.reload_templates()
+        if hasattr(self._main, "show_app_message"):
+            self._main.show_app_message(
+                f"定型文「{tpl.get('label', '')}」を登録しました",
+                level="info",
+            )
 
     def _begin_speech_placement(self, text: str) -> None:
         chunk = str(text or "").strip()
