@@ -418,6 +418,7 @@ class ToolPaletteWindow(QWidget):
     def _apply_view_mode(self) -> None:
         detailed = self._view_mode == VIEW_DETAILED
         self._detail_frame.setVisible(detailed)
+        self._format_panel.set_detailed_controls_visible(detailed)
         self._view_btn.setText("簡易" if detailed else "詳細")
 
     def set_view_mode(self, mode: str) -> None:

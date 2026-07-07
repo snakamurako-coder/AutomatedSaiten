@@ -209,38 +209,10 @@ def _draw_text_annotations_pdf(
     page: fitz.Page,
     annotations: list[dict[str, Any]],
 ) -> None:
+    from services.text_rich_render import draw_annotation_pdf
+
     for box in annotations or []:
-        st = resolve_text_style(box.get("style") or {})
-        x = float(box.get("x") or 0)
-        y = float(box.get("y") or 0)
-        w = max(20.0, float(box.get("width") or 32))
-        h = max(12.0, float(box.get("height") or 18))
-        rect = fitz.Rect(x, y, x + w, y + h)
-        fill_alpha = float(st.get("fillAlpha") or 0)
-        if fill_alpha > 0:
-            shape = page.new_shape()
-            shape.draw_rect(rect)
-            shape.finish(
-                color=_hex_to_rgb01(st.get("fillColor") or "#ffffff"),
-                fill=_hex_to_rgb01(st.get("fillColor") or "#ffffff"),
-                fill_opacity=fill_alpha,
-                width=0,
-                closePath=True,
-            )
-            shape.commit()
-        text = str(box.get("text") or "").strip()
-        if not text:
-            continue
-        font_path = _resolve_font_file(preferred=str(st.get("fontFamily") or "") or None)
-        fs = max(8.0, float(st.get("fontSize") or 14))
-        page.insert_textbox(
-            rect,
-            text,
-            fontfile=font_path,
-            fontsize=fs,
-            color=_hex_to_rgb01(st.get("textColor") or "#111827"),
-            align=fitz.TEXT_ALIGN_LEFT,
-        )
+        draw_annotation_pdf(page, box)
 
 
 def _draw_ink_strokes_pdf(page: fitz.Page, strokes: list[dict[str, Any]]) -> None:

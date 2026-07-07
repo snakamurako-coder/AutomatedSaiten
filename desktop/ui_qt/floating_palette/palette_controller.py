@@ -14,6 +14,7 @@ from ui_qt.floating_palette.palette_prefs import (
     TOOL_NONE,
     TOOL_PEN,
     TOOL_TEXT,
+    VIEW_DETAILED,
     load_palette_prefs,
     load_text_palette_colors,
     save_palette_prefs,
@@ -82,7 +83,9 @@ class PaletteController:
         self.tool_window.show_ink_changed.connect(self._on_show_ink_changed)
         self.tool_window.show_text_changed.connect(self._on_show_text_changed)
         self.tool_window.minimize_requested.connect(self._minimize)
+        self.tool_window.view_mode_changed.connect(self._on_view_mode_changed)
         fp.style_changed.connect(self._on_format_style)
+        fp.char_format_changed.connect(self._on_char_format_changed)
         fp.edit_done_requested.connect(self._on_format_edit_done)
         fp.edit_requested.connect(self._on_format_edit)
         fp.delete_requested.connect(self._on_format_delete)
@@ -123,6 +126,7 @@ class PaletteController:
             redo_shortcut.activated.connect(self._on_redo_requested)
 
         self.tool_window.set_view_mode(str(prefs.get("view_mode") or "simple"))
+        self._on_view_mode_changed(self.tool_window._view_mode)
         self.tool_window.set_brush(
             str(prefs.get("last_color") or "#111827"),
             float(prefs.get("last_width") or 2.5),
@@ -306,6 +310,13 @@ class PaletteController:
         stack.text_layer.set_undo_stack(self._undo, stack)
         self._undo.register_stack(stack)
 
+        def on_char_format_state(state: dict[str, Any]) -> None:
+            if stack.text_layer.selected_box():
+                self.tool_window.format_panel.sync_char_format(state)
+
+        stack._palette_on_char_format_state = on_char_format_state  # type: ignore[attr-defined]
+        stack.text_layer.char_format_state_changed.connect(on_char_format_state)
+
         color, width, alpha = self.tool_window.current_brush()
         stack.set_palm_rejection(self._palm_rejection)
         stack.set_show_ink(self._show_ink)
@@ -336,6 +347,13 @@ class PaletteController:
             except (RuntimeError, TypeError):
                 pass
             delattr(stack, "_palette_on_ink_history")
+        char_handler = getattr(stack, "_palette_on_char_format_state", None)
+        if char_handler is not None:
+            try:
+                stack.text_layer.char_format_state_changed.disconnect(char_handler)
+            except (RuntimeError, TypeError):
+                pass
+            delattr(stack, "_palette_on_char_format_state")
         stack.text_layer.set_undo_stack(None, None)
         self._undo.unregister_stack(stack)
 
@@ -530,6 +548,16 @@ class PaletteController:
         self._show_text = bool(visible)
         for stack in self._stacks():
             stack.set_show_text(visible)
+
+    def _on_view_mode_changed(self, mode: str) -> None:
+        detailed = str(mode or "") == VIEW_DETAILED
+        self.tool_window.format_panel.set_detailed_controls_visible(detailed)
+
+    def _on_char_format_changed(self, changes: dict[str, Any]) -> None:
+        for stack in self._stacks():
+            if stack.text_layer.selected_box():
+                stack.text_layer.apply_char_format_to_selected(changes)
+                return
 
     def _on_format_style(self, style: dict[str, Any]) -> None:
         for stack in self._stacks():

@@ -27,6 +27,7 @@ class TextBoxLayer(QWidget):
 
     annotations_changed = Signal()
     selection_changed = Signal(object)  # box dict | None
+    char_format_state_changed = Signal(dict)
     editing_finished = Signal()
 
     def __init__(
@@ -171,6 +172,17 @@ class TextBoxLayer(QWidget):
         for bid, w in self._widgets.items():
             w.set_selected(bid == self._selected_id)
         self.selection_changed.emit(self.selected_box())
+        w = self._widgets.get(self._selected_id) if self._selected_id else None
+        if w is not None:
+            self.char_format_state_changed.emit(w.current_char_format_state())
+
+    def apply_char_format_to_selected(self, changes: dict[str, Any]) -> None:
+        if not self._selected_id:
+            return
+        w = self._widgets.get(self._selected_id)
+        if w is None:
+            return
+        w.apply_char_format(changes)
 
     def clear_selection(self) -> None:
         self.select_box(None)
@@ -476,6 +488,7 @@ class TextBoxLayer(QWidget):
             w.interactive_change_finished.connect(self._undo_commit)
             w.editing_started.connect(self._undo_begin)
             w.editing_committed.connect(self._undo_commit)
+            w.char_format_state_changed.connect(self._on_widget_char_format_state)
             w.set_selected(bid == self._selected_id)
             w.show()
             w.raise_()
@@ -484,6 +497,10 @@ class TextBoxLayer(QWidget):
 
     def _on_widget_selected(self, box_id: str) -> None:
         self.select_box(box_id)
+
+    def _on_widget_char_format_state(self, state: dict[str, Any]) -> None:
+        if self._selected_id:
+            self.char_format_state_changed.emit(state)
 
     def _on_widget_editing_finished(self, _box_id: str) -> None:
         if not self.has_editing_focus():

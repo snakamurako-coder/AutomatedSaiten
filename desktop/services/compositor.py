@@ -196,6 +196,12 @@ def render_text_annotation_layer(
         rect = [x, y, x + w, y + h]
         if float(st.get("fillAlpha") or 0) > 0:
             draw.rounded_rectangle(rect, radius=0, fill=fill)
+        from services.text_rich_render import render_annotation_html_to_pil
+
+        patch = render_annotation_html_to_pil(canvas_size, box, scale=work_scale)
+        if patch is not None:
+            layer = Image.alpha_composite(layer, patch)
+            continue
         text = str(box.get("text") or "").strip()
         if not text:
             continue

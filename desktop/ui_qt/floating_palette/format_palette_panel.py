@@ -1,15 +1,17 @@
-"""テキスト書式パネル（テンプレート・文字色・基本操作のみ）。"""
+"""テキスト書式パネル（テンプレート・文字色・サイズ・装飾）。"""
 
 from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QFrame,
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSpinBox,
     QVBoxLayout,
     QWidget,
 )
@@ -23,9 +25,10 @@ from ui_qt.style import COLORS
 
 
 class FormatPalettePanel(QWidget):
-    """テキストボックス選択時の最小書式コントロール。"""
+    """テキストボックス選択時の書式コントロール。"""
 
     style_changed = Signal(dict)
+    char_format_changed = Signal(dict)
     edit_done_requested = Signal()
     edit_requested = Signal()
     delete_requested = Signal()
@@ -62,6 +65,38 @@ class FormatPalettePanel(QWidget):
         self._color_group = QButtonGroup(self)
         root.addLayout(color_row)
 
+        size_row = QHBoxLayout()
+        size_row.setSpacing(6)
+        size_lbl = QLabel("サイズ")
+        size_lbl.setFixedWidth(48)
+        size_row.addWidget(size_lbl)
+        self._size_spin = QSpinBox()
+        self._size_spin.setRange(6, 72)
+        self._size_spin.setSuffix(" pt")
+        self._size_spin.setToolTip("選択範囲またはカーソル位置の文字サイズ")
+        self._size_spin.valueChanged.connect(self._on_size_changed)
+        size_row.addWidget(self._size_spin, 1)
+        root.addLayout(size_row)
+
+        self._detail_format_frame = QFrame()
+        detail_lay = QHBoxLayout(self._detail_format_frame)
+        detail_lay.setContentsMargins(0, 0, 0, 0)
+        detail_lay.setSpacing(6)
+        deco_lbl = QLabel("装飾")
+        deco_lbl.setFixedWidth(48)
+        detail_lay.addWidget(deco_lbl)
+        self._bold_btn = self._make_deco_btn("B", "太字")
+        self._italic_btn = self._make_deco_btn("I", "イタリック")
+        self._underline_btn = self._make_deco_btn("U", "下線")
+        self._bold_btn.clicked.connect(lambda: self._emit_toggle("toggleBold"))
+        self._italic_btn.clicked.connect(lambda: self._emit_toggle("toggleItalic"))
+        self._underline_btn.clicked.connect(lambda: self._emit_toggle("toggleUnderline"))
+        detail_lay.addWidget(self._bold_btn, 1)
+        detail_lay.addWidget(self._italic_btn, 1)
+        detail_lay.addWidget(self._underline_btn, 1)
+        root.addWidget(self._detail_format_frame)
+        self._detail_format_frame.hide()
+
         btn_row = QHBoxLayout()
         btn_row.setSpacing(6)
         done_btn = QPushButton("編集完了")
@@ -95,11 +130,30 @@ class FormatPalettePanel(QWidget):
         root.addStretch()
 
         self._loading = False
+        self._loading_char = False
         self._speech_phase = "idle"
         self._style: dict[str, Any] = dict(TEXT_STYLE_TEMPLATES["A"])
         self._text_palette_colors: tuple[str, ...] = TEXT_PALETTE_COLORS
         self._rebuild_color_swatches()
-        self._sync_color_swatches(TEXT_PALETTE_COLORS[0])
+        self._sync_char_format_ui(
+            {
+                "color": TEXT_PALETTE_COLORS[0],
+                "fontSize": 14,
+                "bold": False,
+                "italic": False,
+                "underline": False,
+            }
+        )
+
+    def _make_deco_btn(self, label: str, tooltip: str) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setObjectName("ToolSegmentBtn")
+        btn.setCheckable(True)
+        btn.setToolTip(tooltip)
+        return btn
+
+    def set_detailed_controls_visible(self, visible: bool) -> None:
+        self._detail_format_frame.setVisible(bool(visible))
 
     def set_text_palette_colors(self, colors: list[str] | tuple[str, ...]) -> None:
         if len(colors) != 6:
@@ -149,9 +203,46 @@ class FormatPalettePanel(QWidget):
         self._emit_style()
 
     def _pick_text_color(self, color: str) -> None:
+        if self._loading_char:
+            return
         self._sync_color_swatches(color)
         self._style["textColor"] = color
-        self._emit_style()
+        self.char_format_changed.emit({"color": str(color)})
+
+    def _on_size_changed(self, value: int) -> None:
+        if self._loading_char:
+            return
+        self.char_format_changed.emit({"fontSize": int(value)})
+
+    def _emit_toggle(self, key: str) -> None:
+        if self._loading_char:
+            return
+        self.char_format_changed.emit({key: True})
+
+    def sync_char_format(self, state: dict[str, Any]) -> None:
+        self._sync_char_format_ui(state)
+
+    def _sync_char_format_ui(self, state: dict[str, Any]) -> None:
+        self._loading_char = True
+        try:
+            color = str(state.get("color") or self._text_palette_colors[0])
+            self._sync_color_swatches(color)
+            self._style["textColor"] = color
+            size = int(state.get("fontSize") or self._style.get("fontSize") or 14)
+            self._size_spin.blockSignals(True)
+            self._size_spin.setValue(max(6, min(72, size)))
+            self._size_spin.blockSignals(False)
+            self._bold_btn.blockSignals(True)
+            self._italic_btn.blockSignals(True)
+            self._underline_btn.blockSignals(True)
+            self._bold_btn.setChecked(bool(state.get("bold")))
+            self._italic_btn.setChecked(bool(state.get("italic")))
+            self._underline_btn.setChecked(bool(state.get("underline")))
+            self._bold_btn.blockSignals(False)
+            self._italic_btn.blockSignals(False)
+            self._underline_btn.blockSignals(False)
+        finally:
+            self._loading_char = False
 
     def _sync_color_swatches(self, color: str) -> None:
         for i, col in enumerate(self._text_palette_colors):
@@ -164,8 +255,14 @@ class FormatPalettePanel(QWidget):
     def load_style(self, style: dict[str, Any]) -> None:
         self._loading = True
         self._style = resolve_text_style(style)
-        self._sync_color_swatches(
-            str(self._style.get("textColor") or self._text_palette_colors[0])
+        self._sync_char_format_ui(
+            {
+                "color": str(self._style.get("textColor") or self._text_palette_colors[0]),
+                "fontSize": int(self._style.get("fontSize") or 14),
+                "bold": False,
+                "italic": False,
+                "underline": False,
+            }
         )
         self._loading = False
 

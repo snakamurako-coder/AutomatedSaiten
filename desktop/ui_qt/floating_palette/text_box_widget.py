@@ -12,22 +12,28 @@ from PySide6.QtGui import (
     QMouseEvent,
     QPalette,
     QTextBlockFormat,
+    QTextCharFormat,
     QTextCursor,
 )
 from PySide6.QtWidgets import (
     QApplication,
     QFrame,
     QLabel,
-    QPlainTextEdit,
     QSizePolicy,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
 
 from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
+from ui_qt.floating_palette.text_rich import (
+    box_text_html,
+    html_body_for_label,
+    mark_box_html,
+)
 
-_FIXED_FONT_PT = 14
+_DEFAULT_FONT_PT = 14
 _DRAG_THRESHOLD_PX = 4
 _MIN_NATIVE_W = 32.0
 _MIN_NATIVE_H = 18.0
@@ -88,6 +94,7 @@ class TextBoxWidget(QFrame):
     interactive_change_finished = Signal()
     editing_started = Signal()
     editing_committed = Signal()
+    char_format_state_changed = Signal(dict)
 
     def __init__(
         self,
@@ -111,6 +118,7 @@ class TextBoxWidget(QFrame):
         self._press_origin: QPoint | None = None
         self._press_moved = False
         self._suppress_focus_check = False
+        self._syncing_format_ui = False
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.setMouseTracking(True)
         self.setStyleSheet("QFrame { background: transparent; border: none; }")
@@ -122,22 +130,27 @@ class TextBoxWidget(QFrame):
         body_lay.setContentsMargins(0, 0, 0, 0)
         body_lay.setSpacing(0)
 
-        self._editor = QPlainTextEdit(str(box.get("text") or ""))
+        self._editor = QTextEdit()
         self._editor.setObjectName("TextBoxEditor")
         self._editor.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+        self._editor.setAcceptRichText(True)
         self._editor.setFrameShape(QFrame.NoFrame)
         self._editor.setAutoFillBackground(False)
-        self._editor.setLineWrapMode(QPlainTextEdit.LineWrapMode.WidgetWidth)
+        self._editor.setLineWrapMode(QTextEdit.LineWrapMode.WidgetWidth)
         self._editor.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._editor.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._editor.viewport().setAutoFillBackground(False)
         self._editor.setViewportMargins(0, 0, 0, 0)
         self._editor.document().setDocumentMargin(0)
+        self._load_editor_content()
         self._editor.textChanged.connect(self._on_text_changed)
+        self._editor.cursorPositionChanged.connect(self._emit_char_format_state)
+        self._editor.selectionChanged.connect(self._emit_char_format_state)
         self._editor.installEventFilter(self)
 
-        self._display_label = QLabel(str(box.get("text") or ""))
+        self._display_label = QLabel()
         self._display_label.setObjectName("TextBoxDisplayLabel")
+        self._display_label.setTextFormat(Qt.TextFormat.RichText)
         self._display_label.setWordWrap(True)
         self._display_label.setAutoFillBackground(False)
         self._display_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
@@ -169,11 +182,66 @@ class TextBoxWidget(QFrame):
         return str(self._box.get("id") or "")
 
     def box_data(self) -> dict[str, Any]:
-        self._box["text"] = self._editor.toPlainText()
+        self._sync_editor_to_box()
         data = copy.deepcopy(self._box)
         if isinstance(data.get("style"), dict):
             data["style"] = resolve_text_style(data["style"])
         return data
+
+    def current_char_format_state(self) -> dict[str, Any]:
+        st = self._style()
+        cursor = self._editor.textCursor()
+        fmt = cursor.charFormat() if cursor.hasSelection() else self._editor.currentCharFormat()
+        color = fmt.foreground().color()
+        tc = color.name(QColor.NameFormat.HexRgb) if color.isValid() else str(st.get("textColor"))
+        pt = fmt.fontPointSize()
+        if pt <= 0:
+            pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
+        return {
+            "color": tc,
+            "fontSize": int(round(pt)),
+            "bold": fmt.fontWeight() >= int(QFont.Weight.Bold),
+            "italic": fmt.fontItalic(),
+            "underline": fmt.fontUnderline(),
+        }
+
+    def apply_char_format(self, changes: dict[str, Any]) -> None:
+        if not self._editing:
+            self.start_editing(record_undo=False)
+        cursor = self._editor.textCursor()
+        fmt = QTextCharFormat()
+        if "color" in changes:
+            fmt.setForeground(QColor(str(changes["color"])))
+        if "fontSize" in changes:
+            fmt.setFontPointSize(max(6.0, float(changes["fontSize"])))
+        if "bold" in changes:
+            fmt.setFontWeight(
+                QFont.Weight.Bold if changes["bold"] else QFont.Weight.Normal
+            )
+        if "italic" in changes:
+            fmt.setFontItalic(bool(changes["italic"]))
+        if "underline" in changes:
+            fmt.setFontUnderline(bool(changes["underline"]))
+        if changes.get("toggleBold"):
+            cur = cursor.charFormat().fontWeight()
+            fmt.setFontWeight(
+                QFont.Weight.Normal
+                if cur >= int(QFont.Weight.Bold)
+                else QFont.Weight.Bold
+            )
+        if changes.get("toggleItalic"):
+            fmt.setFontItalic(not cursor.charFormat().fontItalic())
+        if changes.get("toggleUnderline"):
+            fmt.setFontUnderline(not cursor.charFormat().fontUnderline())
+        if cursor.hasSelection():
+            cursor.mergeCharFormat(fmt)
+            self._editor.setTextCursor(cursor)
+        else:
+            self._editor.mergeCurrentCharFormat(fmt)
+        self._sync_editor_to_box()
+        self._update_display_content()
+        self._emit_char_format_state()
+        self.changed.emit()
 
     def set_selected(self, on: bool) -> None:
         self._selected = bool(on)
@@ -196,6 +264,7 @@ class TextBoxWidget(QFrame):
             QTimer.singleShot(0, self._focus_editor_at_end)
         else:
             QTimer.singleShot(0, self._focus_editor)
+        QTimer.singleShot(0, self._emit_char_format_state)
 
     def focus_caret_at_end(self) -> bool:
         """編集中のテキスト末尾へカーソルを移動してフォーカスする。"""
@@ -277,19 +346,20 @@ class TextBoxWidget(QFrame):
             return
         if not self._editing:
             self.start_editing(record_undo=False)
-        cur = self._editor.toPlainText()
-        new_text = (cur + chunk) if cur else chunk
-        self._editor.setPlainText(new_text)
         cursor = self._editor.textCursor()
         cursor.movePosition(QTextCursor.MoveOperation.End)
+        cursor.insertText(chunk)
         self._editor.setTextCursor(cursor)
-        self._box["text"] = new_text
+        self._sync_editor_to_box()
+        self._update_display_content()
         self.changed.emit()
 
     def apply_style_dict(self, style: dict[str, Any]) -> None:
         merged = {**dict(self._box.get("style") or {}), **style}
         self._box["style"] = resolve_text_style(merged)
         self._apply_style()
+        if self._editing:
+            self._apply_default_char_format()
 
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
@@ -297,11 +367,11 @@ class TextBoxWidget(QFrame):
         if editing:
             self._text_stack.setCurrentWidget(self._editor)
             self._setup_tight_document()
+            self._apply_default_char_format()
             self.unsetCursor()
         else:
-            text = self._editor.toPlainText()
-            self._box["text"] = text
-            self._display_label.setText(text)
+            self._sync_editor_to_box()
+            self._update_display_content()
             self._text_stack.setCurrentWidget(self._display_label)
         self._apply_style()
 
@@ -379,10 +449,45 @@ class TextBoxWidget(QFrame):
         self._update_handles()
 
     def _content_font(self) -> QFont:
+        st = self._style()
         font = QFont()
-        disp_pt = max(8, int(round(_FIXED_FONT_PT / self._scale)))
+        base_pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
+        disp_pt = max(6, int(round(base_pt / self._scale)))
         font.setPointSize(disp_pt)
         return font
+
+    def _load_editor_content(self) -> None:
+        html = box_text_html(self._box, self._style())
+        self._editor.blockSignals(True)
+        try:
+            self._editor.setHtml(html)
+            self._setup_tight_document()
+        finally:
+            self._editor.blockSignals(False)
+        self._sync_editor_to_box()
+        self._update_display_content()
+
+    def _sync_editor_to_box(self) -> None:
+        plain = self._editor.toPlainText()
+        html = self._editor.toHtml()
+        mark_box_html(self._box, html, plain)
+
+    def _update_display_content(self) -> None:
+        html = box_text_html(self._box, self._style())
+        self._display_label.setText(html_body_for_label(html) or self._editor.toPlainText())
+
+    def _apply_default_char_format(self) -> None:
+        st = self._style()
+        fmt = QTextCharFormat()
+        fmt.setForeground(QColor(str(st.get("textColor") or "#111827")))
+        fmt.setFontPointSize(max(6.0, float(st.get("fontSize") or _DEFAULT_FONT_PT)))
+        fmt.setFontFamily("Meiryo")
+        self._editor.setCurrentCharFormat(fmt)
+
+    def _emit_char_format_state(self) -> None:
+        if self._syncing_format_ui or not self._editing:
+            return
+        self.char_format_state_changed.emit(self.current_char_format_state())
 
     def _apply_style(self) -> None:
         st = self._style()
@@ -423,7 +528,7 @@ class TextBoxWidget(QFrame):
         self._editor.setPalette(pal)
         editor_bg = "rgba(255, 255, 255, 0.92)" if self._editing else "transparent"
         css = (
-            f"QPlainTextEdit#TextBoxEditor {{ color: {tc}; background: {editor_bg}; "
+            f"QTextEdit#TextBoxEditor {{ background: {editor_bg}; "
             f"border: none; padding: 0px; margin: 0px; }}"
         )
         self._editor.setStyleSheet(css)
@@ -431,21 +536,16 @@ class TextBoxWidget(QFrame):
             f"background: {editor_bg}; border: none;"
         )
         label_css = (
-            f"QLabel#TextBoxDisplayLabel {{ color: {tc}; background: transparent; "
-            f"border: none; padding: 0px; margin: 0px; }}"
+            "QLabel#TextBoxDisplayLabel { background: transparent; "
+            "border: none; padding: 0px; margin: 0px; }"
         )
         self._display_label.setStyleSheet(label_css)
-        label_pal = self._display_label.palette()
-        label_pal.setColor(QPalette.ColorRole.WindowText, tc_color)
-        self._display_label.setPalette(label_pal)
         self._display_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         option = self._editor.document().defaultTextOption()
         option.setAlignment(Qt.AlignmentFlag.AlignLeft)
         self._editor.document().setDefaultTextOption(option)
         if not self._editing:
-            self._display_label.setText(
-                str(self._box.get("text") if self._box.get("text") is not None else self._editor.toPlainText())
-            )
+            self._update_display_content()
         self._update_handles()
 
     def _setup_tight_document(self) -> None:
@@ -468,7 +568,8 @@ class TextBoxWidget(QFrame):
             self._editor.blockSignals(False)
 
     def _on_text_changed(self) -> None:
-        self._box["text"] = self._editor.toPlainText()
+        self._sync_editor_to_box()
+        self._update_display_content()
         self.changed.emit()
 
     def _begin_pointer(self, global_pos: QPoint) -> None:
