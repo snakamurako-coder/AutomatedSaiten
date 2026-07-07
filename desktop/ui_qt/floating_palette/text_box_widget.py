@@ -142,7 +142,6 @@ class TextBoxWidget(QFrame):
         self._editor.viewport().setAutoFillBackground(False)
         self._editor.setViewportMargins(0, 0, 0, 0)
         self._editor.document().setDocumentMargin(0)
-        self._load_editor_content()
         self._editor.textChanged.connect(self._on_text_changed)
         self._editor.cursorPositionChanged.connect(self._emit_char_format_state)
         self._editor.selectionChanged.connect(self._emit_char_format_state)
@@ -167,6 +166,8 @@ class TextBoxWidget(QFrame):
         self._text_stack.addWidget(self._editor)
         self._text_stack.setCurrentWidget(self._display_label)
         body_lay.addWidget(self._text_stack, 1)
+
+        self._load_editor_content()
 
         self._handles: dict[str, _CornerHandle] = {
             corner: _CornerHandle(corner, self) for corner in ("tl", "tr", "bl", "br")
