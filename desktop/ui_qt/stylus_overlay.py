@@ -804,6 +804,7 @@ class CropInkImageStack(QWidget):
         self.container = QWidget()
         self.container.setFixedSize(pix.size())
         self.container.setAttribute(Qt.WA_TabletTracking, True)
+        self.container.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.image_label.setParent(self.container)
         self.image_label.move(0, 0)
         self.ink_overlay.setParent(self.container)
@@ -859,7 +860,32 @@ class CropInkImageStack(QWidget):
         gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
         return self.text_layer.mapFromGlobal(gp)
 
+    def _placement_pending(self) -> bool:
+        return (
+            self.text_layer.has_phrase_place_pending()
+            or self.text_layer.has_speech_place_pending()
+        )
+
     def _is_text_placement_event(self, event) -> bool:
+        if self._placement_pending():
+            if isinstance(event, QTabletEvent):
+                return event.type() in (
+                    QEvent.Type.TabletPress,
+                    QEvent.Type.TabletMove,
+                    QEvent.Type.TabletRelease,
+                )
+            if isinstance(event, QTouchEvent):
+                return event.type() == QEvent.Type.TouchBegin
+            if isinstance(event, QMouseEvent):
+                et = event.type()
+                if et == QEvent.Type.MouseMove:
+                    return bool(event.buttons() & Qt.LeftButton)
+                if et == QEvent.Type.MouseButtonRelease:
+                    return event.button() == Qt.LeftButton
+                if event.button() != Qt.LeftButton and et == QEvent.Type.MouseButtonPress:
+                    return False
+                return True
+            return False
         if isinstance(event, QTabletEvent):
             if self._palm_rejection and is_stylus_tablet_event(event):
                 return False
@@ -896,6 +922,7 @@ class CropInkImageStack(QWidget):
             QEvent.Type.TabletPress,
             QEvent.Type.TabletMove,
             QEvent.Type.TabletRelease,
+            QEvent.Type.TouchBegin,
         )
         if et not in placement_types:
             return super().eventFilter(watched, event)
@@ -914,12 +941,21 @@ class CropInkImageStack(QWidget):
                 lx, ly = int(pos.x()), int(pos.y())
                 if self.text_layer.childAt(lx, ly) is not None:
                     return super().eventFilter(watched, event)
-        local = (
-            event.position()
-            if watched is self.text_layer
-            else self._map_to_text_layer(watched, event.position())
-        )
-        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+        if et == QEvent.Type.TouchBegin and isinstance(event, QTouchEvent):
+            points = event.points()
+            if not points or points[0].state() != Qt.TouchPointState.TouchPointPressed:
+                return super().eventFilter(watched, event)
+            gp = points[0].position()
+            if watched is self.text_layer:
+                local = QPointF(gp)
+            else:
+                gpos = watched.mapToGlobal(QPoint(int(gp.x()), int(gp.y())))
+                local = self.text_layer.mapFromGlobal(gpos)
+        elif watched is self.text_layer:
+            local = event.position()
+        else:
+            local = self._map_to_text_layer(watched, event.position())
+        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress, QEvent.Type.TouchBegin):
             if self.text_layer.try_speech_place_at(local, event):
                 return True
             if self.text_layer.try_phrase_place_at(local, event):

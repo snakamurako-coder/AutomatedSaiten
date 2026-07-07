@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any, Protocol
 
 from PySide6.QtCore import QPoint, QRect, QTimer, Qt
@@ -121,6 +122,8 @@ class PaletteController:
         self._settings_overlay_active = False
         self._active_stack: CropInkImageStack | None = None
         self._active_result_id: int | None = None
+        self._pending_phrase_id: str | None = None
+        self._pending_phrase_template: dict[str, Any] | None = None
         self._undo = AnnotationUndoStack()
         self._undo.set_on_changed(self._sync_undo_ui)
         self.refresh_speech_prefs()
@@ -342,6 +345,24 @@ class PaletteController:
         stack.set_eraser_mode(self._eraser_mode)
         stack.set_tool_mode(self._tool)
         stack.set_brush(color, width, alpha)
+        self._apply_phrase_placement_to_stack(stack)
+
+    def _apply_phrase_placement_to_stack(self, stack: CropInkImageStack) -> None:
+        if self._tool != TOOL_PHRASE or not self._pending_phrase_template:
+            return
+        pid = str(self._pending_phrase_id or "")
+
+        def on_placed(phrase_id: str = pid) -> None:
+            self._on_phrase_placed(phrase_id)
+
+        stack.text_layer.set_phrase_place_template(
+            copy.deepcopy(self._pending_phrase_template),
+            on_placed=on_placed,
+        )
+
+    def _apply_phrase_placement_to_stacks(self) -> None:
+        for stack in self._stacks():
+            self._apply_phrase_placement_to_stack(stack)
 
     def _unbind_stack(self, stack: CropInkImageStack) -> None:
         sel_handler = getattr(stack, "_palette_on_selection_changed", None)
@@ -446,6 +467,8 @@ class PaletteController:
         if tool != TOOL_PHRASE:
             self._cancel_phrase_placement()
         self._apply_to_stacks()
+        if self._tool == TOOL_PHRASE and self._pending_phrase_template:
+            self._apply_phrase_placement_to_stacks()
 
     def _set_active_stack(self, stack: CropInkImageStack) -> None:
         self._active_stack = stack
@@ -670,6 +693,8 @@ class PaletteController:
         return None
 
     def _cancel_phrase_placement(self) -> None:
+        self._pending_phrase_id = None
+        self._pending_phrase_template = None
         self.tool_window.phrase_panel.set_pending_phrase(None)
         for stack in self._stacks():
             stack.text_layer.clear_phrase_place_template()
@@ -680,14 +705,10 @@ class PaletteController:
             return
         self._stop_speech()
         self.finish_all_text_editing()
-        self._cancel_phrase_placement()
+        self._pending_phrase_id = str(phrase_id)
+        self._pending_phrase_template = copy.deepcopy(template)
         self.tool_window.phrase_panel.set_pending_phrase(phrase_id)
-
-        def on_placed(pid: str = phrase_id) -> None:
-            self._on_phrase_placed(pid)
-
-        for stack in self._stacks():
-            stack.text_layer.set_phrase_place_template(template, on_placed=on_placed)
+        self._apply_phrase_placement_to_stacks()
         if hasattr(self._main, "show_app_message"):
             self._main.show_app_message(
                 "定型文: 貼り付ける場所をクリックしてください",
@@ -696,6 +717,8 @@ class PaletteController:
 
     def _on_phrase_placed(self, phrase_id: str) -> None:
         touch_recent_phrase(phrase_id)
+        self._pending_phrase_id = None
+        self._pending_phrase_template = None
         self.tool_window.phrase_panel.set_pending_phrase(None)
         self.tool_window.phrase_panel.reload_templates()
         for stack in self._stacks():

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -158,6 +158,12 @@ class FormatPalettePanel(QWidget):
                 "underline": False,
             }
         )
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(220, 240)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(260, 320)
 
     def _make_pt_spin(self, tooltip: str) -> QSpinBox:
         spin = QSpinBox()

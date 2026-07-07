@@ -10,7 +10,7 @@ if TYPE_CHECKING:
     from ui_qt.floating_palette.annotation_undo import AnnotationUndoStack
 
 from PySide6.QtCore import QPointF, Qt, Signal, QEvent, QTimer
-from PySide6.QtGui import QMouseEvent, QTabletEvent
+from PySide6.QtGui import QMouseEvent, QTabletEvent, QTouchEvent
 from PySide6.QtWidgets import QFrame, QWidget
 
 from models.text_annotation_repo import new_text_box
@@ -71,6 +71,7 @@ class TextBoxLayer(QWidget):
         self._rubber.hide()
         self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setAttribute(Qt.WA_TabletTracking, True)
+        self.setAttribute(Qt.WA_AcceptTouchEvents, True)
         self.setMouseTracking(True)
         self.setFixedSize(self._display_w, self._display_h)
         self._rebuild_widgets()
@@ -320,7 +321,11 @@ class TextBoxLayer(QWidget):
         if not self._phrase_place_template:
             return False
         et = event.type()
-        if et not in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+        if et not in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.TabletPress,
+            QEvent.Type.TouchBegin,
+        ):
             return False
         if isinstance(event, QMouseEvent) and event.button() != Qt.LeftButton:
             return False
@@ -377,7 +382,7 @@ class TextBoxLayer(QWidget):
         if not self._speech_place_text:
             return False
         et = event.type()
-        if et not in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
+        if et not in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress, QEvent.Type.TouchBegin):
             return False
         if isinstance(event, QMouseEvent) and event.button() != Qt.LeftButton:
             return False
@@ -469,7 +474,12 @@ class TextBoxLayer(QWidget):
 
         return False
 
+    def _placement_pending(self) -> bool:
+        return bool(self._speech_place_text or self._phrase_place_template)
+
     def _reject_placement_event(self, event) -> bool:
+        if self._placement_pending():
+            return False
         if not self._palm_rejection:
             return False
         if isinstance(event, QMouseEvent) and is_pen_mouse_event(event):
@@ -599,6 +609,29 @@ class TextBoxLayer(QWidget):
     def persist_annotations(self) -> None:
         self._sync_annotations_from_widgets()
         self._persist_annotations()
+
+    def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
+        if event.type() == QEvent.Type.TabletPress:
+            pos = event.position()
+            if self._try_phrase_place_click(pos):
+                event.accept()
+                return
+            if self._try_speech_place_click(pos):
+                event.accept()
+                return
+        super().tabletEvent(event)
+
+    def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
+        points = event.points()
+        if points and points[0].state() == Qt.TouchPointState.TouchPointPressed:
+            pos = points[0].position()
+            if self._try_phrase_place_click(pos):
+                event.accept()
+                return
+            if self._try_speech_place_click(pos):
+                event.accept()
+                return
+        super().touchEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -12,6 +13,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QPushButton,
     QScrollArea,
+    QSizePolicy,
     QStackedWidget,
     QVBoxLayout,
     QWidget,
@@ -60,7 +62,8 @@ class ToolPaletteWindow(QWidget):
         )
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
-        self.resize(280, 380)
+        self.resize(300, 480)
+        self.setMinimumSize(260, 400)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(12, 10, 12, 12)
@@ -117,6 +120,7 @@ class ToolPaletteWindow(QWidget):
         root.addLayout(mode_row)
 
         self._stack = QStackedWidget()
+        self._stack.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
         root.addWidget(self._stack, 1)
 
         self._draw_page = QWidget()
@@ -248,6 +252,9 @@ class ToolPaletteWindow(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         scroll.setWidget(self._format_panel)
         text_lay.addWidget(scroll, 1)
 
@@ -272,6 +279,25 @@ class ToolPaletteWindow(QWidget):
         self._apply_palm_rejection_ui()
         self._switch_input_mode(MODE_DRAW, emit=False)
         self._emit_draw_tool(emit=False)
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._clamp_geometry()
+
+    def _clamp_geometry(self) -> None:
+        screen = self.screen()
+        if screen is None:
+            return
+        avail = screen.availableGeometry()
+        max_h = max(self.minimumHeight(), avail.height() - 32)
+        self.setMaximumHeight(max_h)
+        geo = self.geometry()
+        w = max(self.minimumWidth(), min(geo.width(), avail.width() - 16))
+        h = max(self.minimumHeight(), min(geo.height(), max_h))
+        x = min(max(geo.x(), avail.left()), max(avail.left(), avail.right() - w + 1))
+        y = min(max(geo.y(), avail.top()), max(avail.top(), avail.bottom() - h + 1))
+        if (geo.x(), geo.y(), geo.width(), geo.height()) != (x, y, w, h):
+            self.setGeometry(x, y, w, h)
 
     @property
     def format_panel(self) -> FormatPalettePanel:
@@ -317,6 +343,7 @@ class ToolPaletteWindow(QWidget):
         if emit:
             self.input_mode_changed.emit(mode)
             self._emit_active_tool()
+        self._clamp_geometry()
 
     def show_draw_mode(self) -> None:
         self._switch_input_mode(MODE_DRAW)
@@ -460,6 +487,7 @@ class ToolPaletteWindow(QWidget):
         self._format_panel.set_detailed_controls_visible(detailed)
         self._phrase_panel.set_view_mode(self._view_mode)
         self._view_btn.setText("簡易" if detailed else "詳細")
+        self._clamp_geometry()
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE

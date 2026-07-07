@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtWidgets import (
     QFrame,
     QGridLayout,
@@ -65,7 +65,11 @@ class PhrasePalettePanel(QWidget):
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._scroll_host = QWidget()
+        self._scroll_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored)
         self._detailed_lay = QVBoxLayout(self._scroll_host)
         self._detailed_lay.setContentsMargins(0, 0, 0, 0)
         self._detailed_lay.setSpacing(6)
@@ -85,6 +89,12 @@ class PhrasePalettePanel(QWidget):
 
         self._phrase_btns: dict[str, QPushButton] = {}
         self.reload_templates()
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(220, 200)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(260, 280)
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
@@ -153,7 +163,6 @@ class PhrasePalettePanel(QWidget):
             host.setLayout(row)
             self._detailed_lay.addWidget(host)
 
-        self._detailed_lay.addStretch()
         self.set_pending_phrase(self._pending_id)
 
     def _make_phrase_btn(self, tpl: dict[str, Any], *, compact: bool) -> QPushButton:
