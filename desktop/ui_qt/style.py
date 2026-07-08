@@ -381,25 +381,42 @@ QStatusBar {{
 #ToolPaletteWindow, #FormatPaletteWindow {{
     background: {COLORS["surface"]};
 }}
+#ToolPaletteWindow QPushButton {{
+    padding: 3px 8px;
+    font-size: 11px;
+    font-weight: 500;
+    min-height: 0;
+}}
+#ToolPaletteWindow QCheckBox {{
+    font-size: 11px;
+    spacing: 4px;
+    padding: 0;
+    margin: 0;
+}}
+#ToolPaletteWindow QComboBox {{
+    font-size: 11px;
+    min-height: 0;
+    padding: 1px 4px;
+}}
 #FloatingPaletteTitle {{
     font-size: 12px;
     font-weight: 600;
     color: {COLORS["text_secondary"]};
 }}
 #PaletteHintLabel {{
-    font-size: 11px;
+    font-size: 10px;
     color: {COLORS["text_muted"]};
-    padding: 2px 4px;
+    padding: 1px 3px;
     background: {COLORS["accent_soft"]};
-    border-radius: 6px;
+    border-radius: 4px;
 }}
 QLabel#PhrasePendingLabel {{
     font-size: 10px;
     color: {COLORS["text_muted"]};
-    padding: 2px 6px;
+    padding: 1px 4px;
     margin: 0;
     background: {COLORS["accent_soft"]};
-    border-radius: 6px;
+    border-radius: 4px;
 }}
 QFrame#PhraseDetailRow {{
     background: {COLORS["surface"]};
@@ -413,18 +430,18 @@ QFrame#PhraseDetailRow[editing="true"] {{
 QPushButton#PhraseSimpleBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
-    border-radius: 6px;
-    padding: 1px 8px;
+    border-radius: 5px;
+    padding: 0 6px;
     font-size: 11px;
     text-align: left;
     min-height: 0;
-    max-height: 24px;
+    max-height: 22px;
 }}
 QPushButton#PhraseCopyBtn {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border_strong"]};
-    border-radius: 6px;
-    padding: 4px 12px;
+    border-radius: 5px;
+    padding: 2px 8px;
     font-size: 11px;
     min-height: 0;
 }}
@@ -435,10 +452,10 @@ QPushButton#PhraseCopyBtn:hover {{
 QPushButton#PaletteViewBtn {{
     background: transparent;
     border: 1px solid {COLORS["border"]};
-    border-radius: 6px;
-    min-height: 28px;
-    max-height: 28px;
-    padding: 0 6px;
+    border-radius: 5px;
+    min-height: 22px;
+    max-height: 22px;
+    padding: 0 5px;
     font-size: 11px;
     color: {COLORS["text_secondary"]};
 }}
@@ -461,7 +478,7 @@ QPushButton#PhraseSimpleBtn QLabel {{
 }}
 QLabel#PhraseSimpleBody {{
     font-size: 12px;
-    line-height: 16px;
+    line-height: 15px;
     padding: 0;
     margin: 0;
     background: transparent;
@@ -470,10 +487,11 @@ QLabel#PhraseSimpleBody {{
 QPushButton#PhrasePlacementBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
-    border-radius: 6px;
-    padding: 4px 2px;
+    border-radius: 5px;
+    padding: 2px 2px;
     font-size: 11px;
     min-height: 0;
+    max-height: 22px;
 }}
 QPushButton#PhrasePlacementBtn:hover {{
     border-color: {COLORS["border_strong"]};
@@ -485,7 +503,7 @@ QPushButton#PhrasePlacementBtn:checked {{
 }}
 QLabel#PhraseDetailBody {{
     font-size: 14px;
-    line-height: 20px;
+    line-height: 18px;
     padding: 0;
     margin: 0;
 }}
@@ -497,13 +515,13 @@ QFrame#PhrasePreviewCanvas {{
 QPushButton#PaletteIconBtn {{
     background: transparent;
     border: 1px solid {COLORS["border"]};
-    border-radius: 6px;
-    min-width: 28px;
-    max-width: 28px;
-    min-height: 28px;
-    max-height: 28px;
+    border-radius: 5px;
+    min-width: 22px;
+    max-width: 22px;
+    min-height: 22px;
+    max-height: 22px;
     padding: 0;
-    font-size: 15px;
+    font-size: 14px;
     color: {COLORS["text_secondary"]};
 }}
 QPushButton#PaletteIconBtn:hover {{
@@ -518,11 +536,11 @@ QPushButton#PaletteIconBtn:checked {{
 QPushButton#ToolSegmentBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
-    border-radius: 6px;
-    padding: 2px 6px;
-    font-size: 12px;
+    border-radius: 5px;
+    padding: 1px 5px;
+    font-size: 11px;
     min-height: 0;
-    max-height: 28px;
+    max-height: 22px;
 }}
 QLabel#FormatPaletteLabel {{
     padding: 0;
@@ -540,11 +558,12 @@ QPushButton#ToolSegmentBtn:checked {{
 QPushButton#PaletteActionBtn {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border_strong"]};
-    border-radius: 6px;
-    padding: 3px 4px;
+    border-radius: 5px;
+    padding: 2px 4px;
     font-size: 9px;
     font-weight: 500;
-    min-height: 24px;
+    min-height: 20px;
+    max-height: 22px;
 }}
 QPushButton#PaletteActionBtn:hover {{
     background: #f1f5f9;

@@ -50,18 +50,18 @@ class FormatPalettePanel(QWidget):
     speech_toggled = Signal(bool)
     layout_hint_changed = Signal()
 
-    _SEGMENT_BTN_PAD = 14
-    _ACTION_BTN_PAD = 10
+    _SEGMENT_BTN_PAD = 10
+    _ACTION_BTN_PAD = 8
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        root.setSpacing(3)
 
         tpl_row = QHBoxLayout()
-        tpl_row.setSpacing(6)
+        tpl_row.setSpacing(4)
         tpl_lbl = QLabel("背景")
         tpl_lbl.setObjectName("FormatPaletteLabel")
         tpl_lbl.setFixedWidth(48)
@@ -82,7 +82,7 @@ class FormatPalettePanel(QWidget):
         root.addLayout(tpl_row)
 
         color_row = QHBoxLayout()
-        color_row.setSpacing(6)
+        color_row.setSpacing(4)
         color_lbl = QLabel("文字色")
         color_lbl.setObjectName("FormatPaletteLabel")
         color_lbl.setFixedWidth(48)
@@ -93,7 +93,7 @@ class FormatPalettePanel(QWidget):
         root.addLayout(color_row)
 
         metrics_row = QHBoxLayout()
-        metrics_row.setSpacing(6)
+        metrics_row.setSpacing(4)
         size_lbl = QLabel("サイズ")
         size_lbl.setObjectName("FormatPaletteLabel")
         size_lbl.setFixedWidth(36)
@@ -117,9 +117,9 @@ class FormatPalettePanel(QWidget):
         align_frame.setFrameShape(QFrame.Shape.NoFrame)
         align_lay = QVBoxLayout(align_frame)
         align_lay.setContentsMargins(0, 0, 0, 0)
-        align_lay.setSpacing(2)
+        align_lay.setSpacing(1)
         h_align_row = QHBoxLayout()
-        h_align_row.setSpacing(6)
+        h_align_row.setSpacing(4)
         h_align_row.setContentsMargins(0, 0, 0, 0)
         h_align_lbl = QLabel("横")
         h_align_lbl.setObjectName("FormatPaletteLabel")
@@ -140,7 +140,7 @@ class FormatPalettePanel(QWidget):
         h_align_row.addStretch()
         align_lay.addLayout(h_align_row)
         v_align_row = QHBoxLayout()
-        v_align_row.setSpacing(6)
+        v_align_row.setSpacing(4)
         v_align_row.setContentsMargins(0, 0, 0, 0)
         v_align_lbl = QLabel("縦")
         v_align_lbl.setObjectName("FormatPaletteLabel")
@@ -164,7 +164,7 @@ class FormatPalettePanel(QWidget):
         self._detail_format_frame = QWidget()
         detail_lay = QHBoxLayout(self._detail_format_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
-        detail_lay.setSpacing(6)
+        detail_lay.setSpacing(4)
         deco_lbl = QLabel("装飾")
         deco_lbl.setObjectName("FormatPaletteLabel")
         deco_lbl.setFixedWidth(48)
@@ -188,7 +188,7 @@ class FormatPalettePanel(QWidget):
         root.addWidget(align_frame)
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(4)
+        btn_row.setSpacing(2)
         done_btn = self._make_action_btn("編集完了")
         done_btn.clicked.connect(self.edit_done_requested.emit)
         self._done_btn = done_btn
@@ -249,11 +249,11 @@ class FormatPalettePanel(QWidget):
         )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        base_h = 220 if self._template_edit_mode else 260
+        base_h = 200 if self._template_edit_mode else 240
         return QSize(self.content_min_width(), base_h)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        base_h = 280 if self._template_edit_mode else 340
+        base_h = 250 if self._template_edit_mode else 300
         return QSize(self.content_min_width(), base_h)
 
     def content_min_width(self) -> int:
@@ -265,7 +265,7 @@ class FormatPalettePanel(QWidget):
             + 6
             + self._segment_btn_width("半透明")
         )
-        color_w = label_w + 6 + 6 * 28 + 5 * 6
+        color_w = label_w + 4 + 6 * 24 + 5 * 4
         metrics_w = (
             36
             + self._size_spin.width()
@@ -304,7 +304,7 @@ class FormatPalettePanel(QWidget):
     def _tighten_segment_btn(self, btn: QPushButton, label: str) -> None:
         fm = QFontMetrics(btn.font())
         btn.setFixedWidth(self._segment_btn_width(label, btn.font()))
-        btn.setFixedHeight(fm.height() + 6)
+        btn.setFixedHeight(fm.height() + 4)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _tighten_action_btn(self, btn: QPushButton, label: str) -> None:
@@ -402,10 +402,10 @@ class FormatPalettePanel(QWidget):
         for i, col in enumerate(self._text_palette_colors):
             b = QPushButton()
             b.setObjectName("ColorSwatchBtn")
-            b.setFixedSize(28, 28)
+            b.setFixedSize(24, 24)
             b.setCheckable(True)
             b.setStyleSheet(
-                f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 14px; }}"
+                f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 12px; }}"
             )
             b.clicked.connect(lambda _c=False, idx=i: self._pick_text_color_by_index(idx))
             self._color_group.addButton(b, i)

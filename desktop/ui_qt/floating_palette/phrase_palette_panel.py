@@ -69,7 +69,7 @@ class PhrasePalettePanel(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(6)
+        root.setSpacing(3)
 
         self._pending_label = QLabel("")
         self._pending_label.setObjectName("PhrasePendingLabel")
@@ -83,7 +83,7 @@ class PhrasePalettePanel(QWidget):
         self._simple_frame = QFrame()
         self._simple_lay = QVBoxLayout(self._simple_frame)
         self._simple_lay.setContentsMargins(0, 0, 0, 0)
-        self._simple_lay.setSpacing(1)
+        self._simple_lay.setSpacing(0)
         self._simple_frame.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
@@ -101,7 +101,7 @@ class PhrasePalettePanel(QWidget):
         )
         self._detailed_lay = QVBoxLayout(self._scroll_host)
         self._detailed_lay.setContentsMargins(0, 0, 0, 0)
-        self._detailed_lay.setSpacing(8)
+        self._detailed_lay.setSpacing(4)
         self._detailed_lay.addStretch()
         self._scroll.setWidget(self._scroll_host)
         root.addWidget(self._scroll, 1)
@@ -111,13 +111,13 @@ class PhrasePalettePanel(QWidget):
         self._edit_single_frame.setObjectName("PhraseDetailRow")
         self._edit_single_frame.setProperty("editing", True)
         self._edit_single_lay = QVBoxLayout(self._edit_single_frame)
-        self._edit_single_lay.setContentsMargins(8, 8, 8, 8)
-        self._edit_single_lay.setSpacing(4)
+        self._edit_single_lay.setContentsMargins(6, 6, 6, 6)
+        self._edit_single_lay.setSpacing(2)
         root.addWidget(self._edit_single_frame)
         self._edit_single_frame.hide()
 
         action_row = QHBoxLayout()
-        action_row.setSpacing(6)
+        action_row.setSpacing(4)
         self._copy_btn = QPushButton("テキストボックスからコピー")
         self._copy_btn.setObjectName("PhraseCopyBtn")
         self._copy_btn.setToolTip(
@@ -174,18 +174,20 @@ class PhrasePalettePanel(QWidget):
         elif self._view_mode == VIEW_SIMPLE:
             blocks.append(self._simple_list_height())
         elif self._scroll.isVisible():
-            blocks.append(min(320, self._scroll.sizeHint().height()))
+            blocks.append(min(260, self._scroll.sizeHint().height()))
         if self._copy_btn.isVisible():
             blocks.append(self._copy_btn.sizeHint().height())
         total = margins.top() + margins.bottom() + sum(blocks)
         if len(blocks) > 1:
             total += spacing * (len(blocks) - 1)
-        return max(48, total + 2)
+        return max(36, total)
+
+    _SIMPLE_BTN_HEIGHT = 22
 
     def _simple_list_height(self) -> int:
         if not self._phrase_btns:
             return 0
-        btn_h = 24
+        btn_h = self._SIMPLE_BTN_HEIGHT
         count = len(self._phrase_btns)
         gap = self._simple_lay.spacing()
         return count * btn_h + gap * max(0, count - 1)
@@ -354,7 +356,7 @@ class PhrasePalettePanel(QWidget):
             else phrase_detail_body_text(tpl)
         )
         body.setWordWrap(False)
-        body.setMinimumHeight(60)
+        body.setMinimumHeight(44)
         body.setFont(self._palette_detail_label_font())
         body.setStyleSheet("background: transparent; border: none;")
         if not phrase_has_content(tpl):
@@ -429,10 +431,10 @@ class PhrasePalettePanel(QWidget):
             label.setSizePolicy(
                 QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored
             )
-            label.setMaximumHeight(20)
+            label.setMaximumHeight(18)
         else:
             label.setObjectName("PhraseDetailBody")
-            label.setMinimumHeight(60)
+            label.setMinimumHeight(44)
             label.setAlignment(qt_label_alignment(tpl.get("style")))
             label.setFont(self._palette_detail_label_font())
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -467,9 +469,9 @@ class PhrasePalettePanel(QWidget):
         btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        btn.setFixedHeight(24)
+        btn.setFixedHeight(self._SIMPLE_BTN_HEIGHT)
         lay = QHBoxLayout(btn)
-        lay.setContentsMargins(6, 2, 8, 2)
+        lay.setContentsMargins(5, 1, 6, 1)
         lay.setSpacing(0)
         label = self._make_rich_label(
             tpl,
@@ -511,8 +513,8 @@ class PhrasePalettePanel(QWidget):
         frame.setObjectName("PhraseDetailRow")
         frame.setProperty("editing", pid == self._editing_id)
         lay = QHBoxLayout(frame)
-        lay.setContentsMargins(8, 6, 8, 6)
-        lay.setSpacing(8)
+        lay.setContentsMargins(6, 4, 6, 4)
+        lay.setSpacing(4)
 
         select_btn = self._make_placement_btn(tpl)
         lay.addWidget(select_btn, 0)

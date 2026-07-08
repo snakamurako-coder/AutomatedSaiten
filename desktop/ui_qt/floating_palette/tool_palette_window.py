@@ -66,15 +66,15 @@ class ToolPaletteWindow(QWidget):
         )
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
-        self.resize(280, 480)
-        self.setMinimumSize(_PALETTE_MIN_WIDTH, 400)
+        self.resize(260, 320)
+        self.setMinimumSize(_PALETTE_MIN_WIDTH, 260)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(8, 8, 8, 8)
-        root.setSpacing(6)
+        root.setContentsMargins(6, 6, 6, 6)
+        root.setSpacing(4)
 
         header_row = QHBoxLayout()
-        header_row.setSpacing(6)
+        header_row.setSpacing(4)
         self._title = QLabel("描画")
         self._title.setObjectName("FloatingPaletteTitle")
         header_row.addWidget(self._title)
@@ -105,7 +105,7 @@ class ToolPaletteWindow(QWidget):
         root.addLayout(header_row)
 
         mode_row = QHBoxLayout()
-        mode_row.setSpacing(4)
+        mode_row.setSpacing(2)
         self._mode_group = QButtonGroup(self)
         self._mode_draw_btn = self._make_tab_btn("描画")
         self._mode_text_btn = self._make_tab_btn("テキスト")
@@ -135,26 +135,26 @@ class ToolPaletteWindow(QWidget):
         self._draw_page = QWidget()
         draw_lay = QVBoxLayout(self._draw_page)
         draw_lay.setContentsMargins(0, 0, 0, 0)
-        draw_lay.setSpacing(8)
+        draw_lay.setSpacing(4)
 
         self._brush_frame = QFrame()
         self._brush_frame.setObjectName("FloatingPaletteSection")
         brush_lay = QVBoxLayout(self._brush_frame)
         brush_lay.setContentsMargins(0, 0, 0, 0)
-        brush_lay.setSpacing(8)
+        brush_lay.setSpacing(4)
 
         colors_row = QHBoxLayout()
-        colors_row.setSpacing(6)
+        colors_row.setSpacing(4)
         self._color_btns: list[QPushButton] = []
         self._color_group = QButtonGroup(self)
         for i, col in enumerate(PALETTE_COLORS):
             b = QPushButton()
             b.setObjectName("ColorSwatchBtn")
-            b.setFixedSize(28, 28)
+            b.setFixedSize(24, 24)
             b.setCheckable(True)
             b.setProperty("swatchColor", col)
             b.setStyleSheet(
-                f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 14px; }}"
+                f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 12px; }}"
             )
             b.clicked.connect(lambda _c=False, c=col: self._pick_color(c))
             self._color_group.addButton(b, i)
@@ -183,7 +183,7 @@ class ToolPaletteWindow(QWidget):
         draw_lay.addWidget(self._brush_frame)
 
         tools_row = QHBoxLayout()
-        tools_row.setSpacing(4)
+        tools_row.setSpacing(2)
         self._draw_tool_group = QButtonGroup(self)
         self._draw_tool_group.setExclusive(False)
         self._pen_btn = self._make_tool_btn("ペン")
@@ -201,7 +201,7 @@ class ToolPaletteWindow(QWidget):
         draw_lay.addWidget(self._draw_hint)
 
         clear_row = QVBoxLayout()
-        clear_row.setSpacing(4)
+        clear_row.setSpacing(2)
         self._clear_ink_btn = QPushButton("選択画像のペン描写を全消去")
         self._clear_ink_btn.setToolTip("最後にクリックした画像の手書きをすべて消去")
         self._clear_ink_btn.clicked.connect(self.clear_ink_requested.emit)
@@ -216,7 +216,7 @@ class ToolPaletteWindow(QWidget):
         self._detail_frame.setObjectName("FloatingPaletteSection")
         detail_lay = QVBoxLayout(self._detail_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
-        detail_lay.setSpacing(8)
+        detail_lay.setSpacing(4)
 
         eraser_row = QHBoxLayout()
         eraser_lbl = QLabel("消しゴム")
@@ -246,7 +246,7 @@ class ToolPaletteWindow(QWidget):
         self._text_page = QWidget()
         text_lay = QVBoxLayout(self._text_page)
         text_lay.setContentsMargins(0, 0, 0, 0)
-        text_lay.setSpacing(8)
+        text_lay.setSpacing(4)
 
         self._text_hint = QLabel(
             "画像上でドラッグしてテキストボックスの大きさを決定\n"
@@ -276,7 +276,7 @@ class ToolPaletteWindow(QWidget):
         self._phrase_lay = QVBoxLayout(self._phrase_page)
         phrase_lay = self._phrase_lay
         phrase_lay.setContentsMargins(0, 0, 0, 0)
-        phrase_lay.setSpacing(8)
+        phrase_lay.setSpacing(4)
         self._phrase_panel = PhrasePalettePanel()
         self._phrase_panel.layout_hint_changed.connect(self._schedule_fit_to_screen)
         self._format_panel.layout_hint_changed.connect(self._schedule_fit_to_screen)
@@ -362,7 +362,6 @@ class ToolPaletteWindow(QWidget):
             self._phrase_panel.content_height_hint()
             + margins.top()
             + margins.bottom()
-            + 2
         )
 
     def _stack_chrome_height(self) -> int:
@@ -412,10 +411,9 @@ class ToolPaletteWindow(QWidget):
             panel_h
             + preview_h
             + format_h
-            + spacing * 2
             + margins.top()
             + margins.bottom()
-            + 4
+            + 2
         )
 
     def _content_height_hint(self) -> int:
@@ -481,7 +479,7 @@ class ToolPaletteWindow(QWidget):
         self.setMaximumWidth(max_w)
         self.setMaximumHeight(max_h)
         chrome = self._stack_chrome_height()
-        stack_max = max(180, max_h - chrome)
+        stack_max = max(100, max_h - chrome)
         content_need = self._content_height_hint()
         if self._fit_height_to_content():
             format_h = max(
