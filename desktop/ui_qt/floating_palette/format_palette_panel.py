@@ -26,6 +26,17 @@ from models.text_annotation_repo import (
 from ui_qt.style import COLORS
 
 
+def _qt_widget_alive(widget) -> bool:
+    if widget is None:
+        return False
+    try:
+        from shiboken6 import isValid
+
+        return bool(isValid(widget))
+    except Exception:
+        return True
+
+
 class FormatPalettePanel(QWidget):
     """テキストボックス選択時の書式コントロール。"""
 
@@ -200,18 +211,26 @@ class FormatPalettePanel(QWidget):
         return btn
 
     def set_detailed_controls_visible(self, visible: bool) -> None:
+        if not _qt_widget_alive(self._detail_format_frame):
+            return
         self._detail_format_frame.setVisible(bool(visible))
 
     def set_template_edit_mode(self, enabled: bool) -> None:
         self._template_edit_mode = bool(enabled)
+        if not _qt_widget_alive(self._speech_btn):
+            return
         self._speech_btn.setVisible(not enabled)
-        if enabled:
-            self._edit_text_btn.setToolTip("定型文の文言を編集")
-            self._delete_btn.setToolTip("この定型文を削除")
-            self._done_btn.setText("編集完了")
-        else:
-            self._edit_text_btn.setToolTip("ダブルクリックでも編集を開始できます")
-            self._delete_btn.setToolTip("選択中のテキストボックスを削除（Del キーでも可）")
+        if _qt_widget_alive(self._edit_text_btn):
+            if enabled:
+                self._edit_text_btn.setToolTip("定型文の文言を編集")
+            else:
+                self._edit_text_btn.setToolTip("ダブルクリックでも編集を開始できます")
+        if _qt_widget_alive(self._delete_btn):
+            if enabled:
+                self._delete_btn.setToolTip("この定型文を削除")
+            else:
+                self._delete_btn.setToolTip("選択中のテキストボックスを削除（Del キーでも可）")
+        if _qt_widget_alive(self._done_btn):
             self._done_btn.setText("編集完了")
 
     def set_text_palette_colors(self, colors: list[str] | tuple[str, ...]) -> None:
@@ -318,11 +337,14 @@ class FormatPalettePanel(QWidget):
 
     def _sync_color_swatches(self, color: str) -> None:
         for i, col in enumerate(self._text_palette_colors):
+            if i >= len(self._color_btns) or not _qt_widget_alive(self._color_btns[i]):
+                continue
             if col.lower() == color.lower():
                 self._color_btns[i].setChecked(True)
                 return
         for btn in self._color_btns:
-            btn.setChecked(False)
+            if _qt_widget_alive(btn):
+                btn.setChecked(False)
 
     def load_style(self, style: dict[str, Any]) -> None:
         self._loading = True
@@ -379,6 +401,8 @@ class FormatPalettePanel(QWidget):
             self.set_speech_active(False)
 
     def set_speech_active(self, on: bool) -> None:
+        if not _qt_widget_alive(self._speech_btn):
+            return
         if self._speech_btn.isChecked() == on:
             if not on:
                 self.set_speech_phase("idle")

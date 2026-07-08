@@ -527,18 +527,44 @@ class ToolPaletteWindow(QWidget):
 
     def set_phrase_format_editor_visible(self, visible: bool) -> None:
         visible = bool(visible)
+        panel = self._format_panel
+        if not self._widget_alive(panel):
+            return
         if visible:
-            self._phrase_format_scroll.setWidget(self._format_panel)
+            if self._text_format_scroll.widget() is panel:
+                self._text_format_scroll.takeWidget()
+            spare = self._phrase_format_scroll.takeWidget()
+            if spare is not None and spare is not panel:
+                self._phrase_format_placeholder = spare
+                spare.setParent(None)
+                spare.hide()
+            self._phrase_format_scroll.setWidget(panel)
             self._phrase_format_scroll.show()
-            if self._text_format_scroll.widget() is self._format_panel:
-                self._text_format_scroll.setWidget(QWidget())
         else:
-            self._phrase_format_scroll.hide()
+            if self._phrase_format_scroll.widget() is panel:
+                self._phrase_format_scroll.takeWidget()
+            if not self._widget_alive(self._phrase_format_placeholder):
+                self._phrase_format_placeholder = QWidget()
             self._phrase_format_scroll.setWidget(self._phrase_format_placeholder)
-            if self._input_mode == MODE_TEXT:
-                self._text_format_scroll.setWidget(self._format_panel)
-        self._format_panel.set_template_edit_mode(visible)
+            self._phrase_format_scroll.hide()
+            if (
+                self._input_mode == MODE_TEXT
+                and self._text_format_scroll.widget() is not panel
+            ):
+                self._text_format_scroll.setWidget(panel)
+        panel.set_template_edit_mode(visible)
         self._clamp_geometry()
+
+    @staticmethod
+    def _widget_alive(widget: QWidget | None) -> bool:
+        if widget is None:
+            return False
+        try:
+            from shiboken6 import isValid
+
+            return bool(isValid(widget))
+        except Exception:
+            return True
 
     def _emit_brush(self) -> None:
         w = float(self._width_ctrl.value())

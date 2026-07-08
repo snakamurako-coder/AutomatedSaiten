@@ -15,7 +15,7 @@ from PySide6.QtWidgets import QFrame, QWidget
 
 from models.text_annotation_repo import new_text_box
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
-from ui_qt.floating_palette.text_rich import TEXT_FORMAT_HTML
+from ui_qt.floating_palette.text_rich import TEXT_FORMAT_HTML, plain_to_html
 from ui_qt.stylus_overlay import is_pen_mouse_event, is_stylus_tablet_event
 
 _MIN_NATIVE_W = 40.0
@@ -24,15 +24,21 @@ _MIN_DISPLAY_DRAG_PX = 6
 
 
 def _apply_phrase_template_to_box(box: dict[str, Any], template: dict[str, Any]) -> None:
-    box["text"] = str(template.get("text") or "")
+    style = copy.deepcopy(template.get("style") or {})
+    box["style"] = style
+    text = str(template.get("text") or "")
     html = str(template.get("textHtml") or "").strip()
     fmt = str(template.get("textFormat") or "plain")
-    if html or fmt == TEXT_FORMAT_HTML:
+    box["text"] = text
+    if html:
         box["textHtml"] = html
         box["textFormat"] = TEXT_FORMAT_HTML
+    elif text.strip():
+        box["textHtml"] = plain_to_html(text, style)
+        box["textFormat"] = TEXT_FORMAT_HTML
     else:
-        box["textFormat"] = fmt
-    box["style"] = copy.deepcopy(template.get("style") or {})
+        box["textHtml"] = ""
+        box["textFormat"] = fmt if fmt != TEXT_FORMAT_HTML else "plain"
 
 
 class TextBoxLayer(QWidget):
