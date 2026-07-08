@@ -174,6 +174,8 @@ def html_for_pdf_box(
 
 _PALETTE_FONT_SIZE = "12px"
 _PALETTE_LINE_HEIGHT = "1.35"
+_PALETTE_DETAIL_FONT_SIZE = "14px"
+_PALETTE_DETAIL_LINE_HEIGHT = "20px"
 
 
 def _hex_rgb_tuple(hex_color: str) -> tuple[int, int, int]:
@@ -210,26 +212,22 @@ def palette_border_css(style: dict[str, Any] | None) -> str:
     return f"{bw}px solid rgba({r}, {g}, {b}, {ba})"
 
 
-def plain_to_palette_html(
-    text: str,
+def palette_styled_html(
+    inner_html: str,
     style: dict[str, Any] | None,
     *,
-    one_line: bool = False,
+    detail: bool = False,
 ) -> str:
     st = style or {}
     tc = str(st.get("textColor") or "#111827")
-    body_text = str(text or "")
-    if one_line:
-        body_text = re.sub(r"\s+", " ", body_text.replace("\n", " ")).strip()
-        body = html_lib.escape(body_text)
-    else:
-        body = html_lib.escape(body_text).replace("\n", "<br>")
+    fs = _PALETTE_DETAIL_FONT_SIZE if detail else _PALETTE_FONT_SIZE
+    lh = _PALETTE_DETAIL_LINE_HEIGHT if detail else _PALETTE_LINE_HEIGHT
     span_styles = [
         "margin:0",
         "padding:0",
         f"color:{tc}",
-        f"font-size:{_PALETTE_FONT_SIZE}",
-        f"line-height:{_PALETTE_LINE_HEIGHT}",
+        f"font-size:{fs}",
+        f"line-height:{lh}",
         f"text-align:{css_text_align(st)}",
         "font-family:Meiryo, sans-serif",
     ]
@@ -240,7 +238,23 @@ def plain_to_palette_html(
     if str(st.get("textDecoration") or "") == "underline":
         span_styles.append("text-decoration:underline")
     span_style = "; ".join(span_styles)
-    return f'<span style="{span_style}">{body}</span>'
+    return f'<span style="{span_style}">{inner_html}</span>'
+
+
+def plain_to_palette_html(
+    text: str,
+    style: dict[str, Any] | None,
+    *,
+    one_line: bool = False,
+    detail: bool = False,
+) -> str:
+    body_text = str(text or "")
+    if one_line:
+        body_text = re.sub(r"\s+", " ", body_text.replace("\n", " ")).strip()
+        body = html_lib.escape(body_text)
+    else:
+        body = html_lib.escape(body_text).replace("\n", "<br>")
+    return palette_styled_html(body, style, detail=detail)
 
 
 def sanitize_html_for_palette(html: str, *, one_line: bool) -> str:

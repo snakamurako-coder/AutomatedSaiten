@@ -27,6 +27,7 @@ from ui_qt.floating_palette.phrase_template_prefs import (
     phrase_display_label,
     phrase_has_content,
     phrase_palette_content_html,
+    phrase_palette_detail_html,
     phrase_preview_text,
     phrase_simple_button_label,
     phrase_templates_mru,
@@ -285,10 +286,12 @@ class PhrasePalettePanel(QWidget):
         body.setWordWrap(True)
         body.setAlignment(qt_label_alignment(tpl.get("style")))
         body.setText(
-            phrase_palette_content_html(tpl, one_line=False)
+            phrase_palette_detail_html(tpl)
             if phrase_has_content(tpl)
             else phrase_detail_body_text(tpl)
         )
+        body.setWordWrap(False)
+        body.setMinimumHeight(60)
         body.setStyleSheet("background: transparent; border: none;")
         if not phrase_has_content(tpl):
             body.setStyleSheet(f"color: {COLORS['text_muted']}; background: transparent; border: none;")
@@ -338,14 +341,18 @@ class PhrasePalettePanel(QWidget):
         label = QLabel()
         label.setObjectName("PhraseDetailBody")
         label.setTextFormat(Qt.TextFormat.RichText)
-        label.setWordWrap(not one_line)
+        label.setWordWrap(False)
+        if not one_line:
+            label.setMinimumHeight(60)
         label.setAlignment(qt_label_alignment(tpl.get("style")))
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         if phrase_has_content(tpl):
             label.setText(
                 phrase_palette_content_html(
-                    tpl, one_line=one_line, truncate_width=truncate_width
+                    tpl, one_line=True, truncate_width=truncate_width
                 )
+                if one_line
+                else phrase_palette_detail_html(tpl)
             )
             label.setStyleSheet("background: transparent; border: none;")
         else:

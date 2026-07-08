@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import html as html_lib
 import re
 import uuid
 from typing import Any
@@ -14,6 +15,7 @@ from ui_qt.floating_palette.text_rich import (
     box_has_saved_html,
     box_text_html,
     html_body_for_label,
+    palette_styled_html,
     plain_to_palette_html,
     sanitize_html_for_palette,
     sync_box_html_from_style,
@@ -22,6 +24,9 @@ from ui_qt.floating_palette.text_rich import (
 PHRASE_SIMPLE_COUNT = 6
 PHRASE_UNREGISTERED_LABEL = "（未登録）"
 PHRASE_SIMPLE_TEXT_WIDTH = 30  # 全角15文字相当（半角30文字）
+PHRASE_DETAIL_MAX_LINES = 3
+PHRASE_DETAIL_LINE_WIDTH = 30  # 全角15文字相当（半角30文字）
+PHRASE_DETAIL_ELLIPSIS = "..."
 
 _DEFAULT_PHRASE_TEXTS: tuple[str, ...] = (
     "〇",
@@ -169,25 +174,53 @@ def _display_width(text: str) -> int:
     return width
 
 
-def truncate_display_width(text: str, max_width: int) -> str:
+def truncate_display_width(
+    text: str, max_width: int, ellipsis: str = "…"
+) -> str:
     if max_width <= 0:
         return ""
     if _display_width(text) <= max_width:
         return text
+    ell_w = _display_width(ellipsis)
     out: list[str] = []
     used = 0
     for ch in text:
         ch_w = 1 if ord(ch) < 128 else 2
-        if used + ch_w > max_width - 2:
+        if used + ch_w > max_width - ell_w:
             break
         out.append(ch)
         used += ch_w
-    return "".join(out) + "…"
+    return "".join(out) + ellipsis
+
+
+def phrase_detail_display_lines(
+    text: str,
+    *,
+    max_lines: int = PHRASE_DETAIL_MAX_LINES,
+    line_width: int = PHRASE_DETAIL_LINE_WIDTH,
+) -> list[str]:
+    lines = str(text or "").split("\n")
+    return [
+        truncate_display_width(line, line_width, ellipsis=PHRASE_DETAIL_ELLIPSIS)
+        for line in lines[:max_lines]
+    ]
 
 
 def phrase_text_one_line(tpl: dict[str, Any]) -> str:
     text = phrase_preview_text(tpl)
     return re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
+
+
+def phrase_palette_detail_html(tpl: dict[str, Any]) -> str:
+    """詳細タブ用：最大3行・行ごとに幅制限・固定フォント。"""
+    if not phrase_has_content(tpl):
+        return plain_to_palette_html(
+            "（文言未登録）", None, detail=True, one_line=True
+        )
+    st = resolve_text_style(tpl.get("style") or {})
+    lines = phrase_detail_display_lines(phrase_preview_text(tpl))
+    inner = "<br>".join(html_lib.escape(line) for line in lines)
+    return palette_styled_html(inner, st, detail=True)
 
 
 def phrase_palette_content_html(

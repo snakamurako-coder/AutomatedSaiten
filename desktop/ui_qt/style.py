@@ -436,7 +436,10 @@ QPushButton#PhrasePlacementBtn:checked {{
     color: {COLORS["accent"]};
 }}
 QLabel#PhraseDetailBody {{
-    font-size: 12px;
+    font-size: 14px;
+    line-height: 20px;
+    padding: 0;
+    margin: 0;
 }}
 QFrame#PhrasePreviewCanvas {{
     background: {COLORS["bg"]};
