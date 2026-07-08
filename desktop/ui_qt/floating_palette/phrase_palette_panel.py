@@ -67,6 +67,7 @@ class PhrasePalettePanel(QWidget):
     phrase_deleted = Signal(str)
     copy_from_textbox_requested = Signal()
     placement_cancel_requested = Signal()
+    phrase_batch_update_requested = Signal(str)
     layout_hint_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
@@ -607,7 +608,31 @@ class PhrasePalettePanel(QWidget):
 
         action_col = QWidget()
         action_col.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        action_row = QHBoxLayout(action_col)
+        action_col_lay = QVBoxLayout(action_col)
+        action_col_lay.setSpacing(2)
+        action_col_lay.setContentsMargins(0, 0, 0, 0)
+        action_col_lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        group_id = str(tpl.get("phraseGroupId") or "").strip()
+        gid_btn = QPushButton(group_id or "—")
+        gid_btn.setObjectName("PhraseGroupIdBtn")
+        gid_btn.setFlat(True)
+        gid_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        gid_btn.setToolTip("クリックで定型文一括更新")
+        gid_btn.setEnabled(bool(group_id))
+        if group_id:
+            gid_btn.clicked.connect(
+                lambda _c=False, g=group_id: self.phrase_batch_update_requested.emit(g)
+            )
+        gid_btn.setStyleSheet(
+            "QPushButton#PhraseGroupIdBtn {"
+            " color: #2563eb; font-size: 10px; font-weight: 700;"
+            " border: none; padding: 0; text-align: center;"
+            "}"
+            "QPushButton#PhraseGroupIdBtn:hover { text-decoration: underline; }"
+            "QPushButton#PhraseGroupIdBtn:disabled { color: #94a3b8; }"
+        )
+        action_col_lay.addWidget(gid_btn, 0, Qt.AlignmentFlag.AlignHCenter)
+        action_row = QHBoxLayout()
         action_row.setSpacing(4)
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -618,6 +643,7 @@ class PhrasePalettePanel(QWidget):
         del_btn.clicked.connect(lambda _c=False, p=pid: self._on_delete(p))
         action_row.addWidget(edit_btn)
         action_row.addWidget(del_btn)
+        action_col_lay.addLayout(action_row)
         lay.addWidget(action_col, 0, Qt.AlignmentFlag.AlignVCenter)
 
         frame.setStyleSheet(

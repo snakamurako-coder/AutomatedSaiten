@@ -470,3 +470,56 @@ def sanitize_html_for_palette(
         if not re.search(r"font-size:", text, flags=re.IGNORECASE):
             text = f'<span style="font-size:{fs}; line-height:{lh}">{text}</span>'
     return text.strip()
+
+
+def append_text_to_box(
+    box: dict[str, Any],
+    fragment: str,
+    *,
+    position: str = "after",
+) -> None:
+    """既存ボックス文言の前または後に追記（書式はボックス style を維持）。"""
+    chunk = str(fragment or "")
+    if not chunk:
+        return
+    plain = str(box.get("text") or "")
+    pos = str(position or "after").lower()
+    if pos == "before":
+        box["text"] = chunk + plain
+    else:
+        box["text"] = plain + chunk
+    if box_has_saved_html(box) or str(box.get("text") or "").strip():
+        sync_box_html_from_style(box)
+
+
+def replace_box_text(
+    box: dict[str, Any],
+    text: str,
+    *,
+    text_html: str | None = None,
+    text_format: str | None = None,
+) -> None:
+    """ボックス文言を完全置換（位置・サイズ・style は維持）。"""
+    box["text"] = str(text or "")
+    if text_html is not None:
+        box["textHtml"] = str(text_html or "")
+        box["textFormat"] = str(text_format or TEXT_FORMAT_HTML)
+        if not str(box.get("textHtml") or "").strip():
+            box["textFormat"] = TEXT_FORMAT_PLAIN
+        return
+    if str(box.get("text") or "").strip():
+        sync_box_html_from_style(box)
+    else:
+        box["textHtml"] = ""
+        box["textFormat"] = TEXT_FORMAT_PLAIN
+
+
+def replace_box_from_template(box: dict[str, Any], template: dict[str, Any]) -> None:
+    replace_box_text(
+        box,
+        str(template.get("text") or ""),
+        text_html=str(template.get("textHtml") or "") or None,
+        text_format=str(template.get("textFormat") or "") or None,
+    )
+    if not box_has_saved_html(box) and str(box.get("text") or "").strip():
+        sync_box_html_from_style(box)

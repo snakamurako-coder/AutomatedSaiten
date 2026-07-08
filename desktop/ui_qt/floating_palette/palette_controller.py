@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from models.text_annotation_repo import (
     DEFAULT_TEXT_COLOR,
     DEFAULT_TEXT_STYLE,
+    get_text_annotations,
     resolve_text_style,
 )
 
@@ -35,11 +36,15 @@ from ui_qt.floating_palette.palette_prefs import (
     load_text_palette_colors,
     save_palette_prefs,
 )
+from ui_qt.floating_palette.phrase_batch_update_dialog import (
+    PhraseBatchUpdateDialog,
+)
 from ui_qt.floating_palette.phrase_template_prefs import (
     add_phrase_template,
     delete_phrase_template,
     load_phrase_templates,
     phrase_from_text_box,
+    phrase_template_by_group_id,
     touch_recent_phrase,
     update_phrase_template,
 )
@@ -66,6 +71,7 @@ class AnnotationPage(Protocol):
     def palette_ink_stacks(self) -> list[CropInkImageStack]: ...
     def palette_save_annotations(self, result_id: int, field_id: str, items: list) -> None: ...
     def palette_field_id(self) -> str: ...
+    def palette_test_id(self) -> str | None: ...
 
 
 class PaletteFabButton(QPushButton):
@@ -124,6 +130,9 @@ class PaletteController:
         pp.phrase_selected.connect(self._on_phrase_selected)
         pp.phrase_edit_requested.connect(self._on_phrase_edit_requested)
         pp.phrase_deleted.connect(self._on_phrase_deleted)
+        pp.phrase_batch_update_requested.connect(
+            self._on_phrase_batch_update_requested
+        )
         pp.copy_from_textbox_requested.connect(self._on_copy_phrase_from_textbox)
         pp.placement_cancel_requested.connect(self._cancel_phrase_placement)
         preview = self.tool_window.phrase_preview
@@ -823,6 +832,51 @@ class PaletteController:
         if not self._editing_phrase_id:
             return
         self.tool_window.format_panel.sync_char_format(state)
+
+    def _on_phrase_batch_update_requested(self, group_id: str) -> None:
+        gid = str(group_id or "").strip()
+        if not gid or not self._page:
+            return
+        test_id_fn = getattr(self._page, "palette_test_id", None)
+        test_id = test_id_fn() if callable(test_id_fn) else None
+        if not test_id:
+            from ui_qt import helpers as h
+
+            h.warn(self._main, "一括更新", "テストが選択されていません。")
+            return
+        template = phrase_template_by_group_id(gid)
+        if template is None:
+            from ui_qt import helpers as h
+
+            h.warn(self._main, "一括更新", f"定型文 ID {gid} が見つかりません。")
+            return
+        dlg = PhraseBatchUpdateDialog(
+            self._main,
+            test_id=str(test_id),
+            template=template,
+        )
+        dlg.exec()
+        if dlg.changed_count > 0:
+            self._reload_all_stack_annotations()
+            self._refresh_crop_grid_annotations()
+
+    def _reload_all_stack_annotations(self) -> None:
+        if not self._page:
+            return
+        test_id_fn = getattr(self._page, "palette_test_id", None)
+        test_id = test_id_fn() if callable(test_id_fn) else None
+        if not test_id:
+            return
+        for stack in self._stacks():
+            items = get_text_annotations(test_id, stack.result_id, stack.field_id)
+            stack.text_layer.set_annotations(items)
+
+    def _refresh_crop_grid_annotations(self) -> None:
+        if not self._page:
+            return
+        fn = getattr(self._page, "palette_refresh_annotation_cache", None)
+        if callable(fn):
+            fn()
 
     def _on_phrase_deleted(self, phrase_id: str) -> None:
         if self._editing_phrase_id == str(phrase_id):

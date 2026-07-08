@@ -780,11 +780,13 @@ class CropInkImageStack(QWidget):
         zoom: float = 1.0,
         on_strokes_changed: Callable[[list[dict[str, Any]]], None] | None = None,
         on_annotations_changed: Callable[[list[dict[str, Any]]], None] | None = None,
+        placement_meta: dict[str, Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
         self._result_id = int(result_id or 0)
         self._field_id = field_id
+        self._placement_meta = copy.deepcopy(placement_meta) if isinstance(placement_meta, dict) else None
         self._on_strokes_changed = on_strokes_changed
         self._on_annotations_changed = on_annotations_changed
         self._palm_rejection = True
@@ -833,6 +835,8 @@ class CropInkImageStack(QWidget):
             on_changed=self._emit_annotations_changed,
         )
         self.text_layer.set_display_size(pix.width(), pix.height())
+        if self._placement_meta:
+            self.text_layer.set_placement_meta(self._placement_meta)
 
         self.container = QWidget()
         self.container.setFixedSize(pix.size())

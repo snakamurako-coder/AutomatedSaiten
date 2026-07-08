@@ -958,6 +958,25 @@ class Step4Page(QWidget):
     def palette_field_id(self) -> str:
         return self._selected_field_id() or ""
 
+    def palette_test_id(self) -> str | None:
+        tid = getattr(self.app, "active_test_id", None)
+        return str(tid) if tid else None
+
+    def palette_refresh_annotation_cache(self) -> None:
+        test_id = self.palette_test_id()
+        fid = self._selected_field_id() or ""
+        if not test_id or not fid:
+            return
+        result_ids = [
+            int((item.get("row") or {}).get("rowIndex") or 0)
+            for item in self._crop_grid_results
+        ]
+        text_map = get_text_annotations_batch(test_id, fid, result_ids)
+        for item in self._crop_grid_results:
+            row = item.get("row") or {}
+            rid = int(row.get("rowIndex") or 0)
+            item["text_annotations"] = text_map.get(rid, [])
+
     def palette_save_annotations(
         self, result_id: int, field_id: str, items: list
     ) -> None:
@@ -1068,6 +1087,12 @@ class Step4Page(QWidget):
 
         pil = item["pil"]
         row_index = int(row.get("rowIndex") or 0)
+        placement_meta = {
+            "resultId": row_index,
+            "fieldId": fid,
+            "studentId": row.get("studentId"),
+            "studentName": str(row.get("name") or row.get("studentName") or ""),
+        }
         ink_stack = CropInkImageStack(
             pil_image=pil,
             field_id=fid,
@@ -1075,6 +1100,7 @@ class Step4Page(QWidget):
             strokes=item.get("ink_strokes") or [],
             annotations=item.get("text_annotations") or [],
             zoom=zoom,
+            placement_meta=placement_meta,
             on_strokes_changed=lambda s, rid=row_index: self._save_ink_strokes(rid, s),
             on_annotations_changed=lambda s, rid=row_index, f=fid: self.palette_save_annotations(
                 rid, f, s

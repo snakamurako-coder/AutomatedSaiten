@@ -5,6 +5,8 @@ from __future__ import annotations
 import copy
 import html as html_lib
 import re
+import secrets
+import string
 import uuid
 from typing import Any
 
@@ -33,6 +35,79 @@ PHRASE_DETAIL_MAX_LINES = 3
 PHRASE_DETAIL_LINE_WIDTH = 30  # 全角15文字相当（半角30文字）
 PHRASE_DETAIL_ELLIPSIS = "..."
 
+PHRASE_GROUP_ID_CHARS = string.ascii_letters + string.digits
+PHRASE_GROUP_ID_LEN = 8
+
+
+def _phrase_templates_config() -> dict[str, Any]:
+    cfg = load_config()
+    raw = cfg.get("phrase_templates")
+    return dict(raw) if isinstance(raw, dict) else {}
+
+
+def _save_phrase_templates_config(merged: dict[str, Any]) -> None:
+    cfg = load_config()
+    cfg["phrase_templates"] = merged
+    save_config(cfg)
+
+
+def load_used_phrase_group_ids() -> set[str]:
+    used = _phrase_templates_config().get("used_phrase_group_ids")
+    if not isinstance(used, list):
+        return set()
+    return {str(x).strip() for x in used if str(x).strip()}
+
+
+def _register_used_phrase_group_id(group_id: str) -> None:
+    gid = str(group_id or "").strip()
+    if not gid:
+        return
+    merged = _phrase_templates_config()
+    used = load_used_phrase_group_ids()
+    used.add(gid)
+    merged["used_phrase_group_ids"] = sorted(used)
+    _save_phrase_templates_config(merged)
+
+
+def _collect_active_phrase_group_ids(templates: list[dict[str, Any]]) -> set[str]:
+    out: set[str] = set()
+    for tpl in templates:
+        gid = str(tpl.get("phraseGroupId") or "").strip()
+        if gid:
+            out.add(gid)
+    return out
+
+
+def _generate_phrase_group_id(*, reserved: set[str] | None = None) -> str:
+    taken = set(reserved or set())
+    taken |= load_used_phrase_group_ids()
+    for _ in range(512):
+        gid = "".join(
+            secrets.choice(PHRASE_GROUP_ID_CHARS) for _ in range(PHRASE_GROUP_ID_LEN)
+        )
+        if gid not in taken:
+            return gid
+    raise RuntimeError("phraseGroupId の生成に失敗しました")
+
+
+def _ensure_phrase_group_id(
+    raw: dict[str, Any],
+    *,
+    reserved: set[str],
+) -> str:
+    existing = str(raw.get("phraseGroupId") or "").strip()
+    if (
+        existing
+        and len(existing) == PHRASE_GROUP_ID_LEN
+        and all(c in PHRASE_GROUP_ID_CHARS for c in existing)
+        and existing not in reserved
+    ):
+        reserved.add(existing)
+        return existing
+    gid = _generate_phrase_group_id(reserved=reserved)
+    reserved.add(gid)
+    return gid
+
 _DEFAULT_PHRASE_TEXTS: tuple[str, ...] = (
     "〇",
     "△",
@@ -44,9 +119,10 @@ _DEFAULT_PHRASE_TEXTS: tuple[str, ...] = (
 
 
 def _default_templates() -> list[dict[str, Any]]:
+    reserved = load_used_phrase_group_ids()
     out: list[dict[str, Any]] = []
     for text in _DEFAULT_PHRASE_TEXTS:
-        out.append(
+        norm = _normalize_template(
             {
                 "id": str(uuid.uuid4()),
                 "label": text,
@@ -56,12 +132,19 @@ def _default_templates() -> list[dict[str, Any]]:
                 "style": dict(TEXT_STYLE_TEMPLATE_A),
                 "width": 120.0,
                 "height": 36.0,
-            }
+            },
+            reserved_group_ids=reserved,
         )
+        if norm is not None:
+            out.append(norm)
     return out
 
 
-def _normalize_template(raw: Any) -> dict[str, Any] | None:
+def _normalize_template(
+    raw: Any,
+    *,
+    reserved_group_ids: set[str] | None = None,
+) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     text = str(raw.get("text") or "")
@@ -69,8 +152,11 @@ def _normalize_template(raw: Any) -> dict[str, Any] | None:
     label = str(raw.get("label") or "").strip() or (plain[:20] if plain else "")
     style = resolve_text_style(raw.get("style") or {})
     tid = str(raw.get("id") or "").strip() or str(uuid.uuid4())
+    reserved = set(reserved_group_ids or set())
+    phrase_group_id = _ensure_phrase_group_id(raw, reserved=reserved)
     return {
         "id": tid,
+        "phraseGroupId": phrase_group_id,
         "label": label[:40],
         "text": text,
         "textHtml": str(raw.get("textHtml") or ""),
@@ -81,36 +167,45 @@ def _normalize_template(raw: Any) -> dict[str, Any] | None:
     }
 
 
-def load_phrase_templates() -> list[dict[str, Any]]:
-    cfg = load_config()
-    raw = cfg.get("phrase_templates")
-    if not isinstance(raw, dict):
-        return _default_templates()
-    items = raw.get("items")
-    if not isinstance(items, list) or not items:
-        return _default_templates()
+def _migrate_phrase_templates(items: list[Any]) -> list[dict[str, Any]]:
+    reserved = load_used_phrase_group_ids()
     out: list[dict[str, Any]] = []
+    changed = False
     for item in items:
-        norm = _normalize_template(item)
-        if norm is not None:
-            out.append(norm)
+        before_gid = str(item.get("phraseGroupId") or "").strip() if isinstance(item, dict) else ""
+        norm = _normalize_template(item, reserved_group_ids=reserved)
+        if norm is None:
+            continue
+        if str(norm.get("phraseGroupId") or "") != before_gid:
+            changed = True
+        out.append(norm)
+    if changed and out:
+        save_phrase_templates(out)
     return out if out else _default_templates()
 
 
+def load_phrase_templates() -> list[dict[str, Any]]:
+    raw = _phrase_templates_config()
+    items = raw.get("items")
+    if not isinstance(items, list) or not items:
+        defaults = _default_templates()
+        save_phrase_templates(defaults)
+        return defaults
+    return _migrate_phrase_templates(items)
+
+
 def save_phrase_templates(templates: list[dict[str, Any]]) -> None:
-    items = []
+    reserved = load_used_phrase_group_ids()
+    items: list[dict[str, Any]] = []
     for tpl in templates:
-        norm = _normalize_template(tpl)
+        norm = _normalize_template(tpl, reserved_group_ids=reserved)
         if norm is not None:
             items.append(norm)
     if not items:
         items = _default_templates()
-    cfg = load_config()
-    raw = cfg.get("phrase_templates")
-    merged: dict[str, Any] = dict(raw) if isinstance(raw, dict) else {}
+    merged = _phrase_templates_config()
     merged["items"] = items
-    cfg["phrase_templates"] = merged
-    save_config(cfg)
+    _save_phrase_templates_config(merged)
 
 
 def load_recent_phrase_ids() -> list[str]:
@@ -327,8 +422,27 @@ def apply_phrase_template_to_box(box: dict[str, Any], template: dict[str, Any]) 
     box["text"] = str(template.get("text") or "")
     box["textHtml"] = str(template.get("textHtml") or "")
     box["textFormat"] = str(template.get("textFormat") or "plain")
+    gid = str(template.get("phraseGroupId") or "").strip()
+    if gid:
+        box["phraseGroupId"] = gid
+    tid = str(template.get("id") or "").strip()
+    if tid:
+        box["phraseTemplateId"] = tid
     if not box_has_saved_html(box):
         sync_box_html_from_style(box)
+
+
+def apply_phrase_placement_meta(box: dict[str, Any], meta: dict[str, Any] | None) -> None:
+    if not isinstance(meta, dict):
+        return
+    if meta.get("resultId") is not None:
+        box["placedResultId"] = int(meta["resultId"])
+    if meta.get("fieldId"):
+        box["placedFieldId"] = str(meta["fieldId"])
+    if meta.get("studentId") is not None:
+        box["placedStudentId"] = str(meta.get("studentId") or "")
+    if meta.get("studentName") is not None:
+        box["placedStudentName"] = str(meta.get("studentName") or "")
 
 
 def phrase_template_to_box(tpl: dict[str, Any]) -> dict[str, Any]:
@@ -369,8 +483,11 @@ def phrase_updates_from_box(phrase_id: str, box: dict[str, Any]) -> dict[str, An
 def phrase_from_text_box(box: dict[str, Any]) -> dict[str, Any]:
     plain = str(box.get("text") or "").strip()
     label = plain.replace("\n", " ")[:20]
+    reserved = load_used_phrase_group_ids()
+    gid = _generate_phrase_group_id(reserved=reserved)
     return {
         "id": str(uuid.uuid4()),
+        "phraseGroupId": gid,
         "label": label,
         "text": str(box.get("text") or ""),
         "textHtml": str(box.get("textHtml") or ""),
@@ -379,6 +496,16 @@ def phrase_from_text_box(box: dict[str, Any]) -> dict[str, Any]:
         "width": max(40.0, float(box.get("width") or 120.0)),
         "height": max(24.0, float(box.get("height") or 36.0)),
     }
+
+
+def phrase_template_by_group_id(group_id: str) -> dict[str, Any] | None:
+    gid = str(group_id or "").strip()
+    if not gid:
+        return None
+    for tpl in load_phrase_templates():
+        if str(tpl.get("phraseGroupId") or "") == gid:
+            return tpl
+    return None
 
 
 def add_phrase_template(template: dict[str, Any]) -> dict[str, Any]:
@@ -414,6 +541,15 @@ def delete_phrase_template(phrase_id: str) -> None:
     pid = str(phrase_id or "").strip()
     if not pid:
         return
-    templates = [t for t in load_phrase_templates() if str(t.get("id")) != pid]
-    save_phrase_templates(templates)
+    templates = load_phrase_templates()
+    removed_gid = ""
+    kept: list[dict[str, Any]] = []
+    for tpl in templates:
+        if str(tpl.get("id")) == pid:
+            removed_gid = str(tpl.get("phraseGroupId") or "").strip()
+            continue
+        kept.append(tpl)
+    if removed_gid:
+        _register_used_phrase_group_id(removed_gid)
+    save_phrase_templates(kept)
     save_recent_phrase_ids([x for x in load_recent_phrase_ids() if x != pid])

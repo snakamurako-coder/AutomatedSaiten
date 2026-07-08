@@ -218,3 +218,126 @@ def collect_warped_text_annotations(
                 }
             )
     return warped
+
+
+def iter_text_annotations_for_test(
+    test_id: str,
+) -> list[tuple[int, str, list[dict[str, Any]]]]:
+    """テスト内の全 text_annotations 行を (result_id, field_id, boxes) で返す。"""
+    tid = str(test_id or "").strip()
+    if not tid:
+        return []
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT result_id, field_id, annotations_json FROM text_annotations "
+            "WHERE test_id = ?",
+            (tid,),
+        ).fetchall()
+    out: list[tuple[int, str, list[dict[str, Any]]]] = []
+    for row in rows:
+        try:
+            data = json.loads(row["annotations_json"] or "[]")
+            boxes = data if isinstance(data, list) else []
+        except json.JSONDecodeError:
+            boxes = []
+        out.append((int(row["result_id"]), str(row["field_id"]), boxes))
+    return out
+
+
+def find_phrase_placements(test_id: str, phrase_group_id: str) -> list[dict[str, Any]]:
+    """同一 phraseGroupId の配置一覧（表示用メタデータ付き）。"""
+    from models.test_repo import get_all_results, get_answer_fields
+
+    gid = str(phrase_group_id or "").strip()
+    if not gid:
+        return []
+    field_names = {
+        str(f["id"]): str(f.get("displayName") or f["id"])
+        for f in get_answer_fields(test_id)
+    }
+    results_by_id = {int(r["id"]): r for r in get_all_results(test_id)}
+    placements: list[dict[str, Any]] = []
+    for result_id, field_id, boxes in iter_text_annotations_for_test(test_id):
+        for box in boxes:
+            if str(box.get("phraseGroupId") or "") != gid:
+                continue
+            row = results_by_id.get(int(result_id), {})
+            placements.append(
+                {
+                    "resultId": int(result_id),
+                    "fieldId": field_id,
+                    "fieldName": field_names.get(field_id, field_id),
+                    "boxId": str(box.get("id") or ""),
+                    "studentId": str(
+                        box.get("placedStudentId") or row.get("studentId") or ""
+                    ),
+                    "studentName": str(
+                        box.get("placedStudentName") or row.get("name") or ""
+                    ),
+                    "fileName": str(row.get("fileName") or ""),
+                    "box": box,
+                }
+            )
+    return placements
+
+
+def bulk_update_phrase_boxes(
+    test_id: str,
+    phrase_group_id: str,
+    operation: str,
+    **params: Any,
+) -> int:
+    """同一 phraseGroupId のテキストボックスを一括更新。変更件数を返す。"""
+    from ui_qt.floating_palette.text_rich import (
+        append_text_to_box,
+        replace_box_from_template,
+        replace_box_text,
+    )
+
+    gid = str(phrase_group_id or "").strip()
+    op = str(operation or "").strip().lower()
+    if not gid or not op:
+        return 0
+    changed = 0
+    for result_id, field_id, boxes in iter_text_annotations_for_test(test_id):
+        if not boxes:
+            continue
+        row_changed = False
+        new_boxes: list[dict[str, Any]] = []
+        for box in boxes:
+            if str(box.get("phraseGroupId") or "") != gid:
+                new_boxes.append(box)
+                continue
+            if op == "delete":
+                row_changed = True
+                changed += 1
+                continue
+            if op == "append":
+                append_text_to_box(
+                    box,
+                    str(params.get("text") or ""),
+                    position=str(params.get("position") or "after"),
+                )
+                row_changed = True
+                changed += 1
+                new_boxes.append(box)
+                continue
+            if op == "replace":
+                tpl = params.get("template")
+                if isinstance(tpl, dict):
+                    replace_box_from_template(box, tpl)
+                else:
+                    replace_box_text(
+                        box,
+                        str(params.get("text") or ""),
+                        text_html=params.get("textHtml"),
+                        text_format=params.get("textFormat"),
+                    )
+                row_changed = True
+                changed += 1
+                new_boxes.append(box)
+                continue
+            new_boxes.append(box)
+        if row_changed:
+            save_text_annotations(test_id, result_id, field_id, new_boxes)
+    return changed

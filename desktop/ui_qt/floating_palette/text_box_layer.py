@@ -15,7 +15,10 @@ from PySide6.QtWidgets import QFrame, QWidget
 
 from models.text_annotation_repo import new_text_box
 from ui_qt.floating_palette.palette_prefs import load_text_box_default_style
-from ui_qt.floating_palette.phrase_template_prefs import apply_phrase_template_to_box
+from ui_qt.floating_palette.phrase_template_prefs import (
+    apply_phrase_placement_meta,
+    apply_phrase_template_to_box,
+)
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
 from ui_qt.stylus_overlay import is_pen_mouse_event, is_stylus_tablet_event
 
@@ -57,6 +60,7 @@ class TextBoxLayer(QWidget):
         self._speech_place_on_placed: Callable[[], None] | None = None
         self._phrase_place_template: dict[str, Any] | None = None
         self._phrase_place_on_placed: Callable[[], None] | None = None
+        self._placement_meta: dict[str, Any] | None = None
         self._show_text = True
         self._text_tool_mode = False
         self._palm_rejection = True
@@ -334,6 +338,9 @@ class TextBoxLayer(QWidget):
     def clear_phrase_place_template(self) -> None:
         self.set_phrase_place_template(None)
 
+    def set_placement_meta(self, meta: dict[str, Any] | None) -> None:
+        self._placement_meta = copy.deepcopy(meta) if isinstance(meta, dict) else None
+
     def handle_click_place_event(
         self, et: QEvent.Type, local_pos: QPointF, event
     ) -> bool:
@@ -502,6 +509,7 @@ class TextBoxLayer(QWidget):
             ny = max(0.0, min(self._native_h - nh, top * self._scale_y))
             box = new_text_box(nx, ny, width=nw, height=nh)
             apply_phrase_template_to_box(box, tpl)
+            apply_phrase_placement_meta(box, self._placement_meta)
         else:
             dw = abs(display_x2 - display_x1)
             dh = abs(display_y2 - display_y1)

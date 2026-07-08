@@ -810,6 +810,21 @@ class StepManualPage(QWidget):
             return next(iter(self._selected_ids))
         return None
 
+    def palette_test_id(self) -> str | None:
+        tid = getattr(self.app, "active_test_id", None)
+        return str(tid) if tid else None
+
+    def palette_refresh_annotation_cache(self) -> None:
+        test_id = self.palette_test_id()
+        fid = self._selected_field_id() or ""
+        if not test_id or not fid:
+            return
+        from models.text_annotation_repo import get_text_annotations
+
+        for item in self._items:
+            rid = int(item.get("result_id") or 0)
+            item["text_annotations"] = get_text_annotations(test_id, rid, fid)
+
     def palette_save_annotations(
         self, result_id: int, field_id: str, items: list
     ) -> None:
@@ -1203,6 +1218,12 @@ class StepManualPage(QWidget):
             pil = self._pil_with_mark(pil, j, sc)
 
         fid = self._selected_field_id() or ""
+        placement_meta = {
+            "resultId": rid,
+            "fieldId": fid,
+            "studentId": row.get("studentId"),
+            "studentName": str(row.get("name") or row.get("studentName") or ""),
+        }
         ink_stack = CropInkImageStack(
             pil_image=pil,
             field_id=fid,
@@ -1210,6 +1231,7 @@ class StepManualPage(QWidget):
             strokes=item.get("ink_strokes") or [],
             annotations=item.get("text_annotations") or [],
             zoom=zoom,
+            placement_meta=placement_meta,
             on_strokes_changed=lambda s, rid=rid: self._save_ink_strokes(rid, s),
             on_annotations_changed=lambda s, rid=rid: self.palette_save_annotations(
                 rid, fid, s
