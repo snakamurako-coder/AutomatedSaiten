@@ -22,7 +22,6 @@ from PySide6.QtWidgets import (
 
 from ui_qt.floating_palette.palette_prefs import VIEW_DETAILED, VIEW_SIMPLE
 from ui_qt.floating_palette.phrase_template_prefs import (
-    PHRASE_SIMPLE_COUNT,
     PHRASE_SIMPLE_TEXT_WIDTH,
     delete_phrase_template,
     phrase_detail_body_text,
@@ -84,6 +83,7 @@ class PhrasePalettePanel(QWidget):
         self._simple_lay = QVBoxLayout(self._simple_frame)
         self._simple_lay.setContentsMargins(0, 0, 0, 0)
         self._simple_lay.setSpacing(0)
+        self._simple_lay.addStretch()
         self._simple_frame.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
@@ -326,10 +326,10 @@ class PhrasePalettePanel(QWidget):
             self._scroll_host.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
             )
-            simple_items = templates[:PHRASE_SIMPLE_COUNT]
-            for tpl in simple_items:
+            self._simple_lay.addStretch()
+            for tpl in templates:
                 btn = self._make_simple_select_btn(tpl)
-                self._simple_lay.addWidget(btn)
+                self._simple_lay.insertWidget(self._simple_lay.count() - 1, btn)
         else:
             self._clear_layout_widgets(self._detailed_lay)
             self._detailed_lay.addStretch()
