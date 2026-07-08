@@ -206,12 +206,10 @@ class PaletteController:
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page
         self._step_id = step_id
-        if self.tool_window.current_input_mode() == MODE_TEXT:
+        if self.tool_window.current_input_mode() not in (MODE_TEXT, MODE_PHRASE):
             self.tool_window.show_draw_mode()
         self._connect_stacks()
         self._apply_to_stacks()
-        if self._pending_phrase_template:
-            self._apply_phrase_placement_to_stacks()
 
     def detach(self) -> None:
         self._stop_speech()
@@ -345,24 +343,23 @@ class PaletteController:
         stack.set_show_ink(self._show_ink)
         stack.set_show_text(self._show_text)
         stack.set_eraser_mode(self._eraser_mode)
+        self._sync_stack_phrase_template(stack)
         stack.set_tool_mode(self._tool)
         stack.set_brush(color, width, alpha)
-        self._apply_phrase_placement_to_stack(stack)
 
-    def _apply_phrase_placement_to_stack(self, stack: CropInkImageStack) -> None:
-        if not self._pending_phrase_template:
-            return
-        pid = str(self._pending_phrase_id or "")
+    def _sync_stack_phrase_template(self, stack: CropInkImageStack) -> None:
+        if self._tool == TOOL_PHRASE and self._pending_phrase_template:
+            pid = str(self._pending_phrase_id or "")
 
-        def on_placed(phrase_id: str = pid) -> None:
-            self._on_phrase_placed(phrase_id)
+            def on_placed(phrase_id: str = pid) -> None:
+                self._on_phrase_placed(phrase_id)
 
-        stack.set_tool_mode(TOOL_PHRASE)
-        stack.text_layer.set_phrase_place_template(
-            copy.deepcopy(self._pending_phrase_template),
-            on_placed=on_placed,
-        )
-        stack.sync_place_cursor()
+            stack.text_layer.set_phrase_place_template(
+                copy.deepcopy(self._pending_phrase_template),
+                on_placed=on_placed,
+            )
+        elif self._tool != TOOL_PHRASE:
+            stack.text_layer.clear_phrase_place_template()
 
     def _ensure_phrase_tool_mode(self) -> None:
         if (
@@ -372,10 +369,6 @@ class PaletteController:
             self.tool_window.show_phrase_mode()
         self._tool = TOOL_PHRASE
         self._apply_to_stacks()
-
-    def _apply_phrase_placement_to_stacks(self) -> None:
-        for stack in self._stacks():
-            self._apply_phrase_placement_to_stack(stack)
 
     def _unbind_stack(self, stack: CropInkImageStack) -> None:
         sel_handler = getattr(stack, "_palette_on_selection_changed", None)
@@ -464,6 +457,7 @@ class PaletteController:
             stack.set_show_ink(self._show_ink)
             stack.set_show_text(self._show_text)
             stack.set_eraser_mode(self._eraser_mode)
+            self._sync_stack_phrase_template(stack)
             stack.set_tool_mode(self._tool)
             stack.set_brush(color, width, alpha)
 
@@ -473,15 +467,12 @@ class PaletteController:
         text_like = (TOOL_TEXT, TOOL_PHRASE)
         if prev in text_like and tool not in text_like:
             self.finish_all_text_editing()
+        if tool != TOOL_PHRASE:
             self._cancel_phrase_placement()
         if tool not in text_like:
             for stack in self._stacks():
                 stack.text_layer.clear_selection()
-        if tool != TOOL_PHRASE:
-            self._cancel_phrase_placement()
         self._apply_to_stacks()
-        if self._tool == TOOL_PHRASE and self._pending_phrase_template:
-            self._apply_phrase_placement_to_stacks()
 
     def _set_active_stack(self, stack: CropInkImageStack) -> None:
         self._active_stack = stack
@@ -512,10 +503,6 @@ class PaletteController:
     def _on_stack_image_clicked(self, stack: CropInkImageStack) -> None:
         self._set_active_stack(stack)
         if self._tool not in (TOOL_TEXT, TOOL_PHRASE):
-            return
-        if self._tool == TOOL_PHRASE and any(
-            s.text_layer.has_phrase_place_pending() for s in self._stacks()
-        ):
             return
         for s in self._stacks():
             s.text_layer.finish_all_editing()
@@ -723,22 +710,17 @@ class PaletteController:
         self._pending_phrase_id = str(phrase_id)
         self._pending_phrase_template = copy.deepcopy(template)
         self.tool_window.phrase_panel.set_pending_phrase(phrase_id)
-        self._apply_phrase_placement_to_stacks()
+        self._apply_to_stacks()
         if hasattr(self._main, "show_app_message"):
             self._main.show_app_message(
-                "定型文: 貼り付ける場所をクリックしてください",
+                "定型文: ドラッグして貼り付ける位置を指定してください",
                 level="info",
             )
 
     def _on_phrase_placed(self, phrase_id: str) -> None:
         touch_recent_phrase(phrase_id)
-        self._pending_phrase_id = None
-        self._pending_phrase_template = None
-        self.tool_window.phrase_panel.set_pending_phrase(None)
         self.tool_window.phrase_panel.reload_templates()
-        for stack in self._stacks():
-            stack.text_layer.clear_phrase_place_template()
-            stack.sync_place_cursor()
+        self._apply_to_stacks()
 
     def _on_copy_phrase_from_textbox(self) -> None:
         box: dict[str, Any] | None = None

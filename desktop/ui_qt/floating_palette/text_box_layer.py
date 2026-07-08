@@ -23,6 +23,18 @@ _MIN_NATIVE_H = 24.0
 _MIN_DISPLAY_DRAG_PX = 6
 
 
+def _apply_phrase_template_to_box(box: dict[str, Any], template: dict[str, Any]) -> None:
+    box["text"] = str(template.get("text") or "")
+    html = str(template.get("textHtml") or "").strip()
+    fmt = str(template.get("textFormat") or "plain")
+    if html or fmt == TEXT_FORMAT_HTML:
+        box["textHtml"] = html
+        box["textFormat"] = TEXT_FORMAT_HTML
+    else:
+        box["textFormat"] = fmt
+    box["style"] = copy.deepcopy(template.get("style") or {})
+
+
 class TextBoxLayer(QWidget):
     """記述欄クロップ上のテキストボックス群。"""
 
@@ -109,7 +121,7 @@ class TextBoxLayer(QWidget):
         self._refresh_place_cursor()
 
     def _refresh_place_cursor(self) -> None:
-        if self._placement_mode or self._placement_pending():
+        if self._placement_mode or self._speech_place_text:
             self.setCursor(Qt.CursorShape.CrossCursor)
         elif not self._placing:
             self.unsetCursor()
@@ -330,8 +342,8 @@ class TextBoxLayer(QWidget):
     def handle_click_place_event(
         self, et: QEvent.Type, local_pos: QPointF, event
     ) -> bool:
-        """定型文・音声入力のクリック配置（ドラッグ不要）。"""
-        if not self._placement_pending():
+        """音声入力のクリック配置（ドラッグ不要）。"""
+        if not self._speech_place_text:
             return False
         if et not in (
             QEvent.Type.MouseButtonPress,
@@ -343,59 +355,7 @@ class TextBoxLayer(QWidget):
             return False
         if self._reject_placement_event(event):
             return False
-        if self._try_speech_place_click(local_pos):
-            return True
-        return self._try_phrase_place_click(local_pos)
-
-    def try_phrase_place_at(self, local_pos: QPointF, event) -> bool:
-        return self.handle_click_place_event(event.type(), local_pos, event)
-
-    def _try_phrase_place_click(self, pos: QPointF) -> bool:
-        if not self._phrase_place_template:
-            return False
-        lx, ly = int(pos.x()), int(pos.y())
-        child = self.childAt(lx, ly)
-        if child is not None and child is not self._rubber:
-            return False
-        template = copy.deepcopy(self._phrase_place_template)
-        callback = self._phrase_place_on_placed
-        self._phrase_place_template = None
-        self._phrase_place_on_placed = None
-        if not self._placement_mode and not self._speech_place_text:
-            self.unsetCursor()
-        self.place_box_from_template(pos.x(), pos.y(), template)
-        if callback:
-            callback()
-        self._refresh_place_cursor()
-        return True
-
-    def place_box_from_template(
-        self,
-        display_x: float,
-        display_y: float,
-        template: dict[str, Any],
-    ) -> dict[str, Any] | None:
-        tpl = copy.deepcopy(template)
-        nw = max(_MIN_NATIVE_W, float(tpl.get("width") or 120.0))
-        nh = max(_MIN_NATIVE_H, float(tpl.get("height") or 36.0))
-        nx = max(0.0, min(self._native_w - nw, display_x * self._scale_x))
-        ny = max(0.0, min(self._native_h - nh, display_y * self._scale_y))
-        box = new_text_box(nx, ny, width=nw, height=nh)
-        box["text"] = str(tpl.get("text") or "")
-        html = str(tpl.get("textHtml") or "").strip()
-        if html or str(tpl.get("textFormat") or "") == TEXT_FORMAT_HTML:
-            box["textHtml"] = html
-            box["textFormat"] = TEXT_FORMAT_HTML
-        box["style"] = copy.deepcopy(tpl.get("style") or {})
-        self._undo_begin()
-        self._sync_annotations_from_widgets()
-        self._annotations.append(copy.deepcopy(box))
-        self._rebuild_widgets(from_widgets=False)
-        self.select_box(str(box["id"]))
-        self._persist_annotations()
-        self._undo_commit()
-        bid = str(box["id"])
-        return self._widgets[bid].box_data() if bid in self._widgets else box
+        return self._try_speech_place_click(local_pos)
 
     def try_speech_place_at(self, local_pos: QPointF, event) -> bool:
         return self.handle_click_place_event(event.type(), local_pos, event)
@@ -477,11 +437,8 @@ class TextBoxLayer(QWidget):
 
         return False
 
-    def _placement_pending(self) -> bool:
-        return bool(self._speech_place_text or self._phrase_place_template)
-
     def _reject_placement_event(self, event) -> bool:
-        if self._placement_pending():
+        if self._speech_place_text:
             return False
         if not self._palm_rejection:
             return False
@@ -536,27 +493,44 @@ class TextBoxLayer(QWidget):
         display_x2: float,
         display_y2: float,
     ) -> dict[str, Any]:
+        template = self._phrase_place_template
+        callback = self._phrase_place_on_placed
         left = min(display_x1, display_x2)
         top = min(display_y1, display_y2)
-        dw = abs(display_x2 - display_x1)
-        dh = abs(display_y2 - display_y1)
-        if dw < _MIN_DISPLAY_DRAG_PX and dh < _MIN_DISPLAY_DRAG_PX:
-            dw = 80.0
-            dh = 28.0
-        nw = max(_MIN_NATIVE_W, dw * self._scale_x)
-        nh = max(_MIN_NATIVE_H, dh * self._scale_y)
-        nx = max(0.0, min(self._native_w - nw, left * self._scale_x))
-        ny = max(0.0, min(self._native_h - nh, top * self._scale_y))
-        box = new_text_box(nx, ny, width=nw, height=nh)
+        if template:
+            tpl = copy.deepcopy(template)
+            nw = max(_MIN_NATIVE_W, float(tpl.get("width") or 120.0))
+            nh = max(_MIN_NATIVE_H, float(tpl.get("height") or 36.0))
+            nx = max(0.0, min(self._native_w - nw, left * self._scale_x))
+            ny = max(0.0, min(self._native_h - nh, top * self._scale_y))
+            box = new_text_box(nx, ny, width=nw, height=nh)
+            _apply_phrase_template_to_box(box, tpl)
+        else:
+            dw = abs(display_x2 - display_x1)
+            dh = abs(display_y2 - display_y1)
+            if dw < _MIN_DISPLAY_DRAG_PX and dh < _MIN_DISPLAY_DRAG_PX:
+                dw = 80.0
+                dh = 28.0
+            nw = max(_MIN_NATIVE_W, dw * self._scale_x)
+            nh = max(_MIN_NATIVE_H, dh * self._scale_y)
+            nx = max(0.0, min(self._native_w - nw, left * self._scale_x))
+            ny = max(0.0, min(self._native_h - nh, top * self._scale_y))
+            box = new_text_box(nx, ny, width=nw, height=nh)
         self._sync_annotations_from_widgets()
         self._annotations.append(copy.deepcopy(box))
         self._rebuild_widgets(from_widgets=False)
         self.select_box(str(box["id"]))
         w = self._widgets.get(str(box["id"]))
-        if w:
-            QTimer.singleShot(0, w.start_editing)
-        self._persist_annotations()
-        self._undo_commit()
+        if template:
+            self._persist_annotations()
+            self._undo_commit()
+            if callback:
+                callback()
+        else:
+            if w:
+                QTimer.singleShot(0, w.start_editing)
+            self._persist_annotations()
+            self._undo_commit()
         return self._widgets[str(box["id"])].box_data() if str(box["id"]) in self._widgets else box
 
     def _rebuild_widgets(self, *, from_widgets: bool = True) -> None:
@@ -613,12 +587,6 @@ class TextBoxLayer(QWidget):
         self._sync_annotations_from_widgets()
         self._persist_annotations()
 
-    def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
-        if self.handle_click_place_event(event.type(), event.position(), event):
-            event.accept()
-            return
-        super().tabletEvent(event)
-
     def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
         points = event.points()
         if points and points[0].state() == Qt.TouchPointState.TouchPointPressed:
@@ -671,6 +639,9 @@ class TextBoxLayer(QWidget):
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
         et = event.type()
+        if self.handle_click_place_event(et, event.position(), event):
+            event.accept()
+            return
         if self._placement_mode and et in (
             QEvent.Type.TabletPress,
             QEvent.Type.TabletMove,

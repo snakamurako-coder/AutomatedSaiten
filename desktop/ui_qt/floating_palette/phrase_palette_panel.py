@@ -43,7 +43,7 @@ class PhrasePalettePanel(QWidget):
         root.setSpacing(8)
 
         self._hint = QLabel(
-            "定型文を選び、画像上をクリックして貼り付け\n"
+            "定型文を選び、画像上をドラッグして貼り付け\n"
             "貼り付け後もテキストボックスとして編集できます"
         )
         self._hint.setObjectName("PaletteHintLabel")
@@ -119,7 +119,7 @@ class PhrasePalettePanel(QWidget):
             btn = self._phrase_btns.get(self._pending_id)
             label = btn.toolTip() if btn else self._pending_id
             self._pending_label.setText(
-                f"配置待ち: {label}\n貼り付ける場所をクリックしてください"
+                f"配置待ち: {label}\nドラッグして貼り付ける位置を指定してください"
             )
             self._pending_label.show()
         else:

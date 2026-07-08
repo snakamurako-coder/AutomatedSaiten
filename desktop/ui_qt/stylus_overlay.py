@@ -821,13 +821,9 @@ class CropInkImageStack(QWidget):
         self.sync_place_cursor()
 
     def sync_place_cursor(self) -> None:
-        cross = (
-            self.text_layer.has_phrase_place_pending()
-            or self.text_layer.has_speech_place_pending()
-            or (
-                self._tool_mode == TOOL_TEXT
-                and getattr(self.text_layer, "_placement_mode", False)
-            )
+        cross = self.text_layer.has_speech_place_pending() or (
+            self._tool_mode in (TOOL_TEXT, TOOL_PHRASE)
+            and getattr(self.text_layer, "_placement_mode", False)
         )
         cursor = Qt.CursorShape.CrossCursor if cross else Qt.CursorShape.ArrowCursor
         if cross:
@@ -880,10 +876,7 @@ class CropInkImageStack(QWidget):
         return self.text_layer.mapFromGlobal(gp)
 
     def _placement_pending(self) -> bool:
-        return (
-            self.text_layer.has_phrase_place_pending()
-            or self.text_layer.has_speech_place_pending()
-        )
+        return self.text_layer.has_speech_place_pending()
 
     def _is_text_placement_event(self, event) -> bool:
         if self._placement_pending():
@@ -1034,13 +1027,11 @@ class CropInkImageStack(QWidget):
 
     def set_tool_mode(self, mode: str) -> None:
         self._tool_mode = mode
-        is_text = mode == TOOL_TEXT
-        is_phrase = mode == TOOL_PHRASE
         is_text_like = _is_text_like_tool(mode)
         self.ink_overlay.set_tool_mode(mode)
-        self.text_layer.set_placement_mode(is_text)
-        self.text_layer.set_text_tool_mode(is_text_like or self.text_layer.has_phrase_place_pending())
-        if is_phrase or self.text_layer.has_phrase_place_pending():
+        self.text_layer.set_placement_mode(mode in (TOOL_TEXT, TOOL_PHRASE))
+        self.text_layer.set_text_tool_mode(is_text_like)
+        if is_text_like:
             self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self._sync_input_routing()
         self._sync_layer_order()
