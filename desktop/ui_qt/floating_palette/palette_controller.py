@@ -814,8 +814,8 @@ class PaletteController:
         self.tool_window.phrase_preview.set_focus_guard_widgets(())
         self._persist_phrase_from_preview(reload_list=True)
         self._editing_phrase_id = None
-        self.tool_window.phrase_panel.set_editing_phrase(None)
         self.tool_window.set_phrase_format_editor_visible(False)
+        self.tool_window.phrase_panel.set_editing_phrase(None)
         detailed = str(self.tool_window._view_mode or "") == VIEW_DETAILED
         self.tool_window.format_panel.set_detailed_controls_visible(detailed)
 

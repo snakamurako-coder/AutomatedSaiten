@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QShowEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
@@ -120,9 +120,14 @@ class ToolPaletteWindow(QWidget):
         )
         root.addLayout(mode_row)
 
+        self._content_host = QWidget()
+        content_lay = QVBoxLayout(self._content_host)
+        content_lay.setContentsMargins(0, 0, 0, 0)
+        content_lay.setSpacing(0)
+
         self._stack = QStackedWidget()
-        self._stack.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Expanding)
-        root.addWidget(self._stack, 1)
+        self._stack.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        content_lay.addWidget(self._stack)
 
         self._draw_page = QWidget()
         draw_lay = QVBoxLayout(self._draw_page)
@@ -234,7 +239,6 @@ class ToolPaletteWindow(QWidget):
         detail_lay.addWidget(self._show_text_check)
 
         draw_lay.addWidget(self._detail_frame)
-        draw_lay.addStretch()
 
         self._text_page = QWidget()
         text_lay = QVBoxLayout(self._text_page)
@@ -260,13 +264,14 @@ class ToolPaletteWindow(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self._text_format_scroll.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
         )
         self._text_format_scroll.setWidget(self._format_panel)
-        text_lay.addWidget(self._text_format_scroll, 1)
+        text_lay.addWidget(self._text_format_scroll, 0)
 
         self._phrase_page = QWidget()
-        phrase_lay = QVBoxLayout(self._phrase_page)
+        self._phrase_lay = QVBoxLayout(self._phrase_page)
+        phrase_lay = self._phrase_lay
         phrase_lay.setContentsMargins(0, 0, 0, 0)
         phrase_lay.setSpacing(8)
         self._phrase_panel = PhrasePalettePanel()
@@ -275,7 +280,7 @@ class ToolPaletteWindow(QWidget):
         self._phrase_preview = PhraseEditPreviewPanel()
         self._phrase_preview.setMaximumHeight(300)
         self._phrase_preview.hide()
-        self._phrase_preview.layout_changed.connect(self._fit_to_screen)
+        self._phrase_preview.layout_changed.connect(self._schedule_fit_to_screen)
         phrase_lay.addWidget(self._phrase_preview, 0)
 
         self._phrase_format_scroll = QScrollArea()
@@ -288,9 +293,9 @@ class ToolPaletteWindow(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self._phrase_format_scroll.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
         )
-        self._phrase_format_scroll.setMaximumHeight(360)
+        self._phrase_format_scroll.setMaximumHeight(16777215)
         self._phrase_format_placeholder = QWidget()
         self._phrase_format_scroll.setWidget(self._phrase_format_placeholder)
         self._phrase_format_scroll.hide()
@@ -299,6 +304,18 @@ class ToolPaletteWindow(QWidget):
         self._stack.addWidget(self._draw_page)
         self._stack.addWidget(self._text_page)
         self._stack.addWidget(self._phrase_page)
+
+        self._content_scroll = QScrollArea()
+        self._content_scroll.setWidgetResizable(True)
+        self._content_scroll.setFrameShape(QFrame.NoFrame)
+        self._content_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._content_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._content_scroll.setWidget(self._content_host)
+        root.addWidget(self._content_scroll, 1)
 
         self._view_mode = VIEW_SIMPLE
         self._input_mode = MODE_DRAW
@@ -310,6 +327,27 @@ class ToolPaletteWindow(QWidget):
         self._apply_palm_rejection_ui()
         self._switch_input_mode(MODE_DRAW, emit=False)
         self._emit_draw_tool(emit=False)
+        self._fit_timer = QTimer(self)
+        self._fit_timer.setSingleShot(True)
+        self._fit_timer.setInterval(0)
+        self._fit_timer.timeout.connect(self._fit_to_screen)
+
+    def _schedule_fit_to_screen(self) -> None:
+        self._fit_timer.start()
+
+    def _stack_chrome_height(self) -> int:
+        margins = self.layout().contentsMargins()
+        header = self._title.height() if self._title.isVisible() else 0
+        return margins.top() + margins.bottom() + header + 88
+
+    def _content_width_hint(self) -> int:
+        margins = self.layout().contentsMargins()
+        page = self._stack.currentWidget()
+        widths = [self.minimumWidth(), self._format_panel.sizeHint().width()]
+        if page is not None:
+            widths.append(page.sizeHint().width())
+        inner = max(widths)
+        return inner + margins.left() + margins.right() + 16
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
@@ -334,8 +372,11 @@ class ToolPaletteWindow(QWidget):
         max_w, max_h = bounds
         self.setMaximumWidth(max_w)
         self.setMaximumHeight(max_h)
+        stack_max = max(180, max_h - self._stack_chrome_height())
+        self._content_scroll.setMaximumHeight(stack_max)
+        hint_w = min(self._content_width_hint(), max_w)
         geo = self.geometry()
-        w = max(self.minimumWidth(), min(geo.width(), max_w))
+        w = max(self.minimumWidth(), min(max(geo.width(), hint_w), max_w))
         h = max(self.minimumHeight(), min(geo.height(), max_h))
         if geo.width() != w or geo.height() != h:
             self.resize(w, h)
@@ -403,7 +444,7 @@ class ToolPaletteWindow(QWidget):
             self._emit_active_tool()
         if mode != MODE_PHRASE:
             self.set_phrase_format_editor_visible(False)
-        self._clamp_geometry()
+        self._schedule_fit_to_screen()
 
     def show_draw_mode(self) -> None:
         self._switch_input_mode(MODE_DRAW)
@@ -547,7 +588,7 @@ class ToolPaletteWindow(QWidget):
         self._format_panel.set_detailed_controls_visible(detailed)
         self._phrase_panel.set_view_mode(self._view_mode)
         self._view_btn.setText("簡易" if detailed else "詳細")
-        self._clamp_geometry()
+        self._schedule_fit_to_screen()
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
@@ -589,7 +630,23 @@ class ToolPaletteWindow(QWidget):
                 self._text_format_scroll.setWidget(panel)
         panel.set_template_edit_mode(visible)
         self._phrase_preview.setVisible(visible)
-        self._clamp_geometry()
+        self._phrase_panel.set_compact_edit_mode(visible)
+        self._phrase_lay.setStretchFactor(self._phrase_panel, 0 if visible else 1)
+        if visible:
+            self._phrase_format_scroll.setVerticalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            )
+            self._phrase_format_scroll.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+            )
+        else:
+            self._phrase_format_scroll.setVerticalScrollBarPolicy(
+                Qt.ScrollBarPolicy.ScrollBarAsNeeded
+            )
+            self._phrase_format_scroll.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            )
+        self._schedule_fit_to_screen()
 
     @staticmethod
     def _widget_alive(widget: QWidget | None) -> bool:

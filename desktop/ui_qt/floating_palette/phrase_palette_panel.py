@@ -44,6 +44,7 @@ class PhrasePalettePanel(QWidget):
         self._view_mode = VIEW_SIMPLE
         self._pending_id: str | None = None
         self._editing_id: str | None = None
+        self._compact_edit = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -68,7 +69,9 @@ class PhrasePalettePanel(QWidget):
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
         self._scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._scroll_host = QWidget()
-        self._scroll_host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
+        self._scroll_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+        )
         self._detailed_lay = QVBoxLayout(self._scroll_host)
         self._detailed_lay.setContentsMargins(0, 0, 0, 0)
         self._detailed_lay.setSpacing(8)
@@ -76,6 +79,15 @@ class PhrasePalettePanel(QWidget):
         self._scroll.setWidget(self._scroll_host)
         root.addWidget(self._scroll, 1)
         self._scroll.hide()
+
+        self._edit_single_frame = QFrame()
+        self._edit_single_frame.setObjectName("PhraseDetailRow")
+        self._edit_single_frame.setProperty("editing", True)
+        self._edit_single_lay = QVBoxLayout(self._edit_single_frame)
+        self._edit_single_lay.setContentsMargins(8, 8, 8, 8)
+        self._edit_single_lay.setSpacing(4)
+        root.addWidget(self._edit_single_frame)
+        self._edit_single_frame.hide()
 
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
@@ -94,10 +106,21 @@ class PhrasePalettePanel(QWidget):
         self.reload_templates()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
+        if self._compact_edit:
+            return QSize(220, 72)
         return QSize(220, 200)
 
     def sizeHint(self) -> QSize:  # noqa: N802
+        if self._compact_edit:
+            return QSize(260, 88)
         return QSize(260, 280)
+
+    def set_compact_edit_mode(self, active: bool) -> None:
+        self._compact_edit = bool(active)
+        vertical = QSizePolicy.Policy.Maximum if self._compact_edit else QSizePolicy.Policy.Expanding
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, vertical)
+        self._apply_view_mode()
+        self.reload_templates()
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
@@ -105,16 +128,28 @@ class PhrasePalettePanel(QWidget):
         self.reload_templates()
 
     def _apply_view_mode(self) -> None:
+        if self._compact_edit:
+            self._simple_frame.hide()
+            self._scroll.hide()
+            self._edit_single_frame.show()
+            self._copy_btn.hide()
+            return
+        self._edit_single_frame.hide()
+        self._copy_btn.show()
         detailed = self._view_mode == VIEW_DETAILED
         self._simple_frame.setVisible(not detailed)
         self._scroll.setVisible(detailed)
 
     def reload_templates(self) -> None:
-        templates = phrase_templates_mru()
+        templates = self._templates_for_display(phrase_templates_mru())
         self._rebuild_buttons(templates)
         if self._pending_id and self._pending_id not in self._phrase_btns:
             self.set_pending_phrase(None)
-        if self._editing_id and self._editing_id not in self._phrase_btns:
+        if (
+            self._editing_id
+            and not self._compact_edit
+            and self._editing_id not in self._phrase_btns
+        ):
             self.set_editing_phrase(None)
 
     def set_pending_phrase(self, phrase_id: str | None) -> None:
@@ -137,10 +172,13 @@ class PhrasePalettePanel(QWidget):
 
     def set_editing_phrase(self, phrase_id: str | None) -> None:
         self._editing_id = str(phrase_id) if phrase_id else None
-        for pid, frame in self._detail_rows.items():
-            frame.setProperty("editing", pid == self._editing_id)
-            frame.style().unpolish(frame)
-            frame.style().polish(frame)
+        self._apply_view_mode()
+        self.reload_templates()
+
+    def _templates_for_display(self, templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if self._compact_edit and self._editing_id:
+            return [t for t in templates if str(t.get("id")) == self._editing_id]
+        return templates
 
     def _template_for_id(self, phrase_id: str) -> dict[str, Any] | None:
         for tpl in phrase_templates_mru():
@@ -161,6 +199,13 @@ class PhrasePalettePanel(QWidget):
             btn.deleteLater()
         self._phrase_btns.clear()
         self._detail_rows.clear()
+        self._clear_layout_widgets(self._edit_single_lay)
+
+        if self._compact_edit:
+            if templates:
+                self._fill_edit_single_card(templates[0])
+            self.set_pending_phrase(self._pending_id)
+            return
 
         if self._view_mode == VIEW_SIMPLE:
             self._clear_layout_widgets(self._simple_grid)
@@ -176,14 +221,27 @@ class PhrasePalettePanel(QWidget):
             self._clear_layout_widgets(self._detailed_lay)
             self._detailed_lay.addStretch()
             self._scroll_host.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
             )
             for tpl in templates:
                 frame = self._make_detailed_row(tpl)
                 self._detailed_lay.insertWidget(self._detailed_lay.count() - 1, frame)
 
         self.set_pending_phrase(self._pending_id)
-        self.set_editing_phrase(self._editing_id)
+
+    def _fill_edit_single_card(self, tpl: dict[str, Any]) -> None:
+        title = QLabel(phrase_display_label(tpl, compact=False))
+        title.setObjectName("PhraseDetailTitle")
+        if not phrase_has_content(tpl):
+            title.setStyleSheet(f"color: {COLORS['danger']}; font-weight: 600;")
+        preview = phrase_preview_text(tpl)
+        body = QLabel(preview if preview else "（文言未登録）")
+        body.setObjectName("PaletteHintLabel")
+        body.setWordWrap(True)
+        if not preview:
+            body.setStyleSheet(f"color: {COLORS['text_muted']};")
+        self._edit_single_lay.addWidget(title)
+        self._edit_single_lay.addWidget(body)
 
     def _style_select_btn(self, btn: QPushButton, tpl: dict[str, Any]) -> None:
         if not phrase_has_content(tpl):
@@ -210,7 +268,7 @@ class PhrasePalettePanel(QWidget):
         pid = str(tpl.get("id") or "")
         frame = QFrame()
         frame.setObjectName("PhraseDetailRow")
-        frame.setProperty("editing", False)
+        frame.setProperty("editing", pid == self._editing_id)
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(8, 8, 8, 8)
         lay.setSpacing(8)

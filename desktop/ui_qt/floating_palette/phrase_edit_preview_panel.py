@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtWidgets import QFrame, QLabel, QSizePolicy, QVBoxLayout, QWidget
 
 from ui_qt.floating_palette.phrase_template_prefs import (
@@ -17,7 +17,16 @@ from ui_qt.floating_palette.text_box_widget import TextBoxWidget
 _PREVIEW_MIN_H = 120
 _PREVIEW_EDIT_MIN_H = 220
 _PREVIEW_CANVAS_MAX_H = 260
-_CANVAS_PAD = 12
+
+
+class _PreviewCanvas(QFrame):
+    """プレビュー用キャンバス（リサイズ時に子を再配置）。"""
+
+    resized = Signal()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.resized.emit()
 
 
 class PhraseEditPreviewPanel(QWidget):
@@ -42,16 +51,25 @@ class PhraseEditPreviewPanel(QWidget):
         self._hint.setWordWrap(True)
         root.addWidget(self._hint)
 
-        self._canvas = QFrame()
+        self._canvas = _PreviewCanvas()
         self._canvas.setObjectName("PhrasePreviewCanvas")
         self._canvas.setMinimumHeight(_PREVIEW_MIN_H)
         self._canvas.setMaximumHeight(_PREVIEW_CANVAS_MAX_H)
         self._canvas.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
+        self._canvas.resized.connect(self._layout_box)
         root.addWidget(self._canvas, 1)
 
         self._text_box: TextBoxWidget | None = None
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+
+    def minimumSizeHint(self) -> QSize:  # noqa: N802
+        return QSize(220, _PREVIEW_MIN_H + 36)
+
+    def sizeHint(self) -> QSize:  # noqa: N802
+        h = _PREVIEW_EDIT_MIN_H if self._text_editing else _PREVIEW_MIN_H
+        return QSize(260, h + 36)
 
     def _hint_text(self) -> str:
         if self._text_editing:
@@ -132,21 +150,26 @@ class PhraseEditPreviewPanel(QWidget):
         self._text_box.editing_committed.connect(self._on_text_editing_finished)
         self._text_box.interactive_change_finished.connect(self._on_box_resized)
         self._text_box.show()
+        self._update_canvas_height()
         self._layout_box()
+
+    def _update_canvas_height(self) -> None:
+        target = _PREVIEW_EDIT_MIN_H if self._text_editing else _PREVIEW_MIN_H
+        if self._canvas.minimumHeight() != target:
+            self._canvas.setMinimumHeight(target)
+            self.layout_changed.emit()
 
     def _layout_box(self) -> None:
         if self._text_box is None:
             return
-        self._text_box.move(_CANVAS_PAD, _CANVAS_PAD)
+        cw = max(1, self._canvas.width())
+        ch = max(1, self._canvas.height())
+        tw = max(1, self._text_box.width())
+        th = max(1, self._text_box.height())
+        x = max(0, (cw - tw) // 2)
+        y = max(0, (ch - th) // 2)
+        self._text_box.move(x, y)
         self._text_box.raise_()
-        base_min = _PREVIEW_EDIT_MIN_H if self._text_editing else _PREVIEW_MIN_H
-        needed_h = min(
-            _PREVIEW_CANVAS_MAX_H,
-            max(base_min, self._text_box.height() + _CANVAS_PAD * 2),
-        )
-        if self._canvas.minimumHeight() != needed_h:
-            self._canvas.setMinimumHeight(needed_h)
-            self.layout_changed.emit()
 
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -176,15 +199,5 @@ class PhraseEditPreviewPanel(QWidget):
     def _set_text_editing_focus(self, on: bool) -> None:
         self._text_editing = bool(on)
         self._hint.setText(self._hint_text())
-        base_min = _PREVIEW_EDIT_MIN_H if on else _PREVIEW_MIN_H
-        needed_h = (
-            min(
-                _PREVIEW_CANVAS_MAX_H,
-                max(base_min, self._text_box.height() + _CANVAS_PAD * 2),
-            )
-            if self._text_box is not None
-            else base_min
-        )
-        if self._canvas.minimumHeight() != needed_h:
-            self._canvas.setMinimumHeight(needed_h)
-            self.layout_changed.emit()
+        self._update_canvas_height()
+        self._layout_box()

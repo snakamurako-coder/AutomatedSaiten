@@ -475,14 +475,22 @@ class TextBoxWidget(QFrame):
         return w, h
 
     def _apply_geometry(self) -> None:
+        bw, bh = self._body_display_size()
+        total_w = bw + _HANDLE_OVERHANG * 2
+        total_h = bh + _HANDLE_OVERHANG * 2
+        if self._preview_mode:
+            self.resize(total_w, total_h)
+            self._body.setGeometry(_HANDLE_OVERHANG, _HANDLE_OVERHANG, bw, bh)
+            self._body.setMinimumSize(bw, bh)
+            self._update_handles()
+            return
         x = int(float(self._box.get("x") or 0) / self._scale) - _HANDLE_OVERHANG
         y = int(float(self._box.get("y") or 0) / self._scale) - _HANDLE_OVERHANG
-        bw, bh = self._body_display_size()
         self.setGeometry(
             x,
             y,
-            bw + _HANDLE_OVERHANG * 2,
-            bh + _HANDLE_OVERHANG * 2,
+            total_w,
+            total_h,
         )
         self._body.setGeometry(_HANDLE_OVERHANG, _HANDLE_OVERHANG, bw, bh)
         self._body.setMinimumSize(bw, bh)
@@ -757,22 +765,35 @@ class TextBoxWidget(QFrame):
         x, y, w, h = ox, oy, ow, oh
         corner = self._resize_corner
 
-        if corner in ("br", "tr"):
-            w = max(_MIN_NATIVE_W, ow + dx)
-        if corner in ("bl", "tl"):
-            w = max(_MIN_NATIVE_W, ow - dx)
-            x = ox + ow - w
-        if corner in ("br", "bl"):
-            h = max(_MIN_NATIVE_H, oh + dy)
-        if corner in ("tr", "tl"):
-            h = max(_MIN_NATIVE_H, oh - dy)
-            y = oy + oh - h
+        if self._preview_mode:
+            if corner in ("br", "tr"):
+                w = max(_MIN_NATIVE_W, ow + dx)
+            if corner in ("bl", "tl"):
+                w = max(_MIN_NATIVE_W, ow - dx)
+            if corner in ("br", "bl"):
+                h = max(_MIN_NATIVE_H, oh + dy)
+            if corner in ("tr", "tl"):
+                h = max(_MIN_NATIVE_H, oh - dy)
+            x, y = 0.0, 0.0
+        else:
+            if corner in ("br", "tr"):
+                w = max(_MIN_NATIVE_W, ow + dx)
+            if corner in ("bl", "tl"):
+                w = max(_MIN_NATIVE_W, ow - dx)
+                x = ox + ow - w
+            if corner in ("br", "bl"):
+                h = max(_MIN_NATIVE_H, oh + dy)
+            if corner in ("tr", "tl"):
+                h = max(_MIN_NATIVE_H, oh - dy)
+                y = oy + oh - h
 
         self._box["x"] = x
         self._box["y"] = y
         self._box["width"] = w
         self._box["height"] = h
         self._apply_geometry()
+        if self._preview_mode:
+            self.changed.emit()
 
     def _end_resize(self) -> None:
         if self._resizing:

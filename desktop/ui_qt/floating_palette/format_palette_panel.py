@@ -51,6 +51,7 @@ class FormatPalettePanel(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
@@ -191,8 +192,6 @@ class FormatPalettePanel(QWidget):
         self._speech_status_label.hide()
         root.addWidget(self._speech_status_label)
 
-        root.addStretch()
-
         self._loading = False
         self._loading_char = False
         self._template_edit_mode = False
@@ -212,10 +211,12 @@ class FormatPalettePanel(QWidget):
         )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(220, 260)
+        base_h = 220 if self._template_edit_mode else 260
+        return QSize(220, base_h)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(260, 340)
+        base_h = 280 if self._template_edit_mode else 340
+        return QSize(260, base_h)
 
     def _make_action_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)
@@ -264,6 +265,11 @@ class FormatPalettePanel(QWidget):
 
     def set_template_edit_mode(self, enabled: bool) -> None:
         self._template_edit_mode = bool(enabled)
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            QSizePolicy.Policy.Maximum if enabled else QSizePolicy.Policy.Preferred,
+        )
+        self.updateGeometry()
         if not _qt_widget_alive(self._speech_btn):
             return
         self._speech_btn.setVisible(not enabled)
