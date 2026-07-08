@@ -14,12 +14,16 @@ from ui_qt.floating_palette.phrase_template_prefs import (
 )
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
 
+_PREVIEW_MIN_H = 120
+_PREVIEW_EDIT_MIN_H = 220
+
 
 class PhraseEditPreviewPanel(QWidget):
     """配置されるテキストボックスと同じ見た目のライブプレビュー。"""
 
     content_changed = Signal()
     char_format_state_changed = Signal(dict)
+    layout_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -30,13 +34,16 @@ class PhraseEditPreviewPanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(6)
 
-        hint = QLabel("プレビュー（配置時と同じテキストボックス）")
-        hint.setObjectName("PaletteHintLabel")
-        root.addWidget(hint)
+        self._hint = QLabel(
+            "プレビュー（配置時と同じテキストボックス・ダブルクリックで編集）"
+        )
+        self._hint.setObjectName("PaletteHintLabel")
+        self._hint.setWordWrap(True)
+        root.addWidget(self._hint)
 
         self._canvas = QFrame()
         self._canvas.setObjectName("PhrasePreviewCanvas")
-        self._canvas.setMinimumHeight(120)
+        self._canvas.setMinimumHeight(_PREVIEW_MIN_H)
         self._canvas.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
         )
@@ -103,12 +110,14 @@ class PhraseEditPreviewPanel(QWidget):
             return
         self._text_box.set_selected(True)
         self._text_box.start_editing()
+        self._set_text_focus_expanded(True)
 
     def finish_text_editing(self) -> None:
         if self._text_box is None:
             return
         if self._text_box.is_editing():
             self._text_box.finish_editing()
+        self._set_text_focus_expanded(False)
 
     def _mount_box(self, box: dict[str, Any]) -> None:
         if self._text_box is not None:
@@ -125,6 +134,8 @@ class PhraseEditPreviewPanel(QWidget):
         self._text_box.char_format_state_changed.connect(
             self._on_char_format_state_changed
         )
+        self._text_box.editing_started.connect(self._on_text_editing_started)
+        self._text_box.editing_committed.connect(self._on_text_editing_finished)
         self._text_box.show()
         self._layout_box()
 
@@ -154,3 +165,21 @@ class PhraseEditPreviewPanel(QWidget):
         if self._syncing or not self.is_text_editing():
             return
         self.char_format_state_changed.emit(state)
+
+    def _on_text_editing_started(self) -> None:
+        self._set_text_focus_expanded(True)
+
+    def _on_text_editing_finished(self) -> None:
+        self._set_text_focus_expanded(False)
+
+    def _set_text_focus_expanded(self, on: bool) -> None:
+        min_h = _PREVIEW_EDIT_MIN_H if on else _PREVIEW_MIN_H
+        if self._canvas.minimumHeight() == min_h:
+            return
+        self._canvas.setMinimumHeight(min_h)
+        self._hint.setText(
+            "文字を編集中（書式パネルで装飾・配置を変更できます）"
+            if on
+            else "プレビュー（配置時と同じテキストボックス・ダブルクリックで編集）"
+        )
+        self.layout_changed.emit()

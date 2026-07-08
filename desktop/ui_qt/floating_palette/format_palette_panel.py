@@ -269,7 +269,9 @@ class FormatPalettePanel(QWidget):
         self._speech_btn.setVisible(not enabled)
         if _qt_widget_alive(self._edit_text_btn):
             if enabled:
-                self._edit_text_btn.setToolTip("定型文の文言を編集")
+                self._edit_text_btn.setToolTip(
+                    "プレビュー内で文言を編集（ダブルクリックでも可）"
+                )
             else:
                 self._edit_text_btn.setToolTip("ダブルクリックでも編集を開始できます")
         if _qt_widget_alive(self._delete_btn):

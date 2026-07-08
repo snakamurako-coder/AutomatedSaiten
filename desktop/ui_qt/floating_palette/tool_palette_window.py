@@ -274,6 +274,7 @@ class ToolPaletteWindow(QWidget):
 
         self._phrase_preview = PhraseEditPreviewPanel()
         self._phrase_preview.hide()
+        self._phrase_preview.layout_changed.connect(self._clamp_geometry)
         phrase_lay.addWidget(self._phrase_preview)
 
         self._phrase_format_scroll = QScrollArea()

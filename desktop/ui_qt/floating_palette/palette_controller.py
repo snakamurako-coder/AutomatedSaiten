@@ -9,8 +9,6 @@ from PySide6.QtCore import QPoint, QRect, QTimer, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
-    QDialog,
-    QDialogButtonBox,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -40,7 +38,6 @@ from ui_qt.floating_palette.phrase_template_prefs import (
     touch_recent_phrase,
     update_phrase_template,
 )
-from ui_qt.floating_palette.phrase_edit_preview_panel import PhraseEditPreviewPanel
 from ui_qt.floating_palette.tool_palette_window import (
     MODE_DRAW,
     MODE_PHRASE,
@@ -677,7 +674,7 @@ class PaletteController:
 
     def _on_format_edit(self) -> None:
         if self._editing_phrase_id:
-            self._edit_phrase_text(self._editing_phrase_id)
+            self.tool_window.phrase_preview.start_text_editing()
             return
         for stack in self._stacks():
             if stack.text_layer.selected_box():
@@ -892,36 +889,6 @@ class PaletteController:
             self._sync_phrase_format_char_state(updated)
         elif reload_list:
             self.tool_window.phrase_panel.reload_templates()
-
-    def _edit_phrase_text(self, phrase_id: str) -> None:
-        tpl = self._phrase_template_by_id(phrase_id)
-        if tpl is None:
-            return
-        dlg = QDialog(self._main)
-        dlg.setWindowTitle("定型文の文言を編集")
-        dlg.setMinimumWidth(360)
-        lay = QVBoxLayout(dlg)
-        preview = PhraseEditPreviewPanel()
-        preview.load_template(tpl)
-        lay.addWidget(preview, 1)
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(dlg.accept)
-        buttons.rejected.connect(dlg.reject)
-        lay.addWidget(buttons)
-        preview.start_text_editing()
-        if dlg.exec() != QDialog.DialogCode.Accepted:
-            preview.finish_text_editing()
-            return
-        preview.finish_text_editing()
-        updates = preview.export_updates()
-        if not updates:
-            return
-        updated = update_phrase_template(phrase_id, **updates)
-        if updated and self._editing_phrase_id == str(phrase_id):
-            self.tool_window.phrase_preview.load_template(updated)
-        self._after_phrase_template_updated(updated, reload_list=True)
 
     def _on_copy_phrase_from_textbox(self) -> None:
         box: dict[str, Any] | None = None
