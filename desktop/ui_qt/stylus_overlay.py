@@ -137,6 +137,13 @@ def is_pen_mouse_event(event: QMouseEvent) -> bool:
     return False
 
 
+def _is_stylus_synthesized_mouse(event: QMouseEvent) -> bool:
+    """タブレット入力に伴う合成マウス（Tablet と二重記録される）。"""
+    if not _mouse_synthesized_by_system(event):
+        return False
+    return is_pen_mouse_event(event) or is_eraser_mouse_event(event)
+
+
 class InkOverlayWidget(QWidget):
     """記述欄クロップ上の最前面手書きレイヤー。"""
 
@@ -206,6 +213,13 @@ class InkOverlayWidget(QWidget):
             m = TOOL_NONE
         self._tool_mode = m
         self._software_eraser = m == TOOL_ERASER
+
+    def _consume_synthesized_stylus_mouse(self, event: QMouseEvent) -> bool:
+        """パームリジェクション時は TabletEvent のみで描画し、合成マウスは無視する。"""
+        if not self._palm_rejection or not _is_stylus_synthesized_mouse(event):
+            return False
+        event.accept()
+        return True
 
     def _stylus_may_draw(self) -> bool:
         if self._palm_rejection:
@@ -514,7 +528,7 @@ class InkOverlayWidget(QWidget):
             return False
         if _is_text_like_tool(self._tool_mode):
             if self._palm_rejection and is_pen_mouse_event(event):
-                return True
+                return not _is_stylus_synthesized_mouse(event)
             return False
         if not self._pointer_may_draw():
             return False
@@ -523,9 +537,10 @@ class InkOverlayWidget(QWidget):
     def _should_erase_mouse(self, event: QMouseEvent) -> bool:
         if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
             return False
+        if self._palm_rejection and _is_stylus_synthesized_mouse(event):
+            return False
         if not self._pointer_may_draw() and not self._software_eraser:
-            if not (self._palm_rejection and is_eraser_mouse_event(event)):
-                return False
+            return False
         return is_eraser_mouse_event(event) or self._eraser_active or self._software_eraser
 
     def _handle_tablet_eraser(self, event: QTabletEvent) -> None:
@@ -679,6 +694,8 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._consume_synthesized_stylus_mouse(event):
+            return
         if event.button() != Qt.LeftButton:
             event.ignore()
             return
@@ -689,9 +706,6 @@ class InkOverlayWidget(QWidget):
             self._emit_click_through()
             event.ignore()
             return
-        if self._current and is_pen_mouse_event(event) and _mouse_synthesized_by_system(event):
-            event.accept()
-            return
         self._eraser_active = False
         self._pen_active = True
         self._start_stroke(event.position().x(), event.position().y(), _event_pressure(event))
@@ -699,6 +713,8 @@ class InkOverlayWidget(QWidget):
         event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._consume_synthesized_stylus_mouse(event):
+            return
         if self._should_erase_mouse(event):
             self._handle_mouse_eraser(event)
             return
@@ -720,6 +736,8 @@ class InkOverlayWidget(QWidget):
         event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if self._consume_synthesized_stylus_mouse(event):
+            return
         if self._should_erase_mouse(event) or self._eraser_active:
             self._handle_mouse_eraser(event)
             return
@@ -885,6 +903,8 @@ class CropInkImageStack(QWidget):
     def _forward_pen_mouse_to_ink(self, watched: QWidget, event: QMouseEvent) -> bool:
         if not self._palm_rejection or not _is_text_like_tool(self._tool_mode):
             return False
+        if _is_stylus_synthesized_mouse(event):
+            return False
         if watched not in (self.container, self.image_label, self.text_layer):
             return False
         if not (is_pen_mouse_event(event) or is_eraser_mouse_event(event)):
@@ -950,6 +970,13 @@ class CropInkImageStack(QWidget):
         return False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if (
+            self._palm_rejection
+            and _is_text_like_tool(self._tool_mode)
+            and isinstance(event, QMouseEvent)
+            and _is_stylus_synthesized_mouse(event)
+        ):
+            return True
         if isinstance(event, QMouseEvent) and self._forward_pen_mouse_to_ink(watched, event):
             return True
         if not _is_text_like_tool(self._tool_mode) and not self._placement_pending():
