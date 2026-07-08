@@ -52,14 +52,14 @@ class FormatPalettePanel(QWidget):
 
     _SEGMENT_BTN_PAD = 10
     _ACTION_BTN_PAD = 8
-    _DETAIL_VERTICAL_INTERVAL = 12  # 「横/縦」の現行4px間隔の3倍
+    _DETAIL_VERTICAL_INTERVAL = 4
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(3)
+        root.setSpacing(2)
 
         tpl_row = QHBoxLayout()
         tpl_row.setSpacing(4)
@@ -163,7 +163,7 @@ class FormatPalettePanel(QWidget):
         self._detail_format_frame = QWidget()
         detail_lay = QHBoxLayout(self._detail_format_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
-        detail_lay.setSpacing(4)
+        detail_lay.setSpacing(3)
         deco_lbl = QLabel("装飾")
         deco_lbl.setObjectName("FormatPaletteLabel")
         deco_lbl.setFixedWidth(48)
@@ -187,7 +187,6 @@ class FormatPalettePanel(QWidget):
         align_lay.addLayout(v_align_row)
         self._detail_format_frame.hide()
         root.addWidget(align_frame)
-        root.addSpacing(max(0, self._DETAIL_VERTICAL_INTERVAL - root.spacing()))
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(2)
@@ -251,11 +250,11 @@ class FormatPalettePanel(QWidget):
         )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        base_h = 200 if self._template_edit_mode else 240
+        base_h = 160 if self._template_edit_mode else 190
         return QSize(self.content_min_width(), base_h)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        base_h = 250 if self._template_edit_mode else 300
+        base_h = 200 if self._template_edit_mode else 230
         return QSize(self.content_min_width(), base_h)
 
     def content_min_width(self) -> int:
