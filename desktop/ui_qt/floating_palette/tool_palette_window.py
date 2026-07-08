@@ -41,8 +41,7 @@ MODE_TEXT = "text"
 MODE_PHRASE = "phrase"
 
 _PALETTE_MIN_WIDTH = 236
-_PALETTE_MIN_HEIGHT_DEFAULT = 260
-_PALETTE_MIN_HEIGHT_SIMPLE = 140
+_PALETTE_MIN_HEIGHT = 120
 
 
 class ToolPaletteWindow(QWidget):
@@ -69,7 +68,7 @@ class ToolPaletteWindow(QWidget):
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
         self.resize(260, 320)
-        self.setMinimumSize(_PALETTE_MIN_WIDTH, _PALETTE_MIN_HEIGHT_DEFAULT)
+        self.setMinimumSize(_PALETTE_MIN_WIDTH, _PALETTE_MIN_HEIGHT)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -358,10 +357,8 @@ class ToolPaletteWindow(QWidget):
         return self._phrase_edit_active() or self._phrase_simple_active()
 
     def _apply_min_height_policy(self) -> None:
-        if self._phrase_simple_active():
-            self.setMinimumHeight(_PALETTE_MIN_HEIGHT_SIMPLE)
-        else:
-            self.setMinimumHeight(_PALETTE_MIN_HEIGHT_DEFAULT)
+        # 各モードで固定最小高に引っ張られないよう、全体を低い下限に統一。
+        self.setMinimumHeight(_PALETTE_MIN_HEIGHT)
 
     def _phrase_page_content_height(self) -> int:
         lay = self._phrase_lay
@@ -490,26 +487,23 @@ class ToolPaletteWindow(QWidget):
         chrome = self._stack_chrome_height()
         stack_max = max(100, max_h - chrome)
         content_need = self._content_height_hint()
-        if self._fit_height_to_content():
-            format_h = max(
-                self._format_panel.sizeHint().height(),
-                self._format_panel.minimumSizeHint().height(),
-            )
-            if self._phrase_edit_active():
-                self._phrase_format_scroll.setMinimumHeight(format_h)
-            content_h = min(content_need, stack_max)
-            if content_need <= stack_max:
-                self._content_scroll.setMinimumHeight(content_h)
-                self._content_scroll.setMaximumHeight(content_h)
-            else:
-                self._content_scroll.setMinimumHeight(0)
-                self._content_scroll.setMaximumHeight(stack_max)
-            desired_h = chrome + content_h
-            h = max(self.minimumHeight(), min(desired_h, max_h))
+        format_h = max(
+            self._format_panel.sizeHint().height(),
+            self._format_panel.minimumSizeHint().height(),
+        )
+        if self._phrase_edit_active():
+            self._phrase_format_scroll.setMinimumHeight(format_h)
+        content_h = min(content_need, stack_max)
+        if content_need <= stack_max:
+            # 収まる場合はスクロール領域を内容高に固定して、全表示にする。
+            self._content_scroll.setMinimumHeight(content_h)
+            self._content_scroll.setMaximumHeight(content_h)
         else:
-            self._content_scroll.setMaximumHeight(stack_max)
+            # 画面に収まらない場合のみスクロールを許可。
             self._content_scroll.setMinimumHeight(0)
-            h = max(self.minimumHeight(), min(geo.height(), max_h))
+            self._content_scroll.setMaximumHeight(stack_max)
+        desired_h = chrome + content_h
+        h = max(self.minimumHeight(), min(desired_h, max_h))
         self._apply_palette_min_width()
         hint_w = min(self._content_width_hint(), max_w)
         min_w = self.minimumWidth()
