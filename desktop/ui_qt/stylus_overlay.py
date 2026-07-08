@@ -16,7 +16,7 @@ from PySide6.QtGui import (
     QTabletEvent,
     QTouchEvent,
 )
-from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QApplication, QLabel, QVBoxLayout, QWidget
 
 from ui_qt.helpers import pil_to_qpixmap
 
@@ -208,12 +208,12 @@ class InkOverlayWidget(QWidget):
         self._software_eraser = m == TOOL_ERASER
 
     def _stylus_may_draw(self) -> bool:
+        if self._palm_rejection:
+            return self._tool_mode != TOOL_ERASER
         if _is_text_like_tool(self._tool_mode):
             return False
         if self._tool_mode == TOOL_ERASER:
             return False
-        if self._palm_rejection:
-            return True
         return self._tool_mode in (TOOL_PEN, TOOL_NONE)
 
     def _pointer_may_draw(self) -> bool:
@@ -503,7 +503,7 @@ class InkOverlayWidget(QWidget):
         return self._should_handle_tablet(event)
 
     def _should_erase_tablet(self, event: QTabletEvent) -> bool:
-        if _is_text_like_tool(self._tool_mode):
+        if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
             return False
         if not self._stylus_may_draw() and not self._software_eraser:
             return False
@@ -513,16 +513,19 @@ class InkOverlayWidget(QWidget):
         if is_eraser_mouse_event(event) or self._software_eraser:
             return False
         if _is_text_like_tool(self._tool_mode):
+            if self._palm_rejection and is_pen_mouse_event(event):
+                return True
             return False
         if not self._pointer_may_draw():
             return False
         return True
 
     def _should_erase_mouse(self, event: QMouseEvent) -> bool:
-        if _is_text_like_tool(self._tool_mode):
+        if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
             return False
         if not self._pointer_may_draw() and not self._software_eraser:
-            return False
+            if not (self._palm_rejection and is_eraser_mouse_event(event)):
+                return False
         return is_eraser_mouse_event(event) or self._eraser_active or self._software_eraser
 
     def _handle_tablet_eraser(self, event: QTabletEvent) -> None:
@@ -589,7 +592,7 @@ class InkOverlayWidget(QWidget):
         event.ignore()
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
-        if _is_text_like_tool(self._tool_mode):
+        if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
             event.ignore()
             return
         if self._should_erase_tablet(event):
@@ -875,6 +878,37 @@ class CropInkImageStack(QWidget):
         gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
         return self.text_layer.mapFromGlobal(gp)
 
+    def _map_to_ink_layer(self, source: QWidget, pos) -> QPointF:
+        gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
+        return self.ink_overlay.mapFromGlobal(gp)
+
+    def _forward_pen_mouse_to_ink(self, watched: QWidget, event: QMouseEvent) -> bool:
+        if not self._palm_rejection or not _is_text_like_tool(self._tool_mode):
+            return False
+        if watched not in (self.container, self.image_label, self.text_layer):
+            return False
+        if not (is_pen_mouse_event(event) or is_eraser_mouse_event(event)):
+            return False
+        et = event.type()
+        if et not in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.MouseMove,
+            QEvent.Type.MouseButtonRelease,
+        ):
+            return False
+        local = self._map_to_ink_layer(watched, event.position())
+        mapped = QMouseEvent(
+            et,
+            local,
+            event.globalPosition(),
+            event.button(),
+            event.buttons(),
+            event.modifiers(),
+            event.pointingDevice(),
+        )
+        QApplication.sendEvent(self.ink_overlay, mapped)
+        return True
+
     def _placement_pending(self) -> bool:
         return self.text_layer.has_speech_place_pending()
 
@@ -916,6 +950,8 @@ class CropInkImageStack(QWidget):
         return False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if isinstance(event, QMouseEvent) and self._forward_pen_mouse_to_ink(watched, event):
+            return True
         if not _is_text_like_tool(self._tool_mode) and not self._placement_pending():
             return super().eventFilter(watched, event)
         watched_layers = (
@@ -982,9 +1018,13 @@ class CropInkImageStack(QWidget):
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
-        # 最背面: 画像。描画モードは手書きが最前面、テキスト系はテキストが最前面。
+        # 最背面: 画像。描画モードは手書きが最前面。
+        # テキスト系は通常テキストが最前面。パームリジェクション ON 時はスタイラス描画のため手書きを最前面にする。
         self.image_label.lower()
-        if _is_text_like_tool(self._tool_mode) or self._placement_pending():
+        text_on_top = (
+            _is_text_like_tool(self._tool_mode) or self._placement_pending()
+        ) and not self._palm_rejection
+        if text_on_top:
             self.ink_overlay.raise_()
             self.text_layer.raise_()
         else:
@@ -1004,6 +1044,7 @@ class CropInkImageStack(QWidget):
         self.ink_overlay.set_palm_rejection(enabled)
         self.text_layer.set_palm_rejection(enabled)
         self._sync_input_routing()
+        self._sync_layer_order()
 
     def _sync_input_routing(self) -> None:
         """テキスト系モード: 手書きレイヤーはマウス透過。配置は text_layer と eventFilter で処理。"""

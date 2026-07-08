@@ -311,6 +311,7 @@ class ToolPaletteWindow(QWidget):
             "画像上でドラッグしてテキストボックスの大きさを決定\n"
             "配置後はダブルクリックで文字編集"
         )
+        self._text_hint_default = self._text_hint.text()
         self._text_hint.setObjectName("PaletteHintLabel")
         self._text_hint.setWordWrap(True)
         self._text_hint.setSizePolicy(
@@ -833,6 +834,13 @@ class ToolPaletteWindow(QWidget):
             if self._draw_tool == TOOL_PEN:
                 self._draw_tool = TOOL_NONE
         self._draw_hint.setVisible(self._palm_rejection)
+        if self._palm_rejection:
+            self._text_hint.setText(
+                f"{self._text_hint_default}\n"
+                "パームリジェクション ON 時はスタイラスで手書きも可能"
+            )
+        else:
+            self._text_hint.setText(self._text_hint_default)
 
     def set_input_mode(self, mode: str) -> None:
         self._switch_input_mode(
