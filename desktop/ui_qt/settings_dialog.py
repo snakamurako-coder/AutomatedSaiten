@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QRadioButton,
+    QSpinBox,
     QTabWidget,
     QVBoxLayout,
     QWidget,
@@ -36,8 +37,12 @@ from services.gemini_rubric import test_gemini_api_key
 from services.ocr import test_vision_api_key
 from ui_qt import helpers as h
 from ui_qt.floating_palette.palette_prefs import (
+    TEXT_BOX_DEFAULT_STYLE_BUILTIN,
     TEXT_PALETTE_COLORS_DEFAULT,
+    load_text_box_default_style,
     load_text_palette_colors,
+    normalize_text_box_default_style,
+    save_text_box_default_style,
     save_text_palette_colors,
 )
 from ui_qt.style import COLORS
@@ -205,6 +210,79 @@ class SettingsDialog(QDialog):
         lay.addLayout(palette_row)
         self._refresh_text_palette_btns()
 
+        lay.addWidget(h.caption_label("テキストボックス配置時の既定書式"))
+        lay.addWidget(
+            h.caption_label(
+                "新規テキストボックスを配置したときの初期値です。"
+                "内蔵既定は 赤字・14pt・行間20・左寄せ・上寄せ・背景なし。"
+            )
+        )
+        default_style = load_text_box_default_style()
+        self._default_text_style = dict(default_style)
+
+        default_form = QFormLayout()
+        default_form.setContentsMargins(0, 0, 0, 0)
+        default_form.setSpacing(8)
+
+        color_row = QHBoxLayout()
+        color_row.setSpacing(6)
+        self._default_color_btn = QPushButton()
+        self._default_color_btn.setObjectName("ColorSwatchBtn")
+        self._default_color_btn.setFixedSize(28, 28)
+        self._default_color_btn.setToolTip("クリックで既定の文字色を変更")
+        self._default_color_btn.clicked.connect(self._pick_default_text_color)
+        color_row.addWidget(self._default_color_btn)
+        color_row.addStretch()
+        default_form.addRow("文字色", color_row)
+        self._refresh_default_color_btn()
+
+        self._default_size_spin = QSpinBox()
+        self._default_size_spin.setRange(6, 72)
+        self._default_size_spin.setSuffix(" pt")
+        self._default_size_spin.setValue(int(default_style.get("fontSize") or 14))
+        default_form.addRow("大きさ", self._default_size_spin)
+
+        self._default_line_spin = QSpinBox()
+        self._default_line_spin.setRange(6, 144)
+        self._default_line_spin.setSuffix(" pt")
+        self._default_line_spin.setValue(int(default_style.get("lineSpacing") or 20))
+        default_form.addRow("行間", self._default_line_spin)
+
+        self._default_align_h = QComboBox()
+        self._default_align_h.addItem("左寄せ", "left")
+        self._default_align_h.addItem("中央", "center")
+        self._default_align_h.addItem("右寄せ", "right")
+        h_key = str(default_style.get("textAlignH") or "left")
+        h_idx = max(0, self._default_align_h.findData(h_key))
+        self._default_align_h.setCurrentIndex(h_idx)
+        default_form.addRow("横寄せ", self._default_align_h)
+
+        self._default_align_v = QComboBox()
+        self._default_align_v.addItem("上寄せ", "top")
+        self._default_align_v.addItem("中央", "center")
+        self._default_align_v.addItem("下寄せ", "bottom")
+        v_key = str(default_style.get("textAlignV") or "top")
+        v_idx = max(0, self._default_align_v.findData(v_key))
+        self._default_align_v.setCurrentIndex(v_idx)
+        default_form.addRow("縦寄せ", self._default_align_v)
+
+        self._default_bg = QComboBox()
+        self._default_bg.addItem("なし", "A")
+        self._default_bg.addItem("半透明（文字色の補色）", "B")
+        bg_key = str(default_style.get("templateId") or "A").upper()
+        bg_idx = max(0, self._default_bg.findData(bg_key))
+        self._default_bg.setCurrentIndex(bg_idx)
+        default_form.addRow("背景", self._default_bg)
+
+        reset_default_btn = h.button(
+            "配置既定を初期化", self._reset_text_box_default_style
+        )
+        reset_default_btn.setToolTip(
+            "赤字・14pt・行間20・左寄せ・上寄せ・背景なしに戻す"
+        )
+        default_form.addRow("", reset_default_btn)
+        lay.addLayout(default_form)
+
         lay.addWidget(h.caption_label("スタイラス"))
         stylus_form = QFormLayout()
         stylus_form.setContentsMargins(0, 0, 0, 0)
@@ -356,6 +434,7 @@ class SettingsDialog(QDialog):
         try:
             save_config(cfg)
             save_text_palette_colors(self._text_palette_colors)
+            save_text_box_default_style(self._collect_text_box_default_style())
         except OSError as e:
             self.status_label.setText(f"保存失敗: {e}")
             return False

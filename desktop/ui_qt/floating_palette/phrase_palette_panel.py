@@ -127,7 +127,12 @@ class PhrasePalettePanel(QWidget):
         root.addWidget(self._edit_single_frame)
         self._edit_single_frame.hide()
 
-        action_row = QHBoxLayout()
+        # コピー行は固定高。縦伸長の余りは上の定型文一覧(_scroll)だけが吸収する。
+        self._copy_wrap = QWidget()
+        self._copy_wrap.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        action_row = QHBoxLayout(self._copy_wrap)
         action_row.setSpacing(4)
         action_row.setContentsMargins(0, 0, 0, 0)
         self._copy_btn = QPushButton("テキストボックスからコピー")
@@ -140,8 +145,7 @@ class PhrasePalettePanel(QWidget):
         self._copy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self._copy_btn)
         action_row.addStretch()
-        # 下余白は最小固定。ウィンドウ伸長で増えないよう末尾 stretch は付けない。
-        root.addLayout(action_row)
+        root.addWidget(self._copy_wrap, 0)
 
         self._select_group = QButtonGroup(self)
         self._select_group.setExclusive(True)
@@ -269,7 +273,7 @@ class PhrasePalettePanel(QWidget):
             self._simple_frame.hide()
             self._scroll.hide()
             self._edit_single_frame.show()
-            self._copy_btn.hide()
+            self._copy_wrap.hide()
             self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
             self.layout_hint_changed.emit()
             return
@@ -278,10 +282,17 @@ class PhrasePalettePanel(QWidget):
         self._simple_frame.setVisible(not detailed)
         self._scroll.setVisible(detailed)
         # 簡易版からは「テキストボックスからコピー」を除外し、詳細版のみ表示する。
-        self._copy_btn.setVisible(detailed)
-        # Expanding だとウィンドウ伸長時にインターバルが膨らむ。
-        # 詳細一覧だけスクロール内で吸収できるよう Maximum を基本にする。
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self._copy_wrap.setVisible(detailed)
+        # 詳細一覧: パネル自体を縦に伸ばし、余白は _scroll(定型文エリア) だけが取る。
+        # 簡易版は Maximum のまま（下余白が増えない）。
+        self.setSizePolicy(
+            QSizePolicy.Policy.Expanding,
+            QSizePolicy.Policy.Expanding if detailed else QSizePolicy.Policy.Maximum,
+        )
+        root = self.layout()
+        if root is not None:
+            root.setStretchFactor(self._scroll, 1 if detailed else 0)
+            root.setStretchFactor(self._copy_wrap, 0)
         self.layout_hint_changed.emit()
 
     def reload_templates(self) -> None:

@@ -456,6 +456,13 @@ class ToolPaletteWindow(QWidget):
             and not self._phrase_format_scroll.isVisible()
         )
 
+    def _phrase_detailed_list_active(self) -> bool:
+        return (
+            self._input_mode == MODE_PHRASE
+            and self._view_mode == VIEW_DETAILED
+            and not self._phrase_format_scroll.isVisible()
+        )
+
     def _fit_height_to_content(self) -> bool:
         return self._phrase_edit_active() or self._phrase_simple_active()
 
@@ -535,12 +542,57 @@ class ToolPaletteWindow(QWidget):
         return max(page.minimumSizeHint().height(), page.sizeHint().height())
 
     def _apply_phrase_page_stretch(self) -> None:
-        # どのタブでも設定間隔は固定。縦伸長の余りはレイアウト末尾 stretch のみ。
-        self._phrase_lay.setStretchFactor(self._phrase_panel, 0)
+        # 定型文・詳細一覧だけ例外:
+        # 伸ばした高さは定型文ボタン一覧へ渡し、「コピー」下余白は最短固定。
+        detailed_list = self._phrase_detailed_list_active()
+        self._phrase_lay.setStretchFactor(
+            self._phrase_panel, 1 if detailed_list else 0
+        )
         self._phrase_lay.setStretchFactor(self._phrase_preview, 0)
         self._phrase_lay.setStretchFactor(self._phrase_format_scroll, 0)
+        # 末尾 spacer の stretch を詳細一覧時は 0 にし、余りをパネルへ回す。
+        if self._phrase_lay.count() > 0:
+            self._phrase_lay.setStretch(
+                self._phrase_lay.count() - 1, 0 if detailed_list else 1
+            )
+        self._phrase_page.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            (
+                QSizePolicy.Policy.Expanding
+                if detailed_list
+                else QSizePolicy.Policy.Maximum
+            ),
+        )
         self._phrase_panel.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+            QSizePolicy.Policy.Expanding,
+            (
+                QSizePolicy.Policy.Expanding
+                if detailed_list
+                else QSizePolicy.Policy.Maximum
+            ),
+        )
+        content_lay = self._content_host.layout()
+        if content_lay is not None:
+            content_lay.setStretchFactor(self._stack, 1 if detailed_list else 0)
+            if content_lay.count() > 0:
+                content_lay.setStretch(
+                    content_lay.count() - 1, 0 if detailed_list else 1
+                )
+        self._stack.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            (
+                QSizePolicy.Policy.Expanding
+                if detailed_list
+                else QSizePolicy.Policy.Maximum
+            ),
+        )
+        self._content_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            (
+                QSizePolicy.Policy.Expanding
+                if detailed_list
+                else QSizePolicy.Policy.Minimum
+            ),
         )
 
     def _content_width_hint(self) -> int:

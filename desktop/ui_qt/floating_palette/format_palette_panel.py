@@ -245,7 +245,7 @@ class FormatPalettePanel(QWidget):
             {
                 "color": str(DEFAULT_TEXT_STYLE.get("textColor") or DEFAULT_TEXT_COLOR),
                 "fontSize": int(DEFAULT_TEXT_STYLE.get("fontSize") or 14),
-                "lineSpacing": int(DEFAULT_TEXT_STYLE.get("lineSpacing") or 16),
+                "lineSpacing": int(DEFAULT_TEXT_STYLE.get("lineSpacing") or 20),
                 "bold": False,
                 "italic": False,
                 "underline": False,
@@ -499,7 +499,7 @@ class FormatPalettePanel(QWidget):
                 state.get("lineSpacing")
                 or self._style.get("lineSpacing")
                 or DEFAULT_TEXT_STYLE.get("lineSpacing")
-                or 16
+                or 20
             )
             self._line_spacing_spin.blockSignals(True)
             self._line_spacing_spin.setValue(max(6, min(72, spacing)))
@@ -541,7 +541,7 @@ class FormatPalettePanel(QWidget):
                 "lineSpacing": int(
                     self._style.get("lineSpacing")
                     or DEFAULT_TEXT_STYLE.get("lineSpacing")
-                    or 16
+                    or 20
                 ),
                 "bold": False,
                 "italic": False,

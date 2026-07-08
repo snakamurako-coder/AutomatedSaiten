@@ -14,6 +14,7 @@ from PySide6.QtGui import QMouseEvent, QTabletEvent, QTouchEvent
 from PySide6.QtWidgets import QFrame, QWidget
 
 from models.text_annotation_repo import new_text_box
+from ui_qt.floating_palette.palette_prefs import load_text_box_default_style
 from ui_qt.floating_palette.phrase_template_prefs import apply_phrase_template_to_box
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
 from ui_qt.stylus_overlay import is_pen_mouse_event, is_stylus_tablet_event
@@ -382,7 +383,9 @@ class TextBoxLayer(QWidget):
         nh = max(_MIN_NATIVE_H, dh * self._scale_y)
         nx = max(0.0, min(self._native_w - nw, display_x * self._scale_x))
         ny = max(0.0, min(self._native_h - nh, display_y * self._scale_y))
-        box = new_text_box(nx, ny, width=nw, height=nh)
+        box = new_text_box(
+            nx, ny, width=nw, height=nh, style=load_text_box_default_style()
+        )
         box["text"] = chunk
         self._undo_begin()
         self._sync_annotations_from_widgets()
@@ -509,9 +512,9 @@ class TextBoxLayer(QWidget):
             nh = max(_MIN_NATIVE_H, dh * self._scale_y)
             nx = max(0.0, min(self._native_w - nw, left * self._scale_x))
             ny = max(0.0, min(self._native_h - nh, top * self._scale_y))
-            box = new_text_box(nx, ny, width=nw, height=nh)
-        self._sync_annotations_from_widgets()
-        self._annotations.append(copy.deepcopy(box))
+            box = new_text_box(
+                nx, ny, width=nw, height=nh, style=load_text_box_default_style()
+            )
         self._rebuild_widgets(from_widgets=False)
         self.select_box(str(box["id"]))
         w = self._widgets.get(str(box["id"]))

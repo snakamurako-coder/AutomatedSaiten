@@ -31,6 +31,7 @@ from ui_qt.floating_palette.palette_prefs import (
     TOOL_TEXT,
     VIEW_DETAILED,
     load_palette_prefs,
+    load_text_box_default_style,
     load_text_palette_colors,
     save_palette_prefs,
 )
@@ -285,6 +286,23 @@ class PaletteController:
     def apply_text_palette_colors(self) -> None:
         self.tool_window.set_text_palette_colors(load_text_palette_colors())
 
+    def apply_text_box_default_style(self) -> None:
+        style = load_text_box_default_style()
+        fp = self.tool_window.format_panel
+        # 未選択時の書式パネル表示を、配置既定に合わせておく。
+        if not any(s.text_layer.selected_box() for s in self._stacks()):
+            fp.load_style(style)
+            fp.sync_char_format(
+                {
+                    "color": str(style.get("textColor") or DEFAULT_TEXT_COLOR),
+                    "fontSize": int(style.get("fontSize") or 14),
+                    "lineSpacing": int(style.get("lineSpacing") or 20),
+                    "bold": False,
+                    "italic": False,
+                    "underline": False,
+                }
+            )
+
     def apply_config(self) -> None:
         stylus = load_stylus_prefs()
         self._palm_rejection = stylus["palm_rejection"]
@@ -292,6 +310,7 @@ class PaletteController:
         self.tool_window.set_palm_rejection(self._palm_rejection)
         self.tool_window.set_eraser_mode(self._eraser_mode)
         self.apply_text_palette_colors()
+        self.apply_text_box_default_style()
         if self._palm_rejection and self._tool == TOOL_PEN:
             self.tool_window.set_draw_tool(TOOL_NONE)
             self._tool = TOOL_NONE
@@ -832,7 +851,7 @@ class PaletteController:
                 "lineSpacing": int(
                     st.get("lineSpacing")
                     or DEFAULT_TEXT_STYLE.get("lineSpacing")
-                    or 16
+                    or 20
                 ),
                 "bold": str(st.get("fontWeight") or "") == "bold",
                 "italic": str(st.get("fontStyle") or "") == "italic",

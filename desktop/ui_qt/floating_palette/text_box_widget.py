@@ -44,7 +44,7 @@ from ui_qt.floating_palette.text_rich import (
 )
 
 _DEFAULT_FONT_PT = int(DEFAULT_TEXT_STYLE.get("fontSize") or 14)
-_DEFAULT_LINE_SPACING_PT = int(DEFAULT_TEXT_STYLE.get("lineSpacing") or 16)
+_DEFAULT_LINE_SPACING_PT = int(DEFAULT_TEXT_STYLE.get("lineSpacing") or 20)
 _DRAG_THRESHOLD_PX = 4
 _MIN_NATIVE_W = 32.0
 _MIN_NATIVE_H = 18.0

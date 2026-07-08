@@ -18,13 +18,14 @@ TEXT_PALETTE_COLORS: tuple[str, ...] = (
     "#9333ea",
 )
 
-# 新規テキストボックスの既定: 赤字・14pt・行間16・左/上寄せ・背景なし
+# 新規テキストボックスの内蔵既定: 赤字・14pt・行間20・左/上寄せ・背景なし
+# （詳細設定の描画ツールで上書き可能）
 DEFAULT_TEXT_COLOR = "#dc2626"
 
 DEFAULT_TEXT_STYLE: dict[str, Any] = {
     "textColor": DEFAULT_TEXT_COLOR,
     "fontSize": 14,
-    "lineSpacing": 16,
+    "lineSpacing": 20,
     "fontFamily": "meiryo.ttc",
     "templateId": "A",
     "fillAlpha": 0.0,
@@ -38,7 +39,7 @@ TEXT_STYLE_TEMPLATE_A: dict[str, Any] = {
     "templateId": "A",
     "textColor": DEFAULT_TEXT_COLOR,
     "fontSize": 14,
-    "lineSpacing": 16,
+    "lineSpacing": 20,
     "fillAlpha": 0.0,
     "borderWidth": 0,
     "borderAlpha": 0.0,
@@ -50,7 +51,7 @@ TEXT_STYLE_TEMPLATE_B: dict[str, Any] = {
     "templateId": "B",
     "textColor": DEFAULT_TEXT_COLOR,
     "fontSize": 14,
-    "lineSpacing": 16,
+    "lineSpacing": 20,
     "fillAlpha": 0.2,
     "borderWidth": 0,
     "borderAlpha": 0.0,
@@ -117,6 +118,7 @@ def new_text_box(
     *,
     width: float = 120.0,
     height: float = 36.0,
+    style: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     return {
         "id": str(uuid.uuid4()),
@@ -125,7 +127,9 @@ def new_text_box(
         "width": float(width),
         "height": float(height),
         "text": "",
-        "style": dict(TEXT_STYLE_TEMPLATE_A),
+        "style": resolve_text_style(
+            style if isinstance(style, dict) else dict(TEXT_STYLE_TEMPLATE_A)
+        ),
     }
 
 

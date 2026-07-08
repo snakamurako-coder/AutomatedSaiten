@@ -65,7 +65,7 @@ def plain_to_html(text: str, style: dict[str, Any] | None) -> str:
     ls = float(
         st.get("lineSpacing")
         or DEFAULT_TEXT_STYLE.get("lineSpacing")
-        or 16
+        or 20
     )
     body = html_lib.escape(str(text or "")).replace("\n", "<br>")
     p_styles = [
@@ -152,7 +152,7 @@ def html_for_pdf_box(
     ls = float(
         default_style.get("lineSpacing")
         or DEFAULT_TEXT_STYLE.get("lineSpacing")
-        or 16
+        or 20
     )
     align = css_text_align(default_style)
     _, v_align = normalize_text_align(default_style)
