@@ -323,14 +323,14 @@ class ToolPaletteWindow(QWidget):
         self._draw_tool = TOOL_NONE
         self._current_color = PALETTE_COLORS[0]
         self._pen_btn.setVisible(False)
-        self._apply_view_mode()
-        self._apply_palm_rejection_ui()
-        self._switch_input_mode(MODE_DRAW, emit=False)
-        self._emit_draw_tool(emit=False)
         self._fit_timer = QTimer(self)
         self._fit_timer.setSingleShot(True)
         self._fit_timer.setInterval(0)
         self._fit_timer.timeout.connect(self._fit_to_screen)
+        self._apply_view_mode()
+        self._apply_palm_rejection_ui()
+        self._switch_input_mode(MODE_DRAW, emit=False)
+        self._emit_draw_tool(emit=False)
 
     def _schedule_fit_to_screen(self) -> None:
         self._fit_timer.start()
