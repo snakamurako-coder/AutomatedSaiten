@@ -116,6 +116,13 @@ def mark_box_html(box: dict[str, Any], html: str, plain: str) -> None:
     box["textFormat"] = TEXT_FORMAT_HTML
 
 
+def box_has_saved_html(box: dict[str, Any]) -> bool:
+    return (
+        str(box.get("textFormat") or "") == TEXT_FORMAT_HTML
+        and bool(str(box.get("textHtml") or "").strip())
+    )
+
+
 def html_body_for_label(full_html: str) -> str:
     """QLabel 表示用に body 内を抽出（なければそのまま）。"""
     raw = str(full_html or "").strip()

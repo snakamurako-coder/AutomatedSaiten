@@ -11,6 +11,7 @@ from config import load_config, save_config
 from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
 from ui_qt.floating_palette.text_rich import (
     TEXT_FORMAT_HTML,
+    box_has_saved_html,
     box_text_html,
     html_body_for_label,
     sync_box_html_from_style,
@@ -184,7 +185,8 @@ def apply_phrase_template_to_box(box: dict[str, Any], template: dict[str, Any]) 
     box["text"] = str(template.get("text") or "")
     box["textHtml"] = str(template.get("textHtml") or "")
     box["textFormat"] = str(template.get("textFormat") or "plain")
-    sync_box_html_from_style(box)
+    if not box_has_saved_html(box):
+        sync_box_html_from_style(box)
 
 
 def phrase_template_to_box(tpl: dict[str, Any]) -> dict[str, Any]:
@@ -203,11 +205,15 @@ def phrase_template_to_box(tpl: dict[str, Any]) -> dict[str, Any]:
 def phrase_updates_from_box(phrase_id: str, box: dict[str, Any]) -> dict[str, Any]:
     text = str(box.get("text") or "")
     label = text.replace("\n", " ").strip()[:20]
+    html = str(box.get("textHtml") or "")
+    fmt = str(box.get("textFormat") or "plain")
+    if html.strip():
+        fmt = TEXT_FORMAT_HTML
     return {
         "text": text,
         "label": label,
-        "textHtml": str(box.get("textHtml") or ""),
-        "textFormat": str(box.get("textFormat") or "plain"),
+        "textHtml": html,
+        "textFormat": fmt,
         "style": resolve_text_style(copy.deepcopy(box.get("style") or {})),
         "width": max(40.0, float(box.get("width") or 120.0)),
         "height": max(24.0, float(box.get("height") or 36.0)),
