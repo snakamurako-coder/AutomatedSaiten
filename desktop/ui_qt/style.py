@@ -448,6 +448,28 @@ QPushButton#ToolSegmentBtn:checked {{
     color: {COLORS["accent"]};
     font-weight: 600;
 }}
+QPushButton#PaletteActionBtn {{
+    background: {COLORS["surface"]};
+    border: 1px solid {COLORS["border_strong"]};
+    border-radius: 6px;
+    padding: 4px 2px;
+    font-size: 9px;
+    font-weight: 500;
+    min-height: 26px;
+}}
+QPushButton#PaletteActionBtn:hover {{
+    background: #f1f5f9;
+}}
+QPushButton#PaletteActionBtn:checked {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+}}
+QPushButton#PaletteActionBtn[variant="danger"] {{
+    background: #fee2e2;
+    border: 1px solid #fca5a5;
+    color: #b91c1c;
+}}
 QPushButton#ColorSwatchBtn {{
     border: 2px solid transparent;
 }}

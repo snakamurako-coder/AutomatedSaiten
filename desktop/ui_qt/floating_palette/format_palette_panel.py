@@ -12,6 +12,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QSpinBox,
     QStyle,
     QVBoxLayout,
@@ -78,29 +79,24 @@ class FormatPalettePanel(QWidget):
         self._color_group = QButtonGroup(self)
         root.addLayout(color_row)
 
-        size_row = QHBoxLayout()
-        size_row.setSpacing(6)
+        metrics_row = QHBoxLayout()
+        metrics_row.setSpacing(6)
         size_lbl = QLabel("サイズ")
-        size_lbl.setFixedWidth(48)
-        size_row.addWidget(size_lbl)
+        size_lbl.setFixedWidth(36)
+        metrics_row.addWidget(size_lbl)
         self._size_spin = self._make_pt_spin(
             "選択範囲またはカーソル位置の文字サイズ"
         )
         self._size_spin.valueChanged.connect(self._on_size_changed)
-        size_row.addWidget(self._size_spin)
-        size_row.addStretch()
-        root.addLayout(size_row)
-
-        spacing_row = QHBoxLayout()
-        spacing_row.setSpacing(6)
+        metrics_row.addWidget(self._size_spin)
         spacing_lbl = QLabel("行間")
-        spacing_lbl.setFixedWidth(48)
-        spacing_row.addWidget(spacing_lbl)
+        spacing_lbl.setFixedWidth(36)
+        metrics_row.addWidget(spacing_lbl)
         self._line_spacing_spin = self._make_pt_spin("改行後の行の高さ（ポイント）")
         self._line_spacing_spin.valueChanged.connect(self._on_line_spacing_changed)
-        spacing_row.addWidget(self._line_spacing_spin)
-        spacing_row.addStretch()
-        root.addLayout(spacing_row)
+        metrics_row.addWidget(self._line_spacing_spin)
+        metrics_row.addStretch()
+        root.addLayout(metrics_row)
 
         self._detail_format_frame = QFrame()
         detail_lay = QHBoxLayout(self._detail_format_frame)
@@ -122,22 +118,22 @@ class FormatPalettePanel(QWidget):
         self._detail_format_frame.hide()
 
         btn_row = QHBoxLayout()
-        btn_row.setSpacing(6)
-        done_btn = QPushButton("編集完了")
+        btn_row.setSpacing(4)
+        done_btn = self._make_action_btn("編集完了")
         done_btn.clicked.connect(self.edit_done_requested.emit)
         self._done_btn = done_btn
-        edit_btn = QPushButton("文字を編集")
+        edit_btn = self._make_action_btn("文字を編集")
         edit_btn.setToolTip("ダブルクリックでも編集を開始できます")
         edit_btn.clicked.connect(self.edit_requested.emit)
         self._edit_text_btn = edit_btn
-        self._speech_btn = QPushButton("音声入力")
+        self._speech_btn = self._make_action_btn("音声入力")
         self._speech_btn.setCheckable(True)
         self._speech_btn.setToolTip(
             "マイクで音声をテキストに追加"
             "（要ネット・話したあと少し間を空けると認識されます）"
         )
         self._speech_btn.toggled.connect(self._on_speech_toggled)
-        del_btn = QPushButton("削除")
+        del_btn = self._make_action_btn("削除")
         del_btn.setToolTip("選択中のテキストボックスを削除（Del キーでも可）")
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self.delete_requested.emit)
@@ -175,10 +171,20 @@ class FormatPalettePanel(QWidget):
         )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(220, 240)
+        return QSize(220, 220)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(260, 320)
+        return QSize(260, 300)
+
+    def _make_action_btn(self, label: str) -> QPushButton:
+        btn = QPushButton(label)
+        btn.setObjectName("PaletteActionBtn")
+        font = QFont(btn.font())
+        font.setPointSize(9)
+        font.setWeight(QFont.Weight.Medium)
+        btn.setFont(font)
+        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        return btn
 
     def _make_pt_spin(self, tooltip: str) -> QSpinBox:
         spin = QSpinBox()
@@ -442,7 +448,11 @@ class FormatPalettePanel(QWidget):
         self._speech_btn.setText(btn_text)
         if accent:
             self._speech_btn.setStyleSheet(
-                f"QPushButton {{ background: {COLORS['accent_soft']}; font-weight: 600; }}"
+                "QPushButton#PaletteActionBtn {"
+                f" background: {COLORS['accent_soft']};"
+                " font-weight: 600;"
+                " font-size: 9px;"
+                " }"
             )
         else:
             self._speech_btn.setStyleSheet("")
