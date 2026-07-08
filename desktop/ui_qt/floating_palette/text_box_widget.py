@@ -565,13 +565,13 @@ class TextBoxWidget(QFrame):
                 self._box["style"] = resolve_text_style(style)
 
     def _first_char_color_hex(self) -> str | None:
-        cursor = QTextCursor(self._editor.document())
-        cursor.movePosition(QTextCursor.MoveOperation.Start)
-        if not cursor.movePosition(
-            QTextCursor.MoveOperation.NextCharacter,
-            QTextCursor.MoveMode.KeepAnchor,
-        ):
+        doc = self._editor.document()
+        # Qt は空文書で position=1 を触ると warning を出すため先に境界確認する。
+        if doc.characterCount() <= 1:
             return None
+        cursor = QTextCursor(doc)
+        cursor.setPosition(0)
+        cursor.setPosition(1, QTextCursor.MoveMode.KeepAnchor)
         color = cursor.charFormat().foreground().color()
         if not color.isValid():
             return None
