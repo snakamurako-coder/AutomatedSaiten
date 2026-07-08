@@ -912,17 +912,30 @@ class CropInkImageStack(QWidget):
         gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
         return self.ink_overlay.mapFromGlobal(gp)
 
-    def _forward_ink_tablet(self, watched: QWidget, event: QTabletEvent) -> bool:
-        """テキスト系タブでも TabletEvent を手書きレイヤーへ渡し、描画品質を描画タブと揃える。"""
+    def _route_stylus_tablet_to_ink(self, watched: QWidget, event: QTabletEvent) -> bool:
+        """テキスト系タブでも Tablet を描画タブと同一経路（process_tablet_at）に一本化する。"""
         if not self._palm_rejection or not _is_text_like_tool(self._tool_mode):
             return False
-        if watched is self.ink_overlay:
-            return False
-        if watched not in (self.container, self.image_label, self.text_layer):
+        if event.type() not in (
+            QEvent.Type.TabletPress,
+            QEvent.Type.TabletMove,
+            QEvent.Type.TabletRelease,
+        ):
             return False
         if not is_ink_tablet_event(event):
             return False
-        local = self._map_to_ink_layer(watched, event.position())
+        if watched not in (
+            self.container,
+            self.image_label,
+            self.ink_overlay,
+            self.text_layer,
+        ):
+            return False
+        local = (
+            event.position()
+            if watched is self.ink_overlay
+            else self._map_to_ink_layer(watched, event.position())
+        )
         self.ink_overlay.process_tablet_at(event, local)
         return True
 
@@ -1005,7 +1018,9 @@ class CropInkImageStack(QWidget):
         return False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if isinstance(event, QTabletEvent) and self._forward_ink_tablet(watched, event):
+        if isinstance(event, QTabletEvent) and self._route_stylus_tablet_to_ink(
+            watched, event
+        ):
             return True
         if (
             self._palm_rejection
@@ -1109,8 +1124,18 @@ class CropInkImageStack(QWidget):
         self._palm_rejection = bool(enabled)
         self.ink_overlay.set_palm_rejection(enabled)
         self.text_layer.set_palm_rejection(enabled)
+        self._sync_ink_tool_mode()
         self._sync_input_routing()
         self._sync_layer_order()
+
+    def _ink_tool_mode(self) -> str:
+        """手書きレイヤーは UI タブに関わらず描画タブ（パームリジェクション時は TOOL_NONE）と同じモードで動かす。"""
+        if self._palm_rejection and _is_text_like_tool(self._tool_mode):
+            return TOOL_NONE
+        return self._tool_mode
+
+    def _sync_ink_tool_mode(self) -> None:
+        self.ink_overlay.set_tool_mode(self._ink_tool_mode())
 
     def _sync_input_routing(self) -> None:
         """テキスト系モード: 手書きレイヤーはマウス透過。配置は text_layer と eventFilter で処理。"""
@@ -1135,7 +1160,7 @@ class CropInkImageStack(QWidget):
     def set_tool_mode(self, mode: str) -> None:
         self._tool_mode = mode
         is_text_like = _is_text_like_tool(mode)
-        self.ink_overlay.set_tool_mode(mode)
+        self._sync_ink_tool_mode()
         self.text_layer.set_placement_mode(mode in (TOOL_TEXT, TOOL_PHRASE))
         self.text_layer.set_text_tool_mode(is_text_like)
         if is_text_like:
