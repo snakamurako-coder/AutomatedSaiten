@@ -435,7 +435,7 @@ QPushButton#PhraseSimpleBtn {{
     font-size: 11px;
     text-align: left;
     min-height: 0;
-    max-height: 22px;
+    max-height: 24px;
 }}
 QPushButton#PhraseCopyBtn {{
     background: {COLORS["surface"]};
@@ -487,11 +487,10 @@ QLabel#PhraseSimpleBody {{
 QPushButton#PhrasePlacementBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
-    border-radius: 5px;
-    padding: 2px 2px;
+    border-radius: 6px;
+    padding: 4px 2px;
     font-size: 11px;
     min-height: 0;
-    max-height: 22px;
 }}
 QPushButton#PhrasePlacementBtn:hover {{
     border-color: {COLORS["border_strong"]};
@@ -503,7 +502,7 @@ QPushButton#PhrasePlacementBtn:checked {{
 }}
 QLabel#PhraseDetailBody {{
     font-size: 14px;
-    line-height: 18px;
+    line-height: 20px;
     padding: 0;
     margin: 0;
 }}
