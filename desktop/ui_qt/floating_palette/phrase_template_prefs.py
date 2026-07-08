@@ -13,7 +13,7 @@ from ui_qt.floating_palette.text_rich import (
     TEXT_FORMAT_HTML,
     box_text_html,
     html_body_for_label,
-    plain_to_html,
+    sync_box_html_from_style,
 )
 
 PHRASE_SIMPLE_COUNT = 6
@@ -181,19 +181,10 @@ def phrase_preview_text(tpl: dict[str, Any]) -> str:
 def apply_phrase_template_to_box(box: dict[str, Any], template: dict[str, Any]) -> None:
     style = copy.deepcopy(template.get("style") or {})
     box["style"] = style
-    text = str(template.get("text") or "")
-    html = str(template.get("textHtml") or "").strip()
-    fmt = str(template.get("textFormat") or "plain")
-    box["text"] = text
-    if html:
-        box["textHtml"] = html
-        box["textFormat"] = TEXT_FORMAT_HTML
-    elif text.strip():
-        box["textHtml"] = plain_to_html(text, style)
-        box["textFormat"] = TEXT_FORMAT_HTML
-    else:
-        box["textHtml"] = ""
-        box["textFormat"] = fmt if fmt != TEXT_FORMAT_HTML else "plain"
+    box["text"] = str(template.get("text") or "")
+    box["textHtml"] = str(template.get("textHtml") or "")
+    box["textFormat"] = str(template.get("textFormat") or "plain")
+    sync_box_html_from_style(box)
 
 
 def phrase_template_to_box(tpl: dict[str, Any]) -> dict[str, Any]:

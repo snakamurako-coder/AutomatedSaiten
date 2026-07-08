@@ -858,6 +858,12 @@ class PaletteController:
             merged["fontStyle"] = (
                 "normal" if str(merged.get("fontStyle")) == "italic" else "italic"
             )
+        if changes.get("toggleUnderline"):
+            merged["textDecoration"] = (
+                "none"
+                if str(merged.get("textDecoration")) == "underline"
+                else "underline"
+            )
         return resolve_text_style(merged)
 
     def _persist_phrase_from_preview(self, *, reload_list: bool) -> None:

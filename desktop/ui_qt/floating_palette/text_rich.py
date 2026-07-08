@@ -11,16 +11,43 @@ TEXT_FORMAT_HTML = "html"
 
 
 def plain_to_html(text: str, style: dict[str, Any] | None) -> str:
-    tc = str((style or {}).get("textColor") or "#111827")
-    fs = float((style or {}).get("fontSize") or 14)
-    ls = float((style or {}).get("lineSpacing") or fs)
+    st = style or {}
+    tc = str(st.get("textColor") or "#111827")
+    fs = float(st.get("fontSize") or 14)
+    ls = float(st.get("lineSpacing") or fs)
     body = html_lib.escape(str(text or "")).replace("\n", "<br>")
+    p_styles = [
+        "margin-top:0",
+        "margin-bottom:0",
+        f"color:{tc}",
+        f"font-size:{fs}pt",
+        f"line-height:{ls}pt",
+        "font-family:Meiryo, sans-serif",
+    ]
+    if str(st.get("fontWeight") or "") == "bold":
+        p_styles.append("font-weight:bold")
+    if str(st.get("fontStyle") or "") == "italic":
+        p_styles.append("font-style:italic")
+    if str(st.get("textDecoration") or "") == "underline":
+        p_styles.append("text-decoration:underline")
+    p_style = "; ".join(p_styles)
     return (
         '<html><head></head><body style="margin:0; padding:0;">'
-        f'<p style="margin-top:0; margin-bottom:0; color:{tc}; '
-        f'font-size:{fs}pt; line-height:{ls}pt; font-family:Meiryo, sans-serif;">{body}</p>'
+        f'<p style="{p_style}">{body}</p>'
         "</body></html>"
     )
+
+
+def sync_box_html_from_style(box: dict[str, Any]) -> None:
+    """style 辞書の文字色・サイズ・装飾を textHtml に反映する。"""
+    plain = str(box.get("text") or "")
+    if not plain.strip():
+        box["textHtml"] = ""
+        box["textFormat"] = TEXT_FORMAT_PLAIN
+        return
+    st = box.get("style") or {}
+    box["textHtml"] = plain_to_html(plain, st)
+    box["textFormat"] = TEXT_FORMAT_HTML
 
 
 def box_text_html(box: dict[str, Any], style: dict[str, Any] | None = None) -> str:

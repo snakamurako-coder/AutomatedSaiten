@@ -31,6 +31,7 @@ from ui_qt.floating_palette.text_rich import (
     box_text_html,
     html_body_for_label,
     mark_box_html,
+    sync_box_html_from_style,
 )
 
 _DEFAULT_FONT_PT = 14
@@ -391,9 +392,11 @@ class TextBoxWidget(QFrame):
         self._apply_style()
         if self._editing:
             self._apply_default_char_format()
-        self._apply_block_line_spacing()
-        if not self._editing:
-            self._update_display_content()
+            self._apply_block_line_spacing()
+        else:
+            sync_box_html_from_style(self._box)
+            self._load_editor_content()
+            self._apply_block_line_spacing()
 
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
