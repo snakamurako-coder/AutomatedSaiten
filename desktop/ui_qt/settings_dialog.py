@@ -401,6 +401,48 @@ class SettingsDialog(QDialog):
         self._text_palette_colors = list(TEXT_PALETTE_COLORS_DEFAULT)
         self._refresh_text_palette_btns()
 
+    def _refresh_default_color_btn(self) -> None:
+        col = str(self._default_text_style.get("textColor") or "#dc2626")
+        self._default_color_btn.setStyleSheet(
+            f"QPushButton#ColorSwatchBtn {{ background: {col}; border-radius: 14px; }}"
+        )
+
+    def _pick_default_text_color(self) -> None:
+        current = str(self._default_text_style.get("textColor") or "#dc2626")
+        picked = QColorDialog.getColor(QColor(current), self, "配置時の既定文字色")
+        if not picked.isValid():
+            return
+        self._default_text_style["textColor"] = picked.name()
+        self._refresh_default_color_btn()
+
+    def _collect_text_box_default_style(self) -> dict:
+        return normalize_text_box_default_style(
+            {
+                "textColor": self._default_text_style.get("textColor"),
+                "fontSize": self._default_size_spin.value(),
+                "lineSpacing": self._default_line_spin.value(),
+                "textAlignH": self._default_align_h.currentData(),
+                "textAlignV": self._default_align_v.currentData(),
+                "templateId": self._default_bg.currentData(),
+            }
+        )
+
+    def _reset_text_box_default_style(self) -> None:
+        style = normalize_text_box_default_style(TEXT_BOX_DEFAULT_STYLE_BUILTIN)
+        self._default_text_style = dict(style)
+        self._refresh_default_color_btn()
+        self._default_size_spin.setValue(int(style.get("fontSize") or 14))
+        self._default_line_spin.setValue(int(style.get("lineSpacing") or 20))
+        self._default_align_h.setCurrentIndex(
+            max(0, self._default_align_h.findData(style.get("textAlignH") or "left"))
+        )
+        self._default_align_v.setCurrentIndex(
+            max(0, self._default_align_v.findData(style.get("textAlignV") or "top"))
+        )
+        self._default_bg.setCurrentIndex(
+            max(0, self._default_bg.findData(str(style.get("templateId") or "A").upper()))
+        )
+
     def _browse_tesseract(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
             self, "Tesseract 実行ファイルを選択", "", "実行ファイル (*.exe);;すべて (*.*)"

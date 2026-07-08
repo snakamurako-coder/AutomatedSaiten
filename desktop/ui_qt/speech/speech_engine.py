@@ -6,6 +6,7 @@ import importlib.util
 import sys
 import threading
 import time
+import warnings
 
 from PySide6.QtCore import QObject, Signal
 from PySide6.QtWidgets import QWidget
@@ -215,76 +216,87 @@ class _SoundcardSpeechWorker(_SpeechWorkerBase):
 
         self._bridge.phase_changed.emit("recognizing")
         empty_streak = 0
-        with microphone.recorder(samplerate=self._SAMPLE_RATE, channels=1) as recorder:
-            while not self._stop_event.is_set():
-                if self._pause_event.is_set():
-                    time.sleep(0.05)
-                    continue
-                if self._finalize_requested and not self._want_listening:
-                    self._finalize_requested = False
-                    break
-                if not self._want_listening:
-                    time.sleep(0.05)
-                    continue
-
-                frames: list = []
-                silent_run = 0
-                speech_blocks = 0
-                idle_blocks = 0
-
-                while (
-                    not self._stop_event.is_set()
-                    and self._want_listening
-                    and not self._pause_event.is_set()
-                    and not self._finalize_requested
-                ):
-                    block = recorder.record(numframes=self._BLOCK_SIZE)
-                    level = float(np.abs(block).mean())
-                    if level >= self._SILENCE_LEVEL:
-                        frames.append(block)
-                        speech_blocks += 1
-                        silent_run = 0
-                        idle_blocks = 0
-                    elif frames:
-                        frames.append(block)
-                        silent_run += 1
-                        if silent_run >= silence_blocks:
-                            break
-                    else:
-                        idle_blocks += 1
-                        if idle_blocks >= 40:
-                            break
-                    if speech_blocks >= self._MAX_PHRASE_BLOCKS:
+        # UI 負荷などでバッファ欠落すると soundcard がこの warning を出す。
+        # 認識自体は継続できるため、コンソールを汚さないよう抑止する。
+        with warnings.catch_warnings():
+            warnings.filterwarnings(
+                "ignore",
+                message=r".*data discontinuity in recording.*",
+                category=Warning,
+                module=r"soundcard(\..*)?",
+            )
+            with microphone.recorder(
+                samplerate=self._SAMPLE_RATE, channels=1
+            ) as recorder:
+                while not self._stop_event.is_set():
+                    if self._pause_event.is_set():
+                        time.sleep(0.05)
+                        continue
+                    if self._finalize_requested and not self._want_listening:
+                        self._finalize_requested = False
                         break
+                    if not self._want_listening:
+                        time.sleep(0.05)
+                        continue
 
-                finalize_now = self._finalize_requested
-                if finalize_now:
-                    self._finalize_requested = False
+                    frames: list = []
+                    silent_run = 0
+                    speech_blocks = 0
+                    idle_blocks = 0
 
-                if self._pause_event.is_set():
-                    continue
+                    while (
+                        not self._stop_event.is_set()
+                        and self._want_listening
+                        and not self._pause_event.is_set()
+                        and not self._finalize_requested
+                    ):
+                        block = recorder.record(numframes=self._BLOCK_SIZE)
+                        level = float(np.abs(block).mean())
+                        if level >= self._SILENCE_LEVEL:
+                            frames.append(block)
+                            speech_blocks += 1
+                            silent_run = 0
+                            idle_blocks = 0
+                        elif frames:
+                            frames.append(block)
+                            silent_run += 1
+                            if silent_run >= silence_blocks:
+                                break
+                        else:
+                            idle_blocks += 1
+                            if idle_blocks >= 40:
+                                break
+                        if speech_blocks >= self._MAX_PHRASE_BLOCKS:
+                            break
 
-                if finalize_now and self._recognize_frames(frames, speech_blocks):
-                    empty_streak = 0
-                elif finalize_now:
-                    pass
-                elif self._stop_event.is_set() or not self._want_listening:
-                    break
-                elif not frames or speech_blocks < self._MIN_SPEECH_BLOCKS:
-                    empty_streak += 1
-                    if empty_streak >= self._NO_SPEECH_HINT_AFTER:
+                    finalize_now = self._finalize_requested
+                    if finalize_now:
+                        self._finalize_requested = False
+
+                    if self._pause_event.is_set():
+                        continue
+
+                    if finalize_now and self._recognize_frames(frames, speech_blocks):
                         empty_streak = 0
-                        self._bridge.error.emit(
-                            "音声が検出されません。"
-                            "マイクに向かって話し、区切りで少し黙ってください。"
-                        )
-                    continue
-                else:
-                    empty_streak = 0
-                    self._recognize_frames(frames, speech_blocks)
+                    elif finalize_now:
+                        pass
+                    elif self._stop_event.is_set() or not self._want_listening:
+                        break
+                    elif not frames or speech_blocks < self._MIN_SPEECH_BLOCKS:
+                        empty_streak += 1
+                        if empty_streak >= self._NO_SPEECH_HINT_AFTER:
+                            empty_streak = 0
+                            self._bridge.error.emit(
+                                "音声が検出されません。"
+                                "マイクに向かって話し、区切りで少し黙ってください。"
+                            )
+                        continue
+                    else:
+                        empty_streak = 0
+                        self._recognize_frames(frames, speech_blocks)
 
-                if finalize_now or self._stop_event.is_set() or not self._want_listening:
-                    break
+                    if finalize_now or self._stop_event.is_set() or not self._want_listening:
+                        break
 
 
 class _SrSpeechWorker(_SpeechWorkerBase):

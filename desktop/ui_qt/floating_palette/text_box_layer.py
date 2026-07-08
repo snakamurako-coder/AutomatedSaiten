@@ -515,6 +515,8 @@ class TextBoxLayer(QWidget):
             box = new_text_box(
                 nx, ny, width=nw, height=nh, style=load_text_box_default_style()
             )
+        self._sync_annotations_from_widgets()
+        self._annotations.append(copy.deepcopy(box))
         self._rebuild_widgets(from_widgets=False)
         self.select_box(str(box["id"]))
         w = self._widgets.get(str(box["id"]))

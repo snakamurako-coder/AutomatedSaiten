@@ -498,8 +498,8 @@ QPushButton#PhrasePlacementBtn {{
     border-radius: 6px;
     padding: 2px 2px;
     font-size: 10px;
-    min-height: 60px;
-    max-height: 60px;
+    min-height: 40px;
+    max-height: 40px;
 }}
 QPushButton#PhrasePlacementBtn:hover {{
     border-color: {COLORS["border_strong"]};

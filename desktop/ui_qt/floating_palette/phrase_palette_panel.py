@@ -45,7 +45,8 @@ _DETAIL_TEXT_MIN_WIDTH = 80
 # 高さ調整はカード本体のみ。ウィンドウ伸長の余白はカード間に入れない。
 _DETAIL_BODY_MIN_HEIGHT = 60
 _DETAIL_CARD_MIN_HEIGHT = 72
-_DETAIL_PLACEMENT_BTN_HEIGHT = 60
+# カード内容高(約60)に対し約2/3。縦中央揃えでカード内に収める。
+_DETAIL_PLACEMENT_BTN_HEIGHT = 40
 _DETAIL_CARD_SPACING = 8
 _DETAIL_VIEWPORT_MAX_CARDS = 4
 _DETAIL_ACTION_BTN_HEIGHT = 22
@@ -588,11 +589,15 @@ class PhrasePalettePanel(QWidget):
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(8)
-        lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        lay.setAlignment(
+            Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+        )
 
         select_btn = self._make_placement_btn(tpl)
-        # カード内で選択ボタンを高さ中央に配置
-        lay.addWidget(select_btn, 0, Qt.AlignmentFlag.AlignVCenter)
+        # カード内で選択ボタン・本文・操作を高さ中央に揃える
+        lay.addWidget(
+            select_btn, 0, Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+        )
 
         body = self._make_rich_label(tpl, one_line=False)
         body.setMinimumWidth(_DETAIL_TEXT_MIN_WIDTH)
@@ -600,7 +605,9 @@ class PhrasePalettePanel(QWidget):
         body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         lay.addWidget(body, 1, Qt.AlignmentFlag.AlignVCenter)
 
-        action_row = QHBoxLayout()
+        action_col = QWidget()
+        action_col.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        action_row = QHBoxLayout(action_col)
         action_row.setSpacing(4)
         action_row.setContentsMargins(0, 0, 0, 0)
         action_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
@@ -611,7 +618,7 @@ class PhrasePalettePanel(QWidget):
         del_btn.clicked.connect(lambda _c=False, p=pid: self._on_delete(p))
         action_row.addWidget(edit_btn)
         action_row.addWidget(del_btn)
-        lay.addLayout(action_row, 0)
+        lay.addWidget(action_col, 0, Qt.AlignmentFlag.AlignVCenter)
 
         frame.setStyleSheet(
             self._phrase_detail_row_qss(tpl, editing=pid == self._editing_id)
