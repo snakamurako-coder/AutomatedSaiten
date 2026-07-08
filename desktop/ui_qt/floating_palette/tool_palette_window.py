@@ -837,7 +837,8 @@ class ToolPaletteWindow(QWidget):
         if self._palm_rejection:
             self._text_hint.setText(
                 f"{self._text_hint_default}\n"
-                "パームリジェクション ON 時はスタイラスで手書きも可能"
+                "パームリジェクション ON 時はスタイラスで手書き・消しゴムも可能\n"
+                "テキストボックスの新規配置は指（タッチ）で行ってください"
             )
         else:
             self._text_hint.setText(self._text_hint_default)

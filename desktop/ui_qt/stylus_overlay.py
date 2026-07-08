@@ -74,6 +74,13 @@ def is_eraser_tablet_event(event: QTabletEvent) -> bool:
     return event.pointerType() == _Eraser
 
 
+def is_ink_tablet_event(event: QTabletEvent) -> bool:
+    """手書きレイヤー向けタブレット（ペン先・消しゴム。指は配置用）。"""
+    if is_finger_tablet_event(event):
+        return False
+    return is_stylus_tablet_event(event) or is_eraser_tablet_event(event)
+
+
 def is_eraser_mouse_event(event: QMouseEvent) -> bool:
     if event.pointerType() == _Eraser:
         return True
@@ -527,8 +534,6 @@ class InkOverlayWidget(QWidget):
         if is_eraser_mouse_event(event) or self._software_eraser:
             return False
         if _is_text_like_tool(self._tool_mode):
-            if self._palm_rejection and is_pen_mouse_event(event):
-                return not _is_stylus_synthesized_mouse(event)
             return False
         if not self._pointer_may_draw():
             return False
@@ -539,12 +544,13 @@ class InkOverlayWidget(QWidget):
             return False
         if self._palm_rejection and _is_stylus_synthesized_mouse(event):
             return False
+        if self._palm_rejection and is_eraser_mouse_event(event):
+            return True
         if not self._pointer_may_draw() and not self._software_eraser:
             return False
         return is_eraser_mouse_event(event) or self._eraser_active or self._software_eraser
 
-    def _handle_tablet_eraser(self, event: QTabletEvent) -> None:
-        pos = event.position()
+    def _handle_tablet_eraser_at(self, pos: QPointF, event: QTabletEvent) -> None:
         pressure = _event_pressure(event)
         t = event.type()
         if t == QEvent.Type.TabletPress:
@@ -571,6 +577,9 @@ class InkOverlayWidget(QWidget):
             event.accept()
             return
         event.ignore()
+
+    def _handle_tablet_eraser(self, event: QTabletEvent) -> None:
+        self._handle_tablet_eraser_at(event.position(), event)
 
     def _handle_mouse_eraser(self, event: QMouseEvent) -> None:
         if event.button() != Qt.LeftButton and not (event.buttons() & Qt.LeftButton):
@@ -606,15 +615,15 @@ class InkOverlayWidget(QWidget):
             return
         event.ignore()
 
-    def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
+    def process_tablet_at(self, event: QTabletEvent, local_pos: QPointF) -> None:
+        """座標変換済みタブレット入力（テキスト系タブからの転送用も含む）。"""
         if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
             event.ignore()
             return
         if self._should_erase_tablet(event):
-            self._handle_tablet_eraser(event)
+            self._handle_tablet_eraser_at(local_pos, event)
             return
 
-        pos = event.position()
         pressure = _event_pressure(event)
         t = event.type()
 
@@ -631,7 +640,7 @@ class InkOverlayWidget(QWidget):
         self._eraser_active = False
         if t == QEvent.Type.TabletPress:
             self._pen_active = True
-            self._start_stroke(pos.x(), pos.y(), pressure)
+            self._start_stroke(local_pos.x(), local_pos.y(), pressure)
             self.update()
             event.accept()
             return
@@ -639,9 +648,9 @@ class InkOverlayWidget(QWidget):
             if not self._current:
                 if self._pen_active or pressure > 0.01:
                     self._pen_active = True
-                    self._start_stroke(pos.x(), pos.y(), pressure)
+                    self._start_stroke(local_pos.x(), local_pos.y(), pressure)
             else:
-                self._extend_stroke(pos.x(), pos.y(), pressure)
+                self._extend_stroke(local_pos.x(), local_pos.y(), pressure)
             self.update()
             event.accept()
             return
@@ -654,6 +663,9 @@ class InkOverlayWidget(QWidget):
             event.accept()
             return
         event.ignore()
+
+    def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
+        self.process_tablet_at(event, event.position())
 
     def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
         if _is_text_like_tool(self._tool_mode):
@@ -900,14 +912,31 @@ class CropInkImageStack(QWidget):
         gp = source.mapToGlobal(QPoint(int(pos.x()), int(pos.y())))
         return self.ink_overlay.mapFromGlobal(gp)
 
-    def _forward_pen_mouse_to_ink(self, watched: QWidget, event: QMouseEvent) -> bool:
+    def _forward_ink_tablet(self, watched: QWidget, event: QTabletEvent) -> bool:
+        """テキスト系タブでも TabletEvent を手書きレイヤーへ渡し、描画品質を描画タブと揃える。"""
         if not self._palm_rejection or not _is_text_like_tool(self._tool_mode):
             return False
-        if _is_stylus_synthesized_mouse(event):
+        if watched is self.ink_overlay:
             return False
         if watched not in (self.container, self.image_label, self.text_layer):
             return False
-        if not (is_pen_mouse_event(event) or is_eraser_mouse_event(event)):
+        if not is_ink_tablet_event(event):
+            return False
+        local = self._map_to_ink_layer(watched, event.position())
+        self.ink_overlay.process_tablet_at(event, local)
+        return True
+
+    def _forward_stylus_mouse_to_ink(self, watched: QWidget, event: QMouseEvent) -> bool:
+        """消しゴム等、タブレット以外で届くスタイラス系マウスのみ手書きへ転送。"""
+        if not self._palm_rejection or not _is_text_like_tool(self._tool_mode):
+            return False
+        if watched is self.ink_overlay:
+            return False
+        if watched not in (self.container, self.image_label, self.text_layer):
+            return False
+        if _is_stylus_synthesized_mouse(event):
+            return False
+        if not (is_eraser_mouse_event(event)):
             return False
         et = event.type()
         if et not in (
@@ -953,11 +982,17 @@ class CropInkImageStack(QWidget):
                 return True
             return False
         if isinstance(event, QTabletEvent):
-            if self._palm_rejection and is_stylus_tablet_event(event):
+            if self._palm_rejection and is_ink_tablet_event(event):
                 return False
             return True
         if isinstance(event, QMouseEvent):
             et = event.type()
+            if (
+                self._palm_rejection
+                and _is_text_like_tool(self._tool_mode)
+                and not self._placement_pending()
+            ):
+                return False
             if et == QEvent.Type.MouseMove:
                 return bool(event.buttons() & Qt.LeftButton)
             if et == QEvent.Type.MouseButtonRelease:
@@ -970,6 +1005,8 @@ class CropInkImageStack(QWidget):
         return False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
+        if isinstance(event, QTabletEvent) and self._forward_ink_tablet(watched, event):
+            return True
         if (
             self._palm_rejection
             and _is_text_like_tool(self._tool_mode)
@@ -977,7 +1014,9 @@ class CropInkImageStack(QWidget):
             and _is_stylus_synthesized_mouse(event)
         ):
             return True
-        if isinstance(event, QMouseEvent) and self._forward_pen_mouse_to_ink(watched, event):
+        if isinstance(event, QMouseEvent) and self._forward_stylus_mouse_to_ink(
+            watched, event
+        ):
             return True
         if not _is_text_like_tool(self._tool_mode) and not self._placement_pending():
             return super().eventFilter(watched, event)
