@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
 )
 
 from models.text_annotation_repo import (
+    DEFAULT_TEXT_COLOR,
+    DEFAULT_TEXT_STYLE,
     TEXT_PALETTE_COLORS,
     TEXT_STYLE_TEMPLATES,
     resolve_text_style,
@@ -236,14 +238,14 @@ class FormatPalettePanel(QWidget):
         self._loading_char = False
         self._template_edit_mode = False
         self._speech_phase = "idle"
-        self._style: dict[str, Any] = dict(TEXT_STYLE_TEMPLATES["A"])
+        self._style: dict[str, Any] = resolve_text_style(TEXT_STYLE_TEMPLATES["A"])
         self._text_palette_colors: tuple[str, ...] = TEXT_PALETTE_COLORS
         self._rebuild_color_swatches()
         self._sync_char_format_ui(
             {
-                "color": TEXT_PALETTE_COLORS[0],
-                "fontSize": 14,
-                "lineSpacing": 14,
+                "color": str(DEFAULT_TEXT_STYLE.get("textColor") or DEFAULT_TEXT_COLOR),
+                "fontSize": int(DEFAULT_TEXT_STYLE.get("fontSize") or 14),
+                "lineSpacing": int(DEFAULT_TEXT_STYLE.get("lineSpacing") or 16),
                 "bold": False,
                 "italic": False,
                 "underline": False,
@@ -428,7 +430,7 @@ class FormatPalettePanel(QWidget):
             return
         merged = {**self._style, **tpl}
         merged["textColor"] = str(
-            self._style.get("textColor") or self._text_palette_colors[0]
+            self._style.get("textColor") or DEFAULT_TEXT_COLOR
         )
         self.load_style(merged)
         self._emit_style()
@@ -496,7 +498,8 @@ class FormatPalettePanel(QWidget):
             spacing = int(
                 state.get("lineSpacing")
                 or self._style.get("lineSpacing")
-                or size
+                or DEFAULT_TEXT_STYLE.get("lineSpacing")
+                or 16
             )
             self._line_spacing_spin.blockSignals(True)
             self._line_spacing_spin.setValue(max(6, min(72, spacing)))
@@ -529,12 +532,16 @@ class FormatPalettePanel(QWidget):
         self._style = resolve_text_style(style)
         self._sync_char_format_ui(
             {
-                "color": str(self._style.get("textColor") or self._text_palette_colors[0]),
+                "color": str(
+                    self._style.get("textColor")
+                    or DEFAULT_TEXT_COLOR
+                    or self._text_palette_colors[0]
+                ),
                 "fontSize": int(self._style.get("fontSize") or 14),
                 "lineSpacing": int(
                     self._style.get("lineSpacing")
-                    or self._style.get("fontSize")
-                    or 14
+                    or DEFAULT_TEXT_STYLE.get("lineSpacing")
+                    or 16
                 ),
                 "bold": False,
                 "italic": False,

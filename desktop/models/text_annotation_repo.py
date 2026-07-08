@@ -18,10 +18,13 @@ TEXT_PALETTE_COLORS: tuple[str, ...] = (
     "#9333ea",
 )
 
+# 新規テキストボックスの既定: 赤字・14pt・行間16・左/上寄せ・背景なし
+DEFAULT_TEXT_COLOR = "#dc2626"
+
 DEFAULT_TEXT_STYLE: dict[str, Any] = {
-    "textColor": TEXT_PALETTE_COLORS[0],
+    "textColor": DEFAULT_TEXT_COLOR,
     "fontSize": 14,
-    "lineSpacing": 14,
+    "lineSpacing": 16,
     "fontFamily": "meiryo.ttc",
     "templateId": "A",
     "fillAlpha": 0.0,
@@ -33,18 +36,26 @@ DEFAULT_TEXT_STYLE: dict[str, Any] = {
 
 TEXT_STYLE_TEMPLATE_A: dict[str, Any] = {
     "templateId": "A",
-    "textColor": TEXT_PALETTE_COLORS[0],
+    "textColor": DEFAULT_TEXT_COLOR,
+    "fontSize": 14,
+    "lineSpacing": 16,
     "fillAlpha": 0.0,
     "borderWidth": 0,
     "borderAlpha": 0.0,
+    "textAlignH": "left",
+    "textAlignV": "top",
 }
 
 TEXT_STYLE_TEMPLATE_B: dict[str, Any] = {
     "templateId": "B",
-    "textColor": TEXT_PALETTE_COLORS[0],
+    "textColor": DEFAULT_TEXT_COLOR,
+    "fontSize": 14,
+    "lineSpacing": 16,
     "fillAlpha": 0.2,
     "borderWidth": 0,
     "borderAlpha": 0.0,
+    "textAlignH": "left",
+    "textAlignV": "top",
 }
 
 TEXT_STYLE_TEMPLATES: dict[str, dict[str, Any]] = {
@@ -72,7 +83,7 @@ def resolve_text_style(style: dict[str, Any] | None) -> dict[str, Any]:
     if isinstance(style, dict):
         merged.update(style)
     tid = str(merged.get("templateId") or "").upper()
-    tc = str(merged.get("textColor") or TEXT_PALETTE_COLORS[0])
+    tc = str(merged.get("textColor") or DEFAULT_TEXT_COLOR)
     if tid == "A":
         merged["borderWidth"] = 0
         merged["borderAlpha"] = 0.0

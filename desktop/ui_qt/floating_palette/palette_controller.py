@@ -16,7 +16,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.text_annotation_repo import resolve_text_style
+from models.text_annotation_repo import (
+    DEFAULT_TEXT_COLOR,
+    DEFAULT_TEXT_STYLE,
+    resolve_text_style,
+)
 
 from ui_qt.floating_palette.annotation_undo import AnnotationUndoStack
 from ui_qt.floating_palette.palette_prefs import (
@@ -823,10 +827,12 @@ class PaletteController:
         st = resolve_text_style(tpl.get("style") or {})
         self.tool_window.format_panel.sync_char_format(
             {
-                "color": str(st.get("textColor") or "#111827"),
-                "fontSize": int(st.get("fontSize") or 14),
+                "color": str(st.get("textColor") or DEFAULT_TEXT_COLOR),
+                "fontSize": int(st.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14),
                 "lineSpacing": int(
-                    st.get("lineSpacing") or st.get("fontSize") or 14
+                    st.get("lineSpacing")
+                    or DEFAULT_TEXT_STYLE.get("lineSpacing")
+                    or 16
                 ),
                 "bold": str(st.get("fontWeight") or "") == "bold",
                 "italic": str(st.get("fontStyle") or "") == "italic",

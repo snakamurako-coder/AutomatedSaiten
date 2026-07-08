@@ -26,7 +26,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
+from models.text_annotation_repo import (
+    DEFAULT_TEXT_COLOR,
+    DEFAULT_TEXT_STYLE,
+    TEXT_STYLE_TEMPLATE_A,
+    resolve_text_style,
+)
 from ui_qt.floating_palette.text_rich import (
     TEXT_FORMAT_HTML,
     box_text_html,
@@ -38,7 +43,8 @@ from ui_qt.floating_palette.text_rich import (
     sync_box_html_from_style,
 )
 
-_DEFAULT_FONT_PT = 14
+_DEFAULT_FONT_PT = int(DEFAULT_TEXT_STYLE.get("fontSize") or 14)
+_DEFAULT_LINE_SPACING_PT = int(DEFAULT_TEXT_STYLE.get("lineSpacing") or 16)
 _DRAG_THRESHOLD_PX = 4
 _MIN_NATIVE_W = 32.0
 _MIN_NATIVE_H = 18.0
@@ -216,7 +222,14 @@ class TextBoxWidget(QFrame):
             line_spacing = int(round(lh))
         else:
             line_spacing = int(
-                round(float(st.get("lineSpacing") or st.get("fontSize") or _DEFAULT_FONT_PT))
+                round(
+                    float(
+                        st.get("lineSpacing")
+                        or _DEFAULT_LINE_SPACING_PT
+                        or st.get("fontSize")
+                        or _DEFAULT_FONT_PT
+                    )
+                )
             )
         return {
             "color": tc,
@@ -565,14 +578,21 @@ class TextBoxWidget(QFrame):
                 self._box["style"] = resolve_text_style(style)
 
     def _first_char_color_hex(self) -> str | None:
-        doc = self._editor.document()
-        # Qt は空文書で position=1 を触ると warning を出すため先に境界確認する。
-        if doc.characterCount() <= 1:
+        # 空文や短い文で setPosition を触れないよう、fragment から先頭色を取る。
+        if not self._editor.toPlainText():
             return None
-        cursor = QTextCursor(doc)
-        cursor.setPosition(0)
-        cursor.setPosition(1, QTextCursor.MoveMode.KeepAnchor)
-        color = cursor.charFormat().foreground().color()
+        block = self._editor.document().firstBlock()
+        if not block.isValid():
+            return None
+        it = block.begin()
+        while not it.atEnd():
+            frag = it.fragment()
+            if frag.isValid() and frag.length() > 0:
+                color = frag.charFormat().foreground().color()
+                if color.isValid():
+                    return color.name(QColor.NameFormat.HexRgb)
+            it += 1
+        color = block.charFormat().foreground().color()
         if not color.isValid():
             return None
         return color.name(QColor.NameFormat.HexRgb)
@@ -584,7 +604,7 @@ class TextBoxWidget(QFrame):
     def _apply_default_char_format(self) -> None:
         st = self._style()
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(str(st.get("textColor") or "#111827")))
+        fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         fmt.setFontPointSize(max(6.0, float(st.get("fontSize") or _DEFAULT_FONT_PT)))
         fmt.setFontFamily("Meiryo")
         self._editor.setCurrentCharFormat(fmt)
@@ -598,7 +618,7 @@ class TextBoxWidget(QFrame):
         st = self._style()
         fa = float(st.get("fillAlpha", 0))
         fill = st.get("fillColor") or "#ffffff"
-        tc = st.get("textColor") or "#111827"
+        tc = st.get("textColor") or DEFAULT_TEXT_COLOR
 
         bg = "transparent" if fa <= 0 else f"rgba({_hex_rgb(fill)}, {fa})"
         chrome = self._text_tool_mode or self._selected or self._editing
@@ -687,7 +707,12 @@ class TextBoxWidget(QFrame):
         st = self._style()
         return max(
             6.0,
-            float(st.get("lineSpacing") or st.get("fontSize") or _DEFAULT_FONT_PT),
+            float(
+                st.get("lineSpacing")
+                or _DEFAULT_LINE_SPACING_PT
+                or st.get("fontSize")
+                or _DEFAULT_FONT_PT
+            ),
         )
 
     def _apply_block_line_spacing(self, pt: float | None = None) -> None:

@@ -6,6 +6,8 @@ import html as html_lib
 import re
 from typing import Any
 
+from models.text_annotation_repo import DEFAULT_TEXT_COLOR, DEFAULT_TEXT_STYLE
+
 TEXT_FORMAT_PLAIN = "plain"
 TEXT_FORMAT_HTML = "html"
 
@@ -58,9 +60,13 @@ def qt_label_alignment(style: dict[str, Any] | None) -> int:
 
 def plain_to_html(text: str, style: dict[str, Any] | None) -> str:
     st = style or {}
-    tc = str(st.get("textColor") or "#111827")
-    fs = float(st.get("fontSize") or 14)
-    ls = float(st.get("lineSpacing") or fs)
+    tc = str(st.get("textColor") or DEFAULT_TEXT_COLOR)
+    fs = float(st.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14)
+    ls = float(
+        st.get("lineSpacing")
+        or DEFAULT_TEXT_STYLE.get("lineSpacing")
+        or 16
+    )
     body = html_lib.escape(str(text or "")).replace("\n", "<br>")
     p_styles = [
         "margin-top:0",
@@ -141,9 +147,13 @@ def html_for_pdf_box(
     box_height: float | None = None,
 ) -> str:
     """PyMuPDF insert_htmlbox 向けの簡易 HTML。"""
-    tc = str(default_style.get("textColor") or "#111827")
-    fs = float(default_style.get("fontSize") or 14)
-    ls = float(default_style.get("lineSpacing") or fs)
+    tc = str(default_style.get("textColor") or DEFAULT_TEXT_COLOR)
+    fs = float(default_style.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14)
+    ls = float(
+        default_style.get("lineSpacing")
+        or DEFAULT_TEXT_STYLE.get("lineSpacing")
+        or 16
+    )
     align = css_text_align(default_style)
     _, v_align = normalize_text_align(default_style)
     body = html_body_for_label(full_html)
@@ -207,7 +217,7 @@ def palette_border_css(style: dict[str, Any] | None) -> str:
     if bw <= 0 or ba <= 0:
         return "none"
     r, g, b = _hex_rgb_tuple(
-        str(st.get("borderColor") or st.get("textColor") or "#111827")
+        str(st.get("borderColor") or st.get("textColor") or DEFAULT_TEXT_COLOR)
     )
     return f"{bw}px solid rgba({r}, {g}, {b}, {ba})"
 
@@ -241,7 +251,7 @@ def palette_styled_html(
     omit_color: bool = False,
 ) -> str:
     st = style or {}
-    tc = str(st.get("textColor") or "#111827")
+    tc = str(st.get("textColor") or DEFAULT_TEXT_COLOR)
     fs = _PALETTE_DETAIL_FONT_SIZE if detail else _PALETTE_FONT_SIZE
     lh = _PALETTE_DETAIL_LINE_HEIGHT if detail else _PALETTE_LINE_HEIGHT
     align = "left" if align_left else css_text_align(st)
@@ -357,12 +367,12 @@ def truncate_rich_html_by_width(
     if cut_plain.endswith(ellipsis):
         end_chars -= len(ellipsis)
     end_chars = max(0, end_chars)
+    # plain 文字数と QTextDocument の有効 position は一致しない場合がある。
+    max_pos = max(0, doc.characterCount() - 1)
+    end_chars = min(end_chars, max_pos)
 
     cur = QTextCursor(doc)
-    cur.movePosition(QTextCursor.MoveOperation.Start)
-    for _ in range(end_chars):
-        if not cur.movePosition(QTextCursor.MoveOperation.NextCharacter):
-            break
+    cur.setPosition(end_chars)
     cur.setPosition(0, QTextCursor.MoveMode.KeepAnchor)
     body = _clean_qt_html_fragment(cur.selection().toHtml())
     if not body:
