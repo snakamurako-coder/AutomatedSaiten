@@ -48,6 +48,10 @@ class FormatPalettePanel(QWidget):
     edit_requested = Signal()
     delete_requested = Signal()
     speech_toggled = Signal(bool)
+    layout_hint_changed = Signal()
+
+    _SEGMENT_BTN_PAD = 14
+    _ACTION_BTN_PAD = 10
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -62,13 +66,18 @@ class FormatPalettePanel(QWidget):
         tpl_lbl.setFixedWidth(48)
         tpl_row.addWidget(tpl_lbl)
         tpl_a = QPushButton("なし")
+        tpl_a.setObjectName("ToolSegmentBtn")
         tpl_a.setToolTip("文字のみ（背景・枠なし）")
         tpl_a.clicked.connect(lambda: self.apply_template("A"))
         tpl_b = QPushButton("半透明")
+        tpl_b.setObjectName("ToolSegmentBtn")
         tpl_b.setToolTip("文字色の補色を20%で背景表示")
         tpl_b.clicked.connect(lambda: self.apply_template("B"))
-        tpl_row.addWidget(tpl_a, 1)
-        tpl_row.addWidget(tpl_b, 1)
+        self._tighten_segment_btn(tpl_a, "なし")
+        self._tighten_segment_btn(tpl_b, "半透明")
+        tpl_row.addWidget(tpl_a)
+        tpl_row.addWidget(tpl_b)
+        tpl_row.addStretch()
         root.addLayout(tpl_row)
 
         color_row = QHBoxLayout()
@@ -118,8 +127,10 @@ class FormatPalettePanel(QWidget):
             btn.setToolTip({"left": "左寄せ", "center": "中央", "right": "右寄せ"}[key])
             btn.clicked.connect(lambda _c=False, k=key: self._set_align_h(k))
             self._align_h_group.addButton(btn)
-            h_align_row.addWidget(btn, 1)
+            self._tighten_segment_btn(btn, label)
+            h_align_row.addWidget(btn)
             self._align_h_btns[key] = btn
+        h_align_row.addStretch()
         align_lay.addLayout(h_align_row)
         v_align_row = QHBoxLayout()
         v_align_row.setSpacing(6)
@@ -135,8 +146,10 @@ class FormatPalettePanel(QWidget):
             btn.setToolTip({"top": "上寄せ", "center": "中央", "bottom": "下寄せ"}[key])
             btn.clicked.connect(lambda _c=False, k=key: self._set_align_v(k))
             self._align_v_group.addButton(btn)
-            v_align_row.addWidget(btn, 1)
+            self._tighten_segment_btn(btn, label)
+            v_align_row.addWidget(btn)
             self._align_v_btns[key] = btn
+        v_align_row.addStretch()
         align_lay.addLayout(v_align_row)
         root.addWidget(align_frame)
 
@@ -153,9 +166,14 @@ class FormatPalettePanel(QWidget):
         self._bold_btn.clicked.connect(lambda: self._emit_toggle("toggleBold"))
         self._italic_btn.clicked.connect(lambda: self._emit_toggle("toggleItalic"))
         self._underline_btn.clicked.connect(lambda: self._emit_toggle("toggleUnderline"))
-        detail_lay.addWidget(self._bold_btn, 1)
-        detail_lay.addWidget(self._italic_btn, 1)
-        detail_lay.addWidget(self._underline_btn, 1)
+        for deco_btn, deco_label in (
+            (self._bold_btn, "太字"),
+            (self._italic_btn, "イタリック"),
+            (self._underline_btn, "下線"),
+        ):
+            self._tighten_segment_btn(deco_btn, deco_label)
+            detail_lay.addWidget(deco_btn)
+        detail_lay.addStretch()
         root.addWidget(self._detail_format_frame)
         self._detail_format_frame.hide()
 
@@ -180,10 +198,20 @@ class FormatPalettePanel(QWidget):
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self.delete_requested.emit)
         self._delete_btn = del_btn
-        btn_row.addWidget(done_btn, 1)
-        btn_row.addWidget(edit_btn, 1)
-        btn_row.addWidget(self._speech_btn, 1)
-        btn_row.addWidget(del_btn, 1)
+        self._action_btns = (done_btn, edit_btn, self._speech_btn, del_btn)
+        speech_w = self._max_action_btn_width(
+            ("音声入力", "準備中…", "認識中…", "確認中…", "音声入力中…", "配置待ち…")
+        )
+        self._speech_btn.setFixedWidth(speech_w)
+        for action_btn, action_label in (
+            (done_btn, "編集完了"),
+            (edit_btn, "文字を編集"),
+            (del_btn, "削除"),
+        ):
+            self._tighten_action_btn(action_btn, action_label)
+            btn_row.addWidget(action_btn)
+        btn_row.addWidget(self._speech_btn)
+        btn_row.addStretch()
         root.addLayout(btn_row)
 
         self._speech_status_label = QLabel("")
@@ -212,11 +240,64 @@ class FormatPalettePanel(QWidget):
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         base_h = 220 if self._template_edit_mode else 260
-        return QSize(220, base_h)
+        return QSize(self.content_min_width(), base_h)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         base_h = 280 if self._template_edit_mode else 340
-        return QSize(260, base_h)
+        return QSize(self.content_min_width(), base_h)
+
+    def content_min_width(self) -> int:
+        label_w = 48
+        tpl_w = (
+            label_w
+            + 6
+            + self._segment_btn_width("なし")
+            + 6
+            + self._segment_btn_width("半透明")
+        )
+        color_w = label_w + 6 + 6 * 28 + 5 * 6
+        metrics_w = (
+            36
+            + self._size_spin.width()
+            + 6
+            + 36
+            + self._line_spacing_spin.width()
+        )
+        seg = self._segment_btn_width("左")
+        align_w = label_w + 6 + 3 * seg + 2 * 6
+        deco_w = (
+            label_w
+            + 6
+            + self._segment_btn_width("太字")
+            + 6
+            + self._segment_btn_width("イタリック")
+            + 6
+            + self._segment_btn_width("下線")
+        )
+        action_w = sum(btn.width() for btn in self._action_btns) + 3 * 4
+        widths = [tpl_w, color_w, metrics_w, align_w, deco_w]
+        if not self._template_edit_mode:
+            widths.append(action_w)
+        return max(widths)
+
+    def _segment_btn_width(self, label: str, font: QFont | None = None) -> int:
+        fm = QFontMetrics(font or self.font())
+        return fm.horizontalAdvance(label) + self._SEGMENT_BTN_PAD
+
+    def _action_btn_width(self, label: str) -> int:
+        fm = QFontMetrics(self._done_btn.font())
+        return fm.horizontalAdvance(label) + self._ACTION_BTN_PAD
+
+    def _max_action_btn_width(self, labels: tuple[str, ...]) -> int:
+        return max(self._action_btn_width(label) for label in labels)
+
+    def _tighten_segment_btn(self, btn: QPushButton, label: str) -> None:
+        btn.setFixedWidth(self._segment_btn_width(label, btn.font()))
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+
+    def _tighten_action_btn(self, btn: QPushButton, label: str) -> None:
+        btn.setFixedWidth(self._action_btn_width(label))
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
 
     def _make_action_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)
@@ -225,7 +306,6 @@ class FormatPalettePanel(QWidget):
         font.setPointSize(9)
         font.setWeight(QFont.Weight.Medium)
         btn.setFont(font)
-        btn.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         return btn
 
     def _make_pt_spin(self, tooltip: str) -> QSpinBox:
@@ -287,6 +367,7 @@ class FormatPalettePanel(QWidget):
                 self._delete_btn.setToolTip("選択中のテキストボックスを削除（Del キーでも可）")
         if _qt_widget_alive(self._done_btn):
             self._done_btn.setText("編集完了")
+        self.layout_hint_changed.emit()
 
     def set_text_palette_colors(self, colors: list[str] | tuple[str, ...]) -> None:
         if len(colors) != 6:
@@ -537,3 +618,4 @@ class FormatPalettePanel(QWidget):
         else:
             self._speech_status_label.clear()
             self._speech_status_label.hide()
+        self.layout_hint_changed.emit()

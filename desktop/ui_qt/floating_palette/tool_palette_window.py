@@ -39,6 +39,8 @@ MODE_DRAW = "draw"
 MODE_TEXT = "text"
 MODE_PHRASE = "phrase"
 
+_PALETTE_MIN_WIDTH = 236
+
 
 class ToolPaletteWindow(QWidget):
     """別ウィンドウ型描画ツールパレット（描画 / テキストの入力モードをタブで切替）。"""
@@ -63,12 +65,12 @@ class ToolPaletteWindow(QWidget):
         )
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
-        self.resize(300, 480)
-        self.setMinimumSize(260, 400)
+        self.resize(280, 480)
+        self.setMinimumSize(_PALETTE_MIN_WIDTH, 400)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(12, 10, 12, 12)
-        root.setSpacing(8)
+        root.setContentsMargins(8, 8, 8, 8)
+        root.setSpacing(6)
 
         header_row = QHBoxLayout()
         header_row.setSpacing(6)
@@ -276,6 +278,7 @@ class ToolPaletteWindow(QWidget):
         phrase_lay.setSpacing(8)
         self._phrase_panel = PhrasePalettePanel()
         self._phrase_panel.layout_hint_changed.connect(self._schedule_fit_to_screen)
+        self._format_panel.layout_hint_changed.connect(self._schedule_fit_to_screen)
         phrase_lay.addWidget(self._phrase_panel, 1)
 
         self._phrase_preview = PhraseEditPreviewPanel()
@@ -343,21 +346,23 @@ class ToolPaletteWindow(QWidget):
 
     def _content_width_hint(self) -> int:
         margins = self.layout().contentsMargins()
+        widths = [_PALETTE_MIN_WIDTH]
+        if self._input_mode == MODE_PHRASE:
+            widths.append(self._phrase_panel.content_min_width())
+            if self._phrase_format_scroll.isVisible():
+                widths.append(self._format_panel.content_min_width())
+        elif self._input_mode == MODE_TEXT:
+            widths.append(self._format_panel.content_min_width())
         page = self._stack.currentWidget()
-        widths = [
-            self.minimumWidth(),
-            self._format_panel.sizeHint().width(),
-            self._phrase_panel.content_min_width(),
-        ]
         if page is not None:
-            widths.append(page.sizeHint().width())
+            widths.append(page.minimumSizeHint().width())
         inner = max(widths)
-        return inner + margins.left() + margins.right() + 16
+        return inner + margins.left() + margins.right() + 4
 
     def _apply_palette_min_width(self) -> None:
         bounds = self._screen_bounds()
         max_w = bounds[0] if bounds else 16777215
-        min_w = max(260, min(self._content_width_hint(), max_w))
+        min_w = max(_PALETTE_MIN_WIDTH, min(self._content_width_hint(), max_w))
         self.setMinimumWidth(min_w)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
@@ -388,7 +393,8 @@ class ToolPaletteWindow(QWidget):
         self._apply_palette_min_width()
         hint_w = min(self._content_width_hint(), max_w)
         geo = self.geometry()
-        w = max(self.minimumWidth(), min(max(geo.width(), hint_w), max_w))
+        min_w = self.minimumWidth()
+        w = max(min_w, min(hint_w, max_w))
         h = max(self.minimumHeight(), min(geo.height(), max_h))
         if geo.width() != w or geo.height() != h:
             self.resize(w, h)

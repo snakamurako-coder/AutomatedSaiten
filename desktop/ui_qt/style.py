@@ -436,8 +436,9 @@ QPushButton#ToolSegmentBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 6px;
-    padding: 7px 8px;
+    padding: 4px 6px;
     font-size: 12px;
+    min-height: 0;
 }}
 QPushButton#ToolSegmentBtn:hover {{
     border-color: {COLORS["border_strong"]};
@@ -452,10 +453,10 @@ QPushButton#PaletteActionBtn {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border_strong"]};
     border-radius: 6px;
-    padding: 4px 2px;
+    padding: 3px 4px;
     font-size: 9px;
     font-weight: 500;
-    min-height: 26px;
+    min-height: 24px;
 }}
 QPushButton#PaletteActionBtn:hover {{
     background: #f1f5f9;

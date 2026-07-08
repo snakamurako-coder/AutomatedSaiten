@@ -30,9 +30,13 @@ from ui_qt.floating_palette.phrase_template_prefs import (
 )
 from ui_qt.style import COLORS
 
-_DETAIL_ACTION_BTN_WIDTH = 52
-_DETAIL_SELECT_MAX_WIDTH = 88
-_DETAIL_TEXT_MIN_WIDTH = 108
+_DETAIL_SELECT_MAX_WIDTH = 72
+_DETAIL_TEXT_MIN_WIDTH = 80
+
+
+def _detail_action_btn_width(font) -> int:
+    fm = QFontMetrics(font)
+    return max(fm.horizontalAdvance("編集"), fm.horizontalAdvance("削除")) + 14
 
 
 class PhrasePalettePanel(QWidget):
@@ -102,7 +106,13 @@ class PhrasePalettePanel(QWidget):
             "選択中のテキストボックスを書式込みで定型文として登録"
         )
         self._copy_btn.clicked.connect(self.copy_from_textbox_requested.emit)
-        action_row.addWidget(self._copy_btn, 1)
+        copy_fm = QFontMetrics(self._copy_btn.font())
+        self._copy_btn.setFixedWidth(
+            copy_fm.horizontalAdvance(self._copy_btn.text()) + 16
+        )
+        self._copy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        action_row.addWidget(self._copy_btn)
+        action_row.addStretch()
         root.addLayout(action_row)
 
         self._select_group = QButtonGroup(self)
@@ -122,10 +132,10 @@ class PhrasePalettePanel(QWidget):
         return QSize(self.content_min_width(), 280)
 
     def content_min_width(self) -> int:
-        fm = QFontMetrics(self._copy_btn.font())
-        copy_w = fm.horizontalAdvance(self._copy_btn.text()) + 28
+        copy_w = self._copy_btn.width()
+        action_w = _detail_action_btn_width(self.font())
         if self._compact_edit:
-            return max(260, copy_w)
+            return max(220, copy_w)
         if self._view_mode == VIEW_DETAILED:
             row_w = (
                 16
@@ -133,10 +143,10 @@ class PhrasePalettePanel(QWidget):
                 + 8
                 + _DETAIL_TEXT_MIN_WIDTH
                 + 8
-                + _DETAIL_ACTION_BTN_WIDTH
+                + action_w
             )
-            return max(300, copy_w, row_w)
-        return max(260, copy_w)
+            return max(220, copy_w, row_w)
+        return max(220, copy_w)
 
     def set_compact_edit_mode(self, active: bool) -> None:
         self._compact_edit = bool(active)
@@ -328,18 +338,21 @@ class PhrasePalettePanel(QWidget):
         lay.addWidget(text_host, 1)
 
         action_col = QWidget()
-        action_col.setFixedWidth(_DETAIL_ACTION_BTN_WIDTH)
+        action_w = _detail_action_btn_width(self.font())
+        action_col.setFixedWidth(action_w)
         action_col.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         btn_col = QVBoxLayout(action_col)
         btn_col.setContentsMargins(0, 0, 0, 0)
         btn_col.setSpacing(4)
         edit_btn = QPushButton("編集")
-        edit_btn.setFixedWidth(_DETAIL_ACTION_BTN_WIDTH)
+        edit_btn.setObjectName("PaletteActionBtn")
+        edit_btn.setFixedWidth(action_w)
         edit_btn.setToolTip("書式・文言をテキストボックスと同様に編集")
         edit_btn.clicked.connect(lambda _c=False, p=pid: self.phrase_edit_requested.emit(p))
         del_btn = QPushButton("削除")
+        del_btn.setObjectName("PaletteActionBtn")
         del_btn.setProperty("variant", "danger")
-        del_btn.setFixedWidth(_DETAIL_ACTION_BTN_WIDTH)
+        del_btn.setFixedWidth(action_w)
         del_btn.clicked.connect(lambda _c=False, p=pid: self._on_delete(p))
         btn_col.addWidget(edit_btn)
         btn_col.addWidget(del_btn)
