@@ -206,10 +206,12 @@ class PaletteController:
     def attach_page(self, page: AnnotationPage | None, step_id: int) -> None:
         self._page = page
         self._step_id = step_id
-        if self.tool_window.current_input_mode() in (MODE_TEXT, MODE_PHRASE):
+        if self.tool_window.current_input_mode() == MODE_TEXT:
             self.tool_window.show_draw_mode()
         self._connect_stacks()
         self._apply_to_stacks()
+        if self._pending_phrase_template:
+            self._apply_phrase_placement_to_stacks()
 
     def detach(self) -> None:
         self._stop_speech()
@@ -348,7 +350,7 @@ class PaletteController:
         self._apply_phrase_placement_to_stack(stack)
 
     def _apply_phrase_placement_to_stack(self, stack: CropInkImageStack) -> None:
-        if self._tool != TOOL_PHRASE or not self._pending_phrase_template:
+        if not self._pending_phrase_template:
             return
         pid = str(self._pending_phrase_id or "")
 
@@ -359,6 +361,16 @@ class PaletteController:
             copy.deepcopy(self._pending_phrase_template),
             on_placed=on_placed,
         )
+        stack.set_tool_mode(TOOL_PHRASE)
+
+    def _ensure_phrase_tool_mode(self) -> None:
+        if (
+            self.tool_window.current_input_mode() != MODE_PHRASE
+            or self._tool != TOOL_PHRASE
+        ):
+            self.tool_window.show_phrase_mode()
+        self._tool = TOOL_PHRASE
+        self._apply_to_stacks()
 
     def _apply_phrase_placement_to_stacks(self) -> None:
         for stack in self._stacks():
@@ -703,6 +715,7 @@ class PaletteController:
         template = self._phrase_template_by_id(phrase_id)
         if template is None:
             return
+        self._ensure_phrase_tool_mode()
         self._stop_speech()
         self.finish_all_text_editing()
         self._pending_phrase_id = str(phrase_id)

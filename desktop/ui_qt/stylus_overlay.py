@@ -904,7 +904,7 @@ class CropInkImageStack(QWidget):
         return False
 
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
-        if not _is_text_like_tool(self._tool_mode):
+        if not _is_text_like_tool(self._tool_mode) and not self._placement_pending():
             return super().eventFilter(watched, event)
         watched_layers = (
             self.container,
@@ -928,7 +928,11 @@ class CropInkImageStack(QWidget):
             return super().eventFilter(watched, event)
         if not self._is_text_placement_event(event):
             return super().eventFilter(watched, event)
-        if watched is self.text_layer and isinstance(event, QMouseEvent):
+        if (
+            watched is self.text_layer
+            and isinstance(event, QMouseEvent)
+            and not self._placement_pending()
+        ):
             if self.text_layer.is_placing():
                 return super().eventFilter(watched, event)
             et = event.type()
@@ -941,6 +945,9 @@ class CropInkImageStack(QWidget):
                 lx, ly = int(pos.x()), int(pos.y())
                 if self.text_layer.childAt(lx, ly) is not None:
                     return super().eventFilter(watched, event)
+        elif watched is self.text_layer and isinstance(event, QMouseEvent):
+            if self.text_layer.is_placing():
+                return super().eventFilter(watched, event)
         if et == QEvent.Type.TouchBegin and isinstance(event, QTouchEvent):
             points = event.points()
             if not points or points[0].state() != Qt.TouchPointState.TouchPointPressed:
@@ -964,12 +971,18 @@ class CropInkImageStack(QWidget):
             et, local, event
         ):
             return True
+        if self._placement_pending() and et in (
+            QEvent.Type.MouseButtonPress,
+            QEvent.Type.TabletPress,
+            QEvent.Type.TouchBegin,
+        ):
+            return True
         return super().eventFilter(watched, event)
 
     def _sync_layer_order(self) -> None:
-        # 最背面: 画像。描画モードは手書きが最前面、テキストモードはテキストが最前面。
+        # 最背面: 画像。描画モードは手書きが最前面、テキスト系はテキストが最前面。
         self.image_label.lower()
-        if _is_text_like_tool(self._tool_mode):
+        if _is_text_like_tool(self._tool_mode) or self._placement_pending():
             self.ink_overlay.raise_()
             self.text_layer.raise_()
         else:
@@ -992,7 +1005,7 @@ class CropInkImageStack(QWidget):
 
     def _sync_input_routing(self) -> None:
         """テキスト系モード: 手書きレイヤーはマウス透過。配置は text_layer と eventFilter で処理。"""
-        is_text_like = _is_text_like_tool(self._tool_mode)
+        is_text_like = _is_text_like_tool(self._tool_mode) or self._placement_pending()
         self.ink_overlay.setAttribute(Qt.WA_TransparentForMouseEvents, is_text_like)
         self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, False)
 
@@ -1013,10 +1026,13 @@ class CropInkImageStack(QWidget):
     def set_tool_mode(self, mode: str) -> None:
         self._tool_mode = mode
         is_text = mode == TOOL_TEXT
+        is_phrase = mode == TOOL_PHRASE
         is_text_like = _is_text_like_tool(mode)
         self.ink_overlay.set_tool_mode(mode)
         self.text_layer.set_placement_mode(is_text)
-        self.text_layer.set_text_tool_mode(is_text_like)
+        self.text_layer.set_text_tool_mode(is_text_like or self.text_layer.has_phrase_place_pending())
+        if is_phrase or self.text_layer.has_phrase_place_pending():
+            self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self._sync_input_routing()
         self._sync_layer_order()
 
