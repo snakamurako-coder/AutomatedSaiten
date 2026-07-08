@@ -42,10 +42,12 @@ from ui_qt.style import COLORS
 
 _DETAIL_PLACEMENT_BTN_WIDTH = 40
 _DETAIL_TEXT_MIN_WIDTH = 80
-_DETAIL_BODY_MIN_HEIGHT = 120  # 旧60pxの2倍
-_DETAIL_CARD_MIN_HEIGHT = 132  # 上下余白込み
+_DETAIL_BODY_MIN_HEIGHT = 60  # 2倍指定を戻す（120 → 60）
+_DETAIL_CARD_MIN_HEIGHT = 72  # 上下余白込み
 _DETAIL_CARD_SPACING = 8
 _DETAIL_ACTION_BTN_HEIGHT = 22
+_DETAIL_FONT_PX = 12
+_DETAIL_LINE_HEIGHT_PX = 16
 
 
 def _detail_action_btn_width(font) -> int:
@@ -411,7 +413,12 @@ class PhrasePalettePanel(QWidget):
 
     def _palette_detail_label_font(self) -> QFont:
         font = QFont("Meiryo")
-        font.setPixelSize(13)
+        font.setPixelSize(_DETAIL_FONT_PX)
+        return font
+
+    def _palette_placement_btn_font(self) -> QFont:
+        font = QFont("Meiryo")
+        font.setPixelSize(10)
         return font
 
     def _simple_btn_width_hint(self, tpl: dict[str, Any]) -> int:
@@ -506,8 +513,8 @@ class PhrasePalettePanel(QWidget):
         btn.setObjectName("PhrasePlacementBtn")
         btn.setCheckable(True)
         btn.setFixedWidth(_DETAIL_PLACEMENT_BTN_WIDTH)
-        btn.setMinimumHeight(_DETAIL_BODY_MIN_HEIGHT)
-        btn.setMaximumHeight(_DETAIL_BODY_MIN_HEIGHT)
+        btn.setFixedHeight(_DETAIL_BODY_MIN_HEIGHT)
+        btn.setFont(self._palette_placement_btn_font())
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         preview = phrase_preview_text(tpl)
         btn.setToolTip(f"選択して配置\n{preview or '（未登録）'}")

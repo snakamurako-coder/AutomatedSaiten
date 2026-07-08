@@ -174,8 +174,8 @@ def html_for_pdf_box(
 
 _PALETTE_FONT_SIZE = "12px"
 _PALETTE_LINE_HEIGHT = "15px"
-_PALETTE_DETAIL_FONT_SIZE = "13px"
-_PALETTE_DETAIL_LINE_HEIGHT = "18px"
+_PALETTE_DETAIL_FONT_SIZE = "12px"
+_PALETTE_DETAIL_LINE_HEIGHT = "16px"
 
 
 def _hex_rgb_tuple(hex_color: str) -> tuple[int, int, int]:
