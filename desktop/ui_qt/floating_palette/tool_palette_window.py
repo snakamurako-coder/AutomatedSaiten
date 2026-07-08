@@ -22,6 +22,7 @@ from PySide6.QtWidgets import (
 from ui_qt.crop_widgets import SliderSpinControls
 from ui_qt.floating_palette.format_palette_panel import FormatPalettePanel
 from ui_qt.floating_palette.phrase_edit_preview_panel import PhraseEditPreviewPanel
+from ui_qt.floating_palette.phrase_palette_panel import PhrasePalettePanel
 from ui_qt.floating_palette.palette_prefs import (
     PALETTE_COLORS,
     TOOL_ERASER,

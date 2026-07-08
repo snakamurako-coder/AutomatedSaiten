@@ -49,14 +49,6 @@ class PhrasePalettePanel(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
 
-        self._hint = QLabel(
-            "定型文を選び、画像上をドラッグして貼り付け\n"
-            "貼り付け後もテキストボックスとして編集できます"
-        )
-        self._hint.setObjectName("PaletteHintLabel")
-        self._hint.setWordWrap(True)
-        root.addWidget(self._hint)
-
         self._pending_label = QLabel("")
         self._pending_label.setObjectName("PaletteHintLabel")
         self._pending_label.setWordWrap(True)
