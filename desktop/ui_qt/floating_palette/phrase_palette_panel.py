@@ -182,7 +182,7 @@ class PhrasePalettePanel(QWidget):
             total += spacing * (len(blocks) - 1)
         return max(36, total)
 
-    _SIMPLE_BTN_HEIGHT = 24
+    _SIMPLE_BTN_HEIGHT = 36
 
     def _simple_list_height(self) -> int:
         if not self._phrase_btns:

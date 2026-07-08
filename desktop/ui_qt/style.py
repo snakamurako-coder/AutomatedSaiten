@@ -435,7 +435,7 @@ QPushButton#PhraseSimpleBtn {{
     font-size: 11px;
     text-align: left;
     min-height: 0;
-    max-height: 24px;
+    max-height: 36px;
 }}
 QPushButton#PhraseCopyBtn {{
     background: {COLORS["surface"]};
