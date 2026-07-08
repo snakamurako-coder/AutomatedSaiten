@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QFontMetrics
+from PySide6.QtGui import QFont, QFontMetrics, QShowEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QScrollArea,
     QSizePolicy,
+    QStyle,
+    QStyleOptionButton,
     QVBoxLayout,
     QWidget,
 )
@@ -78,7 +80,7 @@ class PhrasePalettePanel(QWidget):
         self._simple_frame = QFrame()
         self._simple_lay = QVBoxLayout(self._simple_frame)
         self._simple_lay.setContentsMargins(0, 0, 0, 0)
-        self._simple_lay.setSpacing(4)
+        self._simple_lay.setSpacing(2)
         root.addWidget(self._simple_frame)
 
         self._scroll = QScrollArea()
@@ -111,15 +113,13 @@ class PhrasePalettePanel(QWidget):
         action_row = QHBoxLayout()
         action_row.setSpacing(6)
         self._copy_btn = QPushButton("テキストボックスからコピー")
+        self._copy_btn.setObjectName("PhraseCopyBtn")
         self._copy_btn.setToolTip(
             "選択中のテキストボックスを書式込みで定型文として登録"
         )
         self._copy_btn.clicked.connect(self.copy_from_textbox_requested.emit)
-        copy_fm = QFontMetrics(self._copy_btn.font())
-        self._copy_btn.setFixedWidth(
-            copy_fm.horizontalAdvance(self._copy_btn.text()) + 16
-        )
-        self._copy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        self._sync_copy_btn_width()
+        self._copy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self._copy_btn)
         action_row.addStretch()
         root.addLayout(action_row)
@@ -129,6 +129,26 @@ class PhrasePalettePanel(QWidget):
         self._phrase_btns: dict[str, QPushButton] = {}
         self._detail_rows: dict[str, QFrame] = {}
         self.reload_templates()
+
+    def _sync_copy_btn_width(self) -> None:
+        btn = self._copy_btn
+        font = QFont(btn.font())
+        font.setPixelSize(11)
+        btn.setFont(font)
+        opt = QStyleOptionButton()
+        opt.initFrom(btn)
+        opt.text = btn.text()
+        contents_w = btn.style().sizeFromContents(
+            QStyle.ContentsType.CT_PushButton,
+            opt,
+            QSize(0, 0),
+            btn,
+        ).width()
+        btn.setFixedWidth(max(contents_w + 4, btn.sizeHint().width() + 4))
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        self._sync_copy_btn_width()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         if self._compact_edit:
@@ -141,6 +161,7 @@ class PhrasePalettePanel(QWidget):
         return QSize(self.content_min_width(), 280)
 
     def content_min_width(self) -> int:
+        self._sync_copy_btn_width()
         copy_w = self._copy_btn.width()
         action_w = _detail_action_btn_width(self.font())
         if self._compact_edit:
@@ -173,6 +194,7 @@ class PhrasePalettePanel(QWidget):
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
         self._apply_view_mode()
+        self._sync_copy_btn_width()
         self.reload_templates()
         self.layout_hint_changed.emit()
 
@@ -342,9 +364,13 @@ class PhrasePalettePanel(QWidget):
         label.setObjectName("PhraseDetailBody")
         label.setTextFormat(Qt.TextFormat.RichText)
         label.setWordWrap(False)
-        if not one_line:
+        if one_line:
+            label.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+        else:
             label.setMinimumHeight(60)
-        label.setAlignment(qt_label_alignment(tpl.get("style")))
+            label.setAlignment(qt_label_alignment(tpl.get("style")))
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         if phrase_has_content(tpl):
             label.setText(
@@ -377,7 +403,7 @@ class PhrasePalettePanel(QWidget):
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
         lay = QHBoxLayout(btn)
-        lay.setContentsMargins(5, 4, 8, 4)
+        lay.setContentsMargins(6, 2, 8, 2)
         lay.setSpacing(0)
         label = self._make_rich_label(
             tpl,

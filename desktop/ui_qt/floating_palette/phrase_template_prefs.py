@@ -230,7 +230,9 @@ def phrase_palette_content_html(
     truncate_width: int | None = None,
 ) -> str:
     if not phrase_has_content(tpl):
-        return plain_to_palette_html(PHRASE_UNREGISTERED_LABEL, None, one_line=True)
+        return plain_to_palette_html(
+            PHRASE_UNREGISTERED_LABEL, None, one_line=True, align_left=one_line
+        )
     st = resolve_text_style(tpl.get("style") or {})
     plain = phrase_preview_text(tpl)
     line_plain = phrase_text_one_line(tpl)
@@ -240,11 +242,20 @@ def phrase_palette_content_html(
         target_plain = truncate_display_width(target_plain, truncate_width)
         truncated = True
     if truncated or not box_has_saved_html(tpl):
-        return plain_to_palette_html(target_plain, st, one_line=one_line)
+        return plain_to_palette_html(
+            target_plain, st, one_line=one_line, align_left=one_line
+        )
     body = html_body_for_label(box_text_html(tpl, st))
     if not body:
-        return plain_to_palette_html(target_plain, st, one_line=one_line)
-    return sanitize_html_for_palette(body, one_line=one_line)
+        return plain_to_palette_html(
+            target_plain, st, one_line=one_line, align_left=one_line
+        )
+    sanitized = sanitize_html_for_palette(
+        body, one_line=one_line, align_left=one_line
+    )
+    if one_line:
+        return palette_styled_html(sanitized, st, align_left=True)
+    return sanitized
 
 
 def phrase_simple_button_label(tpl: dict[str, Any]) -> str:

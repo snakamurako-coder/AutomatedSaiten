@@ -406,10 +406,37 @@ QPushButton#PhraseSimpleBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 6px;
-    padding: 5px 8px;
+    padding: 2px 8px;
     font-size: 11px;
     text-align: left;
     min-height: 0;
+    max-height: 26px;
+}}
+QPushButton#PhraseCopyBtn {{
+    background: {COLORS["surface"]};
+    border: 1px solid {COLORS["border_strong"]};
+    border-radius: 6px;
+    padding: 4px 12px;
+    font-size: 11px;
+    min-height: 0;
+}}
+QPushButton#PhraseCopyBtn:hover {{
+    border-color: {COLORS["border_strong"]};
+    background: {COLORS["bg"]};
+}}
+QPushButton#PaletteViewBtn {{
+    background: transparent;
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    min-height: 28px;
+    max-height: 28px;
+    padding: 0 6px;
+    font-size: 11px;
+    color: {COLORS["text_secondary"]};
+}}
+QPushButton#PaletteViewBtn:hover {{
+    background: {COLORS["bg"]};
+    border-color: {COLORS["border_strong"]};
 }}
 QPushButton#PhraseSimpleBtn:hover {{
     border-color: {COLORS["border_strong"]};

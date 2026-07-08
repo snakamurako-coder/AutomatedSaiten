@@ -217,18 +217,20 @@ def palette_styled_html(
     style: dict[str, Any] | None,
     *,
     detail: bool = False,
+    align_left: bool = False,
 ) -> str:
     st = style or {}
     tc = str(st.get("textColor") or "#111827")
     fs = _PALETTE_DETAIL_FONT_SIZE if detail else _PALETTE_FONT_SIZE
     lh = _PALETTE_DETAIL_LINE_HEIGHT if detail else _PALETTE_LINE_HEIGHT
+    align = "left" if align_left else css_text_align(st)
     span_styles = [
         "margin:0",
         "padding:0",
         f"color:{tc}",
         f"font-size:{fs}",
         f"line-height:{lh}",
-        f"text-align:{css_text_align(st)}",
+        f"text-align:{align}",
         "font-family:Meiryo, sans-serif",
     ]
     if str(st.get("fontWeight") or "") == "bold":
@@ -247,6 +249,7 @@ def plain_to_palette_html(
     *,
     one_line: bool = False,
     detail: bool = False,
+    align_left: bool = False,
 ) -> str:
     body_text = str(text or "")
     if one_line:
@@ -254,10 +257,10 @@ def plain_to_palette_html(
         body = html_lib.escape(body_text)
     else:
         body = html_lib.escape(body_text).replace("\n", "<br>")
-    return palette_styled_html(body, style, detail=detail)
+    return palette_styled_html(body, style, detail=detail, align_left=align_left)
 
 
-def sanitize_html_for_palette(html: str, *, one_line: bool) -> str:
+def sanitize_html_for_palette(html: str, *, one_line: bool, align_left: bool = False) -> str:
     text = str(html or "").strip()
     if not text:
         return ""
@@ -274,4 +277,13 @@ def sanitize_html_for_palette(html: str, *, one_line: bool) -> str:
         text = re.sub(r"</p>\s*<p[^>]*>", " ", text, flags=re.IGNORECASE)
         text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
         text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
+    if align_left:
+        text = re.sub(
+            r"text-align:\s*[^;\"']+;?",
+            "text-align:left;",
+            text,
+            flags=re.IGNORECASE,
+        )
+        if not re.search(r"text-align:", text, flags=re.IGNORECASE):
+            text = f'<span style="text-align:left">{text}</span>'
     return text.strip()

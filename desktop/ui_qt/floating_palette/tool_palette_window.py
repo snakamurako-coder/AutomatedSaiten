@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QShowEvent
+from PySide6.QtGui import QFontMetrics, QShowEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QStackedWidget,
+    QStyle,
     QVBoxLayout,
     QWidget,
 )
@@ -96,10 +97,10 @@ class ToolPaletteWindow(QWidget):
         self._min_btn.clicked.connect(self.minimize_requested.emit)
         header_row.addWidget(self._min_btn)
         self._view_btn = QPushButton("詳細")
-        self._view_btn.setObjectName("PaletteIconBtn")
-        self._view_btn.setFixedWidth(44)
+        self._view_btn.setObjectName("PaletteViewBtn")
         self._view_btn.setToolTip("表示切替")
         self._view_btn.clicked.connect(self._toggle_view)
+        self._resize_view_btn()
         header_row.addWidget(self._view_btn)
         root.addLayout(header_row)
 
@@ -682,7 +683,16 @@ class ToolPaletteWindow(QWidget):
         self._format_panel.set_detailed_controls_visible(detailed)
         self._phrase_panel.set_view_mode(self._view_mode)
         self._view_btn.setText("簡易" if detailed else "詳細")
+        self._resize_view_btn()
         self._schedule_fit_to_screen()
+
+    def _resize_view_btn(self) -> None:
+        fm = QFontMetrics(self._view_btn.font())
+        frame = self._view_btn.style().pixelMetric(
+            QStyle.PixelMetric.PM_DefaultFrameWidth, None, self._view_btn
+        )
+        text_w = fm.horizontalAdvance(self._view_btn.text())
+        self._view_btn.setFixedWidth(max(36, text_w + frame * 2 + 14))
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
