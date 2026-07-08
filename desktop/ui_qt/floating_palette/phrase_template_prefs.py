@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import copy
+import re
 import uuid
 from typing import Any
 
 from config import load_config, save_config
 from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
+from ui_qt.floating_palette.text_rich import box_text_html, html_body_for_label
 
 PHRASE_SIMPLE_COUNT = 6
+PHRASE_UNREGISTERED_LABEL = "（未登録）"
 
 _DEFAULT_PHRASE_TEXTS: tuple[str, ...] = (
     "〇",
@@ -43,7 +46,8 @@ def _normalize_template(raw: Any) -> dict[str, Any] | None:
     if not isinstance(raw, dict):
         return None
     text = str(raw.get("text") or "")
-    label = str(raw.get("label") or "").strip() or text.replace("\n", " ")[:20] or "定型文"
+    plain = text.replace("\n", " ").strip()
+    label = str(raw.get("label") or "").strip() or (plain[:20] if plain else "")
     style = resolve_text_style(raw.get("style") or {})
     tid = str(raw.get("id") or "").strip() or str(uuid.uuid4())
     return {
@@ -137,9 +141,41 @@ def phrase_templates_mru() -> list[dict[str, Any]]:
     return ordered
 
 
+def phrase_has_content(tpl: dict[str, Any]) -> bool:
+    plain = str(tpl.get("text") or "").strip()
+    if plain:
+        return True
+    html = str(tpl.get("textHtml") or "").strip()
+    if not html:
+        return False
+    body = html_body_for_label(html)
+    stripped = re.sub(r"<[^>]+>", "", body or "").replace("&nbsp;", " ").strip()
+    return bool(stripped)
+
+
+def phrase_display_label(tpl: dict[str, Any], *, compact: bool = False) -> str:
+    if not phrase_has_content(tpl):
+        return PHRASE_UNREGISTERED_LABEL
+    label = str(tpl.get("label") or "").strip()
+    text = str(tpl.get("text") or "").strip()
+    display = label or text.replace("\n", " ")[:40] or PHRASE_UNREGISTERED_LABEL
+    if compact and len(display) > 8:
+        return display[:7] + "…"
+    return display
+
+
+def phrase_preview_text(tpl: dict[str, Any]) -> str:
+    plain = str(tpl.get("text") or "").strip()
+    if plain:
+        return plain
+    html = box_text_html(tpl, tpl.get("style"))
+    body = html_body_for_label(html)
+    return re.sub(r"<[^>]+>", "", body or "").replace("&nbsp;", " ").strip()
+
+
 def phrase_from_text_box(box: dict[str, Any]) -> dict[str, Any]:
     plain = str(box.get("text") or "").strip()
-    label = plain.replace("\n", " ")[:20] or "定型文"
+    label = plain.replace("\n", " ")[:20]
     return {
         "id": str(uuid.uuid4()),
         "label": label,
@@ -161,6 +197,24 @@ def add_phrase_template(template: dict[str, Any]) -> dict[str, Any]:
     save_phrase_templates(templates)
     touch_recent_phrase(str(norm["id"]))
     return norm
+
+
+def update_phrase_template(phrase_id: str, **updates: Any) -> dict[str, Any] | None:
+    pid = str(phrase_id or "").strip()
+    if not pid:
+        return None
+    templates = load_phrase_templates()
+    for i, tpl in enumerate(templates):
+        if str(tpl.get("id")) != pid:
+            continue
+        merged = {**tpl, **updates}
+        norm = _normalize_template(merged)
+        if norm is None:
+            return None
+        templates[i] = norm
+        save_phrase_templates(templates)
+        return norm
+    return None
 
 
 def delete_phrase_template(phrase_id: str) -> None:

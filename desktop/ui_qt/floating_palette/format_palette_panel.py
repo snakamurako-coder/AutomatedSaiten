@@ -114,9 +114,11 @@ class FormatPalettePanel(QWidget):
         btn_row.setSpacing(6)
         done_btn = QPushButton("編集完了")
         done_btn.clicked.connect(self.edit_done_requested.emit)
+        self._done_btn = done_btn
         edit_btn = QPushButton("文字を編集")
         edit_btn.setToolTip("ダブルクリックでも編集を開始できます")
         edit_btn.clicked.connect(self.edit_requested.emit)
+        self._edit_text_btn = edit_btn
         self._speech_btn = QPushButton("音声入力")
         self._speech_btn.setCheckable(True)
         self._speech_btn.setToolTip(
@@ -128,6 +130,7 @@ class FormatPalettePanel(QWidget):
         del_btn.setToolTip("選択中のテキストボックスを削除（Del キーでも可）")
         del_btn.setProperty("variant", "danger")
         del_btn.clicked.connect(self.delete_requested.emit)
+        self._delete_btn = del_btn
         btn_row.addWidget(done_btn, 1)
         btn_row.addWidget(edit_btn, 1)
         btn_row.addWidget(self._speech_btn, 1)
@@ -144,6 +147,7 @@ class FormatPalettePanel(QWidget):
 
         self._loading = False
         self._loading_char = False
+        self._template_edit_mode = False
         self._speech_phase = "idle"
         self._style: dict[str, Any] = dict(TEXT_STYLE_TEMPLATES["A"])
         self._text_palette_colors: tuple[str, ...] = TEXT_PALETTE_COLORS
@@ -197,6 +201,18 @@ class FormatPalettePanel(QWidget):
 
     def set_detailed_controls_visible(self, visible: bool) -> None:
         self._detail_format_frame.setVisible(bool(visible))
+
+    def set_template_edit_mode(self, enabled: bool) -> None:
+        self._template_edit_mode = bool(enabled)
+        self._speech_btn.setVisible(not enabled)
+        if enabled:
+            self._edit_text_btn.setToolTip("定型文の文言を編集")
+            self._delete_btn.setToolTip("この定型文を削除")
+            self._done_btn.setText("編集完了")
+        else:
+            self._edit_text_btn.setToolTip("ダブルクリックでも編集を開始できます")
+            self._delete_btn.setToolTip("選択中のテキストボックスを削除（Del キーでも可）")
+            self._done_btn.setText("編集完了")
 
     def set_text_palette_colors(self, colors: list[str] | tuple[str, ...]) -> None:
         if len(colors) != 6:

@@ -249,21 +249,44 @@ class ToolPaletteWindow(QWidget):
         text_lay.addWidget(self._text_hint)
 
         self._format_panel = FormatPalettePanel()
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
-        scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        scroll.setWidget(self._format_panel)
-        text_lay.addWidget(scroll, 1)
+        self._text_format_scroll = QScrollArea()
+        self._text_format_scroll.setWidgetResizable(True)
+        self._text_format_scroll.setFrameShape(QFrame.NoFrame)
+        self._text_format_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._text_format_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._text_format_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._text_format_scroll.setWidget(self._format_panel)
+        text_lay.addWidget(self._text_format_scroll, 1)
 
         self._phrase_page = QWidget()
         phrase_lay = QVBoxLayout(self._phrase_page)
         phrase_lay.setContentsMargins(0, 0, 0, 0)
-        phrase_lay.setSpacing(0)
+        phrase_lay.setSpacing(8)
         self._phrase_panel = PhrasePalettePanel()
         phrase_lay.addWidget(self._phrase_panel, 1)
+
+        self._phrase_format_scroll = QScrollArea()
+        self._phrase_format_scroll.setWidgetResizable(True)
+        self._phrase_format_scroll.setFrameShape(QFrame.NoFrame)
+        self._phrase_format_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._phrase_format_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._phrase_format_scroll.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+        )
+        self._phrase_format_placeholder = QWidget()
+        self._phrase_format_scroll.setWidget(self._phrase_format_placeholder)
+        self._phrase_format_scroll.hide()
+        phrase_lay.addWidget(self._phrase_format_scroll, 1)
 
         self._stack.addWidget(self._draw_page)
         self._stack.addWidget(self._text_page)
@@ -343,6 +366,8 @@ class ToolPaletteWindow(QWidget):
         if emit:
             self.input_mode_changed.emit(mode)
             self._emit_active_tool()
+        if mode != MODE_PHRASE:
+            self.set_phrase_format_editor_visible(False)
         self._clamp_geometry()
 
     def show_draw_mode(self) -> None:
@@ -499,6 +524,21 @@ class ToolPaletteWindow(QWidget):
 
     def set_text_palette_colors(self, colors: list[str] | tuple[str, ...]) -> None:
         self._format_panel.set_text_palette_colors(colors)
+
+    def set_phrase_format_editor_visible(self, visible: bool) -> None:
+        visible = bool(visible)
+        if visible:
+            self._phrase_format_scroll.setWidget(self._format_panel)
+            self._phrase_format_scroll.show()
+            if self._text_format_scroll.widget() is self._format_panel:
+                self._text_format_scroll.setWidget(QWidget())
+        else:
+            self._phrase_format_scroll.hide()
+            self._phrase_format_scroll.setWidget(self._phrase_format_placeholder)
+            if self._input_mode == MODE_TEXT:
+                self._text_format_scroll.setWidget(self._format_panel)
+        self._format_panel.set_template_edit_mode(visible)
+        self._clamp_geometry()
 
     def _emit_brush(self) -> None:
         w = float(self._width_ctrl.value())

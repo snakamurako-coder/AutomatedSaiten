@@ -7,7 +7,19 @@ from typing import Any, Protocol
 
 from PySide6.QtCore import QPoint, QRect, QTimer, Qt
 from PySide6.QtGui import QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QMessageBox, QPushButton, QScrollArea, QWidget
+from PySide6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QDialogButtonBox,
+    QMessageBox,
+    QPushButton,
+    QScrollArea,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+)
+
+from models.text_annotation_repo import resolve_text_style
 
 from ui_qt.floating_palette.annotation_undo import AnnotationUndoStack
 from ui_qt.floating_palette.palette_prefs import (
@@ -23,10 +35,14 @@ from ui_qt.floating_palette.palette_prefs import (
 )
 from ui_qt.floating_palette.phrase_template_prefs import (
     add_phrase_template,
+    delete_phrase_template,
     load_phrase_templates,
     phrase_from_text_box,
+    phrase_preview_text,
     touch_recent_phrase,
+    update_phrase_template,
 )
+from ui_qt.floating_palette.text_rich import TEXT_FORMAT_HTML, plain_to_html
 from ui_qt.floating_palette.tool_palette_window import (
     MODE_DRAW,
     MODE_PHRASE,
@@ -98,6 +114,7 @@ class PaletteController:
         self.tool_window.show_text_changed.connect(self._on_show_text_changed)
         self.tool_window.minimize_requested.connect(self._minimize)
         self.tool_window.view_mode_changed.connect(self._on_view_mode_changed)
+        self.tool_window.input_mode_changed.connect(self._on_input_mode_changed)
         fp.style_changed.connect(self._on_format_style)
         fp.char_format_changed.connect(self._on_char_format_changed)
         fp.edit_done_requested.connect(self._on_format_edit_done)
@@ -105,6 +122,8 @@ class PaletteController:
         fp.delete_requested.connect(self._on_format_delete)
         fp.speech_toggled.connect(self._on_format_speech_toggled)
         pp.phrase_selected.connect(self._on_phrase_selected)
+        pp.phrase_edit_requested.connect(self._on_phrase_edit_requested)
+        pp.phrase_deleted.connect(self._on_phrase_deleted)
         pp.copy_from_textbox_requested.connect(self._on_copy_phrase_from_textbox)
         pp.placement_cancel_requested.connect(self._cancel_phrase_placement)
         self.fab.clicked.connect(self._restore_from_fab)
@@ -124,6 +143,7 @@ class PaletteController:
         self._active_result_id: int | None = None
         self._pending_phrase_id: str | None = None
         self._pending_phrase_template: dict[str, Any] | None = None
+        self._editing_phrase_id: str | None = None
         self._undo = AnnotationUndoStack()
         self._undo.set_on_changed(self._sync_undo_ui)
         self.refresh_speech_prefs()
@@ -469,6 +489,7 @@ class PaletteController:
             self.finish_all_text_editing()
         if tool != TOOL_PHRASE:
             self._cancel_phrase_placement()
+            self._end_phrase_edit()
         if tool not in text_like:
             for stack in self._stacks():
                 stack.text_layer.clear_selection()
@@ -603,18 +624,36 @@ class PaletteController:
         detailed = str(mode or "") == VIEW_DETAILED
         self.tool_window.format_panel.set_detailed_controls_visible(detailed)
 
+    def _on_input_mode_changed(self, mode: str) -> None:
+        if str(mode or "") != MODE_PHRASE:
+            self._end_phrase_edit()
+
     def _on_char_format_changed(self, changes: dict[str, Any]) -> None:
+        if self._editing_phrase_id:
+            self._apply_char_format_to_editing_phrase(changes)
+            return
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.apply_char_format_to_selected(changes)
                 return
 
     def _on_format_style(self, style: dict[str, Any]) -> None:
+        if self._editing_phrase_id:
+            tpl = self._phrase_template_by_id(self._editing_phrase_id)
+            if tpl is not None:
+                updates = self._phrase_updates_with_style(tpl, style)
+                self._after_phrase_template_updated(
+                    update_phrase_template(self._editing_phrase_id, **updates)
+                )
+            return
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.update_selected_style(style)
 
     def _on_format_edit_done(self) -> None:
+        if self._editing_phrase_id:
+            self._end_phrase_edit()
+            return
         self._stop_speech()
         self.finish_all_text_editing()
         fw = QApplication.focusWidget()
@@ -624,12 +663,21 @@ class PaletteController:
             stack.text_layer.clear_selection()
 
     def _on_format_edit(self) -> None:
+        if self._editing_phrase_id:
+            self._edit_phrase_text(self._editing_phrase_id)
+            return
         for stack in self._stacks():
             if stack.text_layer.selected_box():
                 stack.text_layer.edit_selected()
                 return
 
     def _on_format_delete(self) -> None:
+        if self._editing_phrase_id:
+            pid = self._editing_phrase_id
+            self._end_phrase_edit()
+            delete_phrase_template(pid)
+            self.tool_window.phrase_panel.reload_templates()
+            return
         self._stop_speech()
         for stack in self._stacks():
             if stack.text_layer.selected_box():
@@ -704,6 +752,8 @@ class PaletteController:
         template = self._phrase_template_by_id(phrase_id)
         if template is None:
             return
+        if self._editing_phrase_id and self._editing_phrase_id != phrase_id:
+            self._end_phrase_edit()
         self._ensure_phrase_tool_mode()
         self._stop_speech()
         self.finish_all_text_editing()
@@ -721,6 +771,149 @@ class PaletteController:
         touch_recent_phrase(phrase_id)
         self.tool_window.phrase_panel.reload_templates()
         self._apply_to_stacks()
+
+    def _on_phrase_edit_requested(self, phrase_id: str) -> None:
+        template = self._phrase_template_by_id(phrase_id)
+        if template is None:
+            return
+        self._cancel_phrase_placement()
+        self._stop_speech()
+        self.finish_all_text_editing()
+        self._editing_phrase_id = str(phrase_id)
+        self._ensure_phrase_tool_mode()
+        self.tool_window.phrase_panel.set_editing_phrase(phrase_id)
+        self.tool_window.set_phrase_format_editor_visible(True)
+        fp = self.tool_window.format_panel
+        fp.load_style(template.get("style") or {})
+        self._sync_phrase_format_char_state(template)
+
+    def _on_phrase_deleted(self, phrase_id: str) -> None:
+        if self._editing_phrase_id == str(phrase_id):
+            self._end_phrase_edit()
+        if self._pending_phrase_id == str(phrase_id):
+            self._cancel_phrase_placement()
+
+    def _end_phrase_edit(self) -> None:
+        if not self._editing_phrase_id:
+            return
+        self._editing_phrase_id = None
+        self.tool_window.phrase_panel.set_editing_phrase(None)
+        self.tool_window.set_phrase_format_editor_visible(False)
+
+    def _sync_phrase_format_char_state(self, tpl: dict[str, Any]) -> None:
+        st = resolve_text_style(tpl.get("style") or {})
+        self.tool_window.format_panel.sync_char_format(
+            {
+                "color": str(st.get("textColor") or "#111827"),
+                "fontSize": int(st.get("fontSize") or 14),
+                "lineSpacing": int(
+                    st.get("lineSpacing") or st.get("fontSize") or 14
+                ),
+                "bold": str(st.get("fontWeight") or "") == "bold",
+                "italic": str(st.get("fontStyle") or "") == "italic",
+                "underline": False,
+            }
+        )
+
+    def _phrase_updates_with_style(
+        self, tpl: dict[str, Any], style: dict[str, Any]
+    ) -> dict[str, Any]:
+        resolved = resolve_text_style(style)
+        updates: dict[str, Any] = {"style": resolved}
+        plain = str(tpl.get("text") or "")
+        if plain:
+            updates["textHtml"] = plain_to_html(plain, resolved)
+            updates["textFormat"] = TEXT_FORMAT_HTML
+        return updates
+
+    def _phrase_style_from_char_changes(
+        self, style: dict[str, Any], changes: dict[str, Any]
+    ) -> dict[str, Any]:
+        merged = resolve_text_style(copy.deepcopy(style))
+        if "color" in changes:
+            merged["textColor"] = str(changes["color"])
+        if "fontSize" in changes:
+            merged["fontSize"] = float(changes["fontSize"])
+        if "lineSpacing" in changes:
+            merged["lineSpacing"] = float(changes["lineSpacing"])
+        if "bold" in changes:
+            merged["fontWeight"] = "bold" if changes["bold"] else "normal"
+        if "italic" in changes:
+            merged["fontStyle"] = "italic" if changes["italic"] else "normal"
+        if changes.get("toggleBold"):
+            merged["fontWeight"] = (
+                "normal" if str(merged.get("fontWeight")) == "bold" else "bold"
+            )
+        if changes.get("toggleItalic"):
+            merged["fontStyle"] = (
+                "normal" if str(merged.get("fontStyle")) == "italic" else "italic"
+            )
+        return resolve_text_style(merged)
+
+    def _apply_char_format_to_editing_phrase(self, changes: dict[str, Any]) -> None:
+        if not self._editing_phrase_id:
+            return
+        tpl = self._phrase_template_by_id(self._editing_phrase_id)
+        if tpl is None:
+            return
+        merged_style = self._phrase_style_from_char_changes(
+            tpl.get("style") or {}, changes
+        )
+        updates = self._phrase_updates_with_style(
+            {**tpl, "style": merged_style}, merged_style
+        )
+        self._after_phrase_template_updated(
+            update_phrase_template(self._editing_phrase_id, **updates)
+        )
+        self.tool_window.format_panel.load_style(merged_style)
+
+    def _after_phrase_template_updated(
+        self, updated: dict[str, Any] | None
+    ) -> None:
+        if updated is None:
+            return
+        pid = str(updated.get("id") or "")
+        if self._pending_phrase_id == pid:
+            self._pending_phrase_template = copy.deepcopy(updated)
+            self._apply_to_stacks()
+        self.tool_window.phrase_panel.reload_templates()
+        if self._editing_phrase_id == pid:
+            self.tool_window.phrase_panel.set_editing_phrase(pid)
+            self._sync_phrase_format_char_state(updated)
+
+    def _edit_phrase_text(self, phrase_id: str) -> None:
+        tpl = self._phrase_template_by_id(phrase_id)
+        if tpl is None:
+            return
+        dlg = QDialog(self._main)
+        dlg.setWindowTitle("定型文の文言を編集")
+        lay = QVBoxLayout(dlg)
+        editor = QTextEdit()
+        editor.setPlainText(
+            phrase_preview_text(tpl) or str(tpl.get("text") or "")
+        )
+        editor.setMinimumSize(320, 160)
+        lay.addWidget(editor)
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(dlg.accept)
+        buttons.rejected.connect(dlg.reject)
+        lay.addWidget(buttons)
+        if dlg.exec() != QDialog.DialogCode.Accepted:
+            return
+        text = editor.toPlainText()
+        style = resolve_text_style(tpl.get("style") or {})
+        label = text.replace("\n", " ").strip()[:20]
+        updates = {
+            "text": text,
+            "label": label,
+            "textHtml": plain_to_html(text, style),
+            "textFormat": TEXT_FORMAT_HTML,
+        }
+        self._after_phrase_template_updated(
+            update_phrase_template(phrase_id, **updates)
+        )
 
     def _on_copy_phrase_from_textbox(self) -> None:
         box: dict[str, Any] | None = None

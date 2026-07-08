@@ -393,6 +393,19 @@ QStatusBar {{
     background: {COLORS["accent_soft"]};
     border-radius: 6px;
 }}
+QFrame#PhraseDetailRow {{
+    background: {COLORS["surface"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 8px;
+}}
+QFrame#PhraseDetailRow[editing="true"] {{
+    border: 1px solid {COLORS["accent"]};
+    background: {COLORS["accent_soft"]};
+}}
+QLabel#PhraseDetailTitle {{
+    font-size: 12px;
+    font-weight: 600;
+}}
 QPushButton#PaletteIconBtn {{
     background: transparent;
     border: 1px solid {COLORS["border"]};
