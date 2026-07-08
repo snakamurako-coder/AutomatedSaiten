@@ -345,6 +345,26 @@ class ToolPaletteWindow(QWidget):
             and self._phrase_format_scroll.isVisible()
         )
 
+    def _phrase_simple_active(self) -> bool:
+        return (
+            self._input_mode == MODE_PHRASE
+            and self._view_mode == VIEW_SIMPLE
+            and not self._phrase_format_scroll.isVisible()
+        )
+
+    def _fit_height_to_content(self) -> bool:
+        return self._phrase_edit_active() or self._phrase_simple_active()
+
+    def _phrase_page_content_height(self) -> int:
+        lay = self._phrase_lay
+        margins = lay.contentsMargins()
+        return (
+            self._phrase_panel.content_height_hint()
+            + margins.top()
+            + margins.bottom()
+            + 2
+        )
+
     def _stack_chrome_height(self) -> int:
         root = self.layout()
         if root is None:
@@ -404,7 +424,16 @@ class ToolPaletteWindow(QWidget):
             return 200
         if self._phrase_edit_active():
             return self._phrase_edit_content_height()
+        if self._phrase_simple_active():
+            return self._phrase_page_content_height()
         return max(page.minimumSizeHint().height(), page.sizeHint().height())
+
+    def _apply_phrase_page_stretch(self) -> None:
+        if self._input_mode != MODE_PHRASE:
+            self._phrase_lay.setStretchFactor(self._phrase_panel, 1)
+            return
+        compact = self._phrase_format_scroll.isVisible() or self._view_mode == VIEW_SIMPLE
+        self._phrase_lay.setStretchFactor(self._phrase_panel, 0 if compact else 1)
 
     def _content_width_hint(self) -> int:
         margins = self.layout().contentsMargins()
@@ -454,15 +483,20 @@ class ToolPaletteWindow(QWidget):
         chrome = self._stack_chrome_height()
         stack_max = max(180, max_h - chrome)
         content_need = self._content_height_hint()
-        if self._phrase_edit_active():
+        if self._fit_height_to_content():
             format_h = max(
                 self._format_panel.sizeHint().height(),
                 self._format_panel.minimumSizeHint().height(),
             )
-            self._phrase_format_scroll.setMinimumHeight(format_h)
+            if self._phrase_edit_active():
+                self._phrase_format_scroll.setMinimumHeight(format_h)
             content_h = min(content_need, stack_max)
-            self._content_scroll.setMaximumHeight(stack_max)
-            self._content_scroll.setMinimumHeight(content_h)
+            if content_need <= stack_max:
+                self._content_scroll.setMinimumHeight(content_h)
+                self._content_scroll.setMaximumHeight(content_h)
+            else:
+                self._content_scroll.setMinimumHeight(0)
+                self._content_scroll.setMaximumHeight(stack_max)
             desired_h = chrome + content_h
             h = max(self.minimumHeight(), min(desired_h, max_h))
         else:
@@ -539,6 +573,7 @@ class ToolPaletteWindow(QWidget):
             self._emit_active_tool()
         if mode != MODE_PHRASE:
             self.set_phrase_format_editor_visible(False)
+        self._apply_phrase_page_stretch()
         self._schedule_fit_to_screen()
 
     def show_draw_mode(self) -> None:
@@ -684,6 +719,7 @@ class ToolPaletteWindow(QWidget):
         self._phrase_panel.set_view_mode(self._view_mode)
         self._view_btn.setText("簡易" if detailed else "詳細")
         self._resize_view_btn()
+        self._apply_phrase_page_stretch()
         self._schedule_fit_to_screen()
 
     def _resize_view_btn(self) -> None:
@@ -735,7 +771,7 @@ class ToolPaletteWindow(QWidget):
         panel.set_template_edit_mode(visible)
         self._phrase_preview.setVisible(visible)
         self._phrase_panel.set_compact_edit_mode(visible)
-        self._phrase_lay.setStretchFactor(self._phrase_panel, 0 if visible else 1)
+        self._apply_phrase_page_stretch()
         if visible:
             format_h = self._format_panel.minimumSizeHint().height()
             self._phrase_format_scroll.setVerticalScrollBarPolicy(

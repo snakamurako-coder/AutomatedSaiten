@@ -393,6 +393,14 @@ QStatusBar {{
     background: {COLORS["accent_soft"]};
     border-radius: 6px;
 }}
+QLabel#PhrasePendingLabel {{
+    font-size: 10px;
+    color: {COLORS["text_muted"]};
+    padding: 2px 6px;
+    margin: 0;
+    background: {COLORS["accent_soft"]};
+    border-radius: 6px;
+}}
 QFrame#PhraseDetailRow {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border"]};
@@ -406,11 +414,11 @@ QPushButton#PhraseSimpleBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 6px;
-    padding: 2px 8px;
+    padding: 1px 8px;
     font-size: 11px;
     text-align: left;
     min-height: 0;
-    max-height: 26px;
+    max-height: 24px;
 }}
 QPushButton#PhraseCopyBtn {{
     background: {COLORS["surface"]};

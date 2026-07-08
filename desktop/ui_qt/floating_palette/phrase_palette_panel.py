@@ -69,18 +69,24 @@ class PhrasePalettePanel(QWidget):
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setSpacing(6)
 
         self._pending_label = QLabel("")
-        self._pending_label.setObjectName("PaletteHintLabel")
-        self._pending_label.setWordWrap(True)
+        self._pending_label.setObjectName("PhrasePendingLabel")
+        self._pending_label.setWordWrap(False)
+        self._pending_label.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         self._pending_label.hide()
         root.addWidget(self._pending_label)
 
         self._simple_frame = QFrame()
         self._simple_lay = QVBoxLayout(self._simple_frame)
         self._simple_lay.setContentsMargins(0, 0, 0, 0)
-        self._simple_lay.setSpacing(2)
+        self._simple_lay.setSpacing(1)
+        self._simple_frame.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         root.addWidget(self._simple_frame)
 
         self._scroll = QScrollArea()
@@ -151,14 +157,38 @@ class PhrasePalettePanel(QWidget):
         self._sync_copy_btn_width()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        if self._compact_edit:
-            return QSize(220, 72)
-        return QSize(self.content_min_width(), 200)
+        return QSize(self.content_min_width(), self.content_height_hint())
 
     def sizeHint(self) -> QSize:  # noqa: N802
+        return QSize(self.content_min_width(), self.content_height_hint())
+
+    def content_height_hint(self) -> int:
+        lay = self.layout()
+        margins = lay.contentsMargins()
+        spacing = lay.spacing()
+        blocks: list[int] = []
+        if self._pending_label.isVisible():
+            blocks.append(self._pending_label.sizeHint().height())
         if self._compact_edit:
-            return QSize(260, 88)
-        return QSize(self.content_min_width(), 280)
+            blocks.append(self._edit_single_frame.sizeHint().height())
+        elif self._view_mode == VIEW_SIMPLE:
+            blocks.append(self._simple_list_height())
+        elif self._scroll.isVisible():
+            blocks.append(min(320, self._scroll.sizeHint().height()))
+        if self._copy_btn.isVisible():
+            blocks.append(self._copy_btn.sizeHint().height())
+        total = margins.top() + margins.bottom() + sum(blocks)
+        if len(blocks) > 1:
+            total += spacing * (len(blocks) - 1)
+        return max(48, total + 2)
+
+    def _simple_list_height(self) -> int:
+        if not self._phrase_btns:
+            return 0
+        btn_h = max(btn.sizeHint().height() for btn in self._phrase_btns.values())
+        count = len(self._phrase_btns)
+        gap = self._simple_lay.spacing()
+        return count * btn_h + gap * max(0, count - 1)
 
     def content_min_width(self) -> int:
         self._sync_copy_btn_width()
@@ -185,8 +215,6 @@ class PhrasePalettePanel(QWidget):
 
     def set_compact_edit_mode(self, active: bool) -> None:
         self._compact_edit = bool(active)
-        vertical = QSizePolicy.Policy.Maximum if self._compact_edit else QSizePolicy.Policy.Expanding
-        self.setSizePolicy(QSizePolicy.Policy.Expanding, vertical)
         self._apply_view_mode()
         self.reload_templates()
         self.layout_hint_changed.emit()
@@ -204,12 +232,19 @@ class PhrasePalettePanel(QWidget):
             self._scroll.hide()
             self._edit_single_frame.show()
             self._copy_btn.hide()
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+            self.layout_hint_changed.emit()
             return
         self._edit_single_frame.hide()
         self._copy_btn.show()
         detailed = self._view_mode == VIEW_DETAILED
         self._simple_frame.setVisible(not detailed)
         self._scroll.setVisible(detailed)
+        if detailed:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        else:
+            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        self.layout_hint_changed.emit()
 
     def reload_templates(self) -> None:
         templates = self._templates_for_display(phrase_templates_mru())
@@ -234,12 +269,13 @@ class PhrasePalettePanel(QWidget):
                 self._template_for_id(self._pending_id) or {}, compact=False
             )
             self._pending_label.setText(
-                f"配置待ち: {tpl_label}\nドラッグして貼り付ける位置を指定してください"
+                f"配置待ち: {tpl_label} — 貼り付け位置を指定"
             )
             self._pending_label.show()
         else:
             self._pending_label.clear()
             self._pending_label.hide()
+        self.layout_hint_changed.emit()
 
     def set_editing_phrase(self, phrase_id: str | None) -> None:
         self._editing_id = str(phrase_id) if phrase_id else None
@@ -402,8 +438,10 @@ class PhrasePalettePanel(QWidget):
         btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
+        btn_h = btn.sizeHint().height()
+        btn.setFixedHeight(btn_h)
         lay = QHBoxLayout(btn)
-        lay.setContentsMargins(6, 2, 8, 2)
+        lay.setContentsMargins(6, 1, 8, 1)
         lay.setSpacing(0)
         label = self._make_rich_label(
             tpl,
