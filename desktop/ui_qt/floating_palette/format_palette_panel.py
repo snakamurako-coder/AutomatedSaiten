@@ -52,6 +52,7 @@ class FormatPalettePanel(QWidget):
 
     _SEGMENT_BTN_PAD = 10
     _ACTION_BTN_PAD = 8
+    _DETAIL_VERTICAL_INTERVAL = 12  # 「横/縦」の現行4px間隔の3倍
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -117,7 +118,7 @@ class FormatPalettePanel(QWidget):
         align_frame.setFrameShape(QFrame.Shape.NoFrame)
         align_lay = QVBoxLayout(align_frame)
         align_lay.setContentsMargins(0, 0, 0, 0)
-        align_lay.setSpacing(1)
+        align_lay.setSpacing(self._DETAIL_VERTICAL_INTERVAL)
         h_align_row = QHBoxLayout()
         h_align_row.setSpacing(4)
         h_align_row.setContentsMargins(0, 0, 0, 0)
@@ -186,6 +187,7 @@ class FormatPalettePanel(QWidget):
         align_lay.addWidget(self._detail_format_frame)
         self._detail_format_frame.hide()
         root.addWidget(align_frame)
+        root.addSpacing(self._DETAIL_VERTICAL_INTERVAL)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(2)
