@@ -136,18 +136,30 @@ class ToolPaletteWindow(QWidget):
         root.addWidget(self._mode_wrap, 0)
 
         self._content_host = QWidget()
+        self._content_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
         content_lay = QVBoxLayout(self._content_host)
         content_lay.setContentsMargins(0, 0, 0, 0)
         content_lay.setSpacing(0)
+        content_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._stack = QStackedWidget()
-        self._stack.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
-        content_lay.addWidget(self._stack)
+        self._stack.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
+        content_lay.addWidget(self._stack, 0)
+        # ウィンドウ縦伸長の余りはここにだけ載せる（UI間隔は固定）
+        content_lay.addStretch(1)
 
         self._draw_page = QWidget()
+        self._draw_page.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         draw_lay = QVBoxLayout(self._draw_page)
         draw_lay.setContentsMargins(0, 0, 0, 0)
         draw_lay.setSpacing(4)
+        draw_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._brush_frame = QFrame()
         self._brush_frame.setObjectName("FloatingPaletteSection")
@@ -254,11 +266,16 @@ class ToolPaletteWindow(QWidget):
         detail_lay.addWidget(self._show_text_check)
 
         draw_lay.addWidget(self._detail_frame)
+        draw_lay.addStretch(1)
 
         self._text_page = QWidget()
+        self._text_page.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         text_lay = QVBoxLayout(self._text_page)
         text_lay.setContentsMargins(0, 0, 0, 0)
         text_lay.setSpacing(4)
+        text_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         self._text_hint = QLabel(
             "画像上でドラッグしてテキストボックスの大きさを決定\n"
@@ -279,20 +296,25 @@ class ToolPaletteWindow(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self._text_format_scroll.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
         self._text_format_scroll.setWidget(self._format_panel)
         text_lay.addWidget(self._text_format_scroll, 0)
+        text_lay.addStretch(1)
 
         self._phrase_page = QWidget()
+        self._phrase_page.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+        )
         self._phrase_lay = QVBoxLayout(self._phrase_page)
         phrase_lay = self._phrase_lay
         phrase_lay.setContentsMargins(0, 0, 0, 0)
         phrase_lay.setSpacing(4)
+        phrase_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._phrase_panel = PhrasePalettePanel()
         self._phrase_panel.layout_hint_changed.connect(self._schedule_fit_to_screen)
         self._format_panel.layout_hint_changed.connect(self._schedule_fit_to_screen)
-        phrase_lay.addWidget(self._phrase_panel, 1)
+        phrase_lay.addWidget(self._phrase_panel, 0)
 
         self._phrase_preview = PhraseEditPreviewPanel()
         self._phrase_preview.hide()
@@ -309,13 +331,14 @@ class ToolPaletteWindow(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self._phrase_format_scroll.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
         self._phrase_format_scroll.setMaximumHeight(16777215)
         self._phrase_format_placeholder = QWidget()
         self._phrase_format_scroll.setWidget(self._phrase_format_placeholder)
         self._phrase_format_scroll.hide()
         phrase_lay.addWidget(self._phrase_format_scroll, 0)
+        phrase_lay.addStretch(1)
 
         self._stack.addWidget(self._draw_page)
         self._stack.addWidget(self._text_page)
@@ -444,14 +467,13 @@ class ToolPaletteWindow(QWidget):
         return max(page.minimumSizeHint().height(), page.sizeHint().height())
 
     def _apply_phrase_page_stretch(self) -> None:
-        if self._input_mode != MODE_PHRASE:
-            self._phrase_lay.setStretchFactor(self._phrase_panel, 1)
-            return
-        # 簡易は内容高に合わせる。詳細はカード固定高のためパネルを伸ばし、余白は一覧末尾へ。
-        if self._phrase_format_scroll.isVisible() or self._view_mode == VIEW_SIMPLE:
-            self._phrase_lay.setStretchFactor(self._phrase_panel, 0)
-        else:
-            self._phrase_lay.setStretchFactor(self._phrase_panel, 1)
+        # どのタブでも設定間隔は固定。縦伸長の余りはレイアウト末尾 stretch のみ。
+        self._phrase_lay.setStretchFactor(self._phrase_panel, 0)
+        self._phrase_lay.setStretchFactor(self._phrase_preview, 0)
+        self._phrase_lay.setStretchFactor(self._phrase_format_scroll, 0)
+        self._phrase_panel.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum
+        )
 
     def _content_width_hint(self) -> int:
         margins = self.layout().contentsMargins()
@@ -795,25 +817,25 @@ class ToolPaletteWindow(QWidget):
                 Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
             self._phrase_format_scroll.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
             self._phrase_format_scroll.setMinimumHeight(format_h)
             self._phrase_preview.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
             self._stack.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
         else:
             self._phrase_format_scroll.setVerticalScrollBarPolicy(
                 Qt.ScrollBarPolicy.ScrollBarAsNeeded
             )
             self._phrase_format_scroll.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
             self._phrase_format_scroll.setMinimumHeight(0)
             self._stack.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
         self._schedule_fit_to_screen()
 

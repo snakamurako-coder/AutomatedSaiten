@@ -279,10 +279,9 @@ class PhrasePalettePanel(QWidget):
         self._scroll.setVisible(detailed)
         # 簡易版からは「テキストボックスからコピー」を除外し、詳細版のみ表示する。
         self._copy_btn.setVisible(detailed)
-        if detailed:
-            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
-        else:
-            self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
+        # Expanding だとウィンドウ伸長時にインターバルが膨らむ。
+        # 詳細一覧だけスクロール内で吸収できるよう Maximum を基本にする。
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Maximum)
         self.layout_hint_changed.emit()
 
     def reload_templates(self) -> None:
