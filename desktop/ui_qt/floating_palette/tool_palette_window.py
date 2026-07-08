@@ -275,6 +275,7 @@ class ToolPaletteWindow(QWidget):
         phrase_lay.setContentsMargins(0, 0, 0, 0)
         phrase_lay.setSpacing(8)
         self._phrase_panel = PhrasePalettePanel()
+        self._phrase_panel.layout_hint_changed.connect(self._schedule_fit_to_screen)
         phrase_lay.addWidget(self._phrase_panel, 1)
 
         self._phrase_preview = PhraseEditPreviewPanel()
@@ -343,11 +344,21 @@ class ToolPaletteWindow(QWidget):
     def _content_width_hint(self) -> int:
         margins = self.layout().contentsMargins()
         page = self._stack.currentWidget()
-        widths = [self.minimumWidth(), self._format_panel.sizeHint().width()]
+        widths = [
+            self.minimumWidth(),
+            self._format_panel.sizeHint().width(),
+            self._phrase_panel.content_min_width(),
+        ]
         if page is not None:
             widths.append(page.sizeHint().width())
         inner = max(widths)
         return inner + margins.left() + margins.right() + 16
+
+    def _apply_palette_min_width(self) -> None:
+        bounds = self._screen_bounds()
+        max_w = bounds[0] if bounds else 16777215
+        min_w = max(260, min(self._content_width_hint(), max_w))
+        self.setMinimumWidth(min_w)
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
@@ -374,6 +385,7 @@ class ToolPaletteWindow(QWidget):
         self.setMaximumHeight(max_h)
         stack_max = max(180, max_h - self._stack_chrome_height())
         self._content_scroll.setMaximumHeight(stack_max)
+        self._apply_palette_min_width()
         hint_w = min(self._content_width_hint(), max_w)
         geo = self.geometry()
         w = max(self.minimumWidth(), min(max(geo.width(), hint_w), max_w))

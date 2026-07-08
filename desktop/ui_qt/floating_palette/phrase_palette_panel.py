@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
@@ -29,6 +30,10 @@ from ui_qt.floating_palette.phrase_template_prefs import (
 )
 from ui_qt.style import COLORS
 
+_DETAIL_ACTION_BTN_WIDTH = 52
+_DETAIL_SELECT_MAX_WIDTH = 88
+_DETAIL_TEXT_MIN_WIDTH = 108
+
 
 class PhrasePalettePanel(QWidget):
     """定型文の選択・登録 UI。"""
@@ -38,6 +43,7 @@ class PhrasePalettePanel(QWidget):
     phrase_deleted = Signal(str)
     copy_from_textbox_requested = Signal()
     placement_cancel_requested = Signal()
+    layout_hint_changed = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -108,12 +114,29 @@ class PhrasePalettePanel(QWidget):
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         if self._compact_edit:
             return QSize(220, 72)
-        return QSize(220, 200)
+        return QSize(self.content_min_width(), 200)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         if self._compact_edit:
             return QSize(260, 88)
-        return QSize(260, 280)
+        return QSize(self.content_min_width(), 280)
+
+    def content_min_width(self) -> int:
+        fm = QFontMetrics(self._copy_btn.font())
+        copy_w = fm.horizontalAdvance(self._copy_btn.text()) + 28
+        if self._compact_edit:
+            return max(260, copy_w)
+        if self._view_mode == VIEW_DETAILED:
+            row_w = (
+                16
+                + _DETAIL_SELECT_MAX_WIDTH
+                + 8
+                + _DETAIL_TEXT_MIN_WIDTH
+                + 8
+                + _DETAIL_ACTION_BTN_WIDTH
+            )
+            return max(300, copy_w, row_w)
+        return max(260, copy_w)
 
     def set_compact_edit_mode(self, active: bool) -> None:
         self._compact_edit = bool(active)
@@ -121,11 +144,13 @@ class PhrasePalettePanel(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Expanding, vertical)
         self._apply_view_mode()
         self.reload_templates()
+        self.layout_hint_changed.emit()
 
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
         self._apply_view_mode()
         self.reload_templates()
+        self.layout_hint_changed.emit()
 
     def _apply_view_mode(self) -> None:
         if self._compact_edit:
@@ -228,6 +253,8 @@ class PhrasePalettePanel(QWidget):
                 self._detailed_lay.insertWidget(self._detailed_lay.count() - 1, frame)
 
         self.set_pending_phrase(self._pending_id)
+        self.updateGeometry()
+        self.layout_hint_changed.emit()
 
     def _fill_edit_single_card(self, tpl: dict[str, Any]) -> None:
         title = QLabel(phrase_display_label(tpl, compact=False))
@@ -274,13 +301,15 @@ class PhrasePalettePanel(QWidget):
         lay.setSpacing(8)
 
         select_btn = self._make_select_btn(tpl, compact=False)
-        select_btn.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        lay.addWidget(select_btn)
+        select_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        select_btn.setMaximumWidth(_DETAIL_SELECT_MAX_WIDTH)
+        lay.addWidget(select_btn, 0)
 
         text_col = QVBoxLayout()
         text_col.setSpacing(4)
         title = QLabel(phrase_display_label(tpl, compact=False))
         title.setObjectName("PhraseDetailTitle")
+        title.setWordWrap(True)
         if not phrase_has_content(tpl):
             title.setStyleSheet(f"color: {COLORS['danger']}; font-weight: 600;")
         preview = phrase_preview_text(tpl)
@@ -292,21 +321,29 @@ class PhrasePalettePanel(QWidget):
             body.setStyleSheet(f"color: {COLORS['text_muted']};")
         text_col.addWidget(title)
         text_col.addWidget(body)
-        lay.addLayout(text_col, 1)
+        text_host = QWidget()
+        text_host.setMinimumWidth(_DETAIL_TEXT_MIN_WIDTH)
+        text_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        text_host.setLayout(text_col)
+        lay.addWidget(text_host, 1)
 
-        btn_col = QVBoxLayout()
+        action_col = QWidget()
+        action_col.setFixedWidth(_DETAIL_ACTION_BTN_WIDTH)
+        action_col.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        btn_col = QVBoxLayout(action_col)
+        btn_col.setContentsMargins(0, 0, 0, 0)
         btn_col.setSpacing(4)
         edit_btn = QPushButton("編集")
+        edit_btn.setFixedWidth(_DETAIL_ACTION_BTN_WIDTH)
         edit_btn.setToolTip("書式・文言をテキストボックスと同様に編集")
         edit_btn.clicked.connect(lambda _c=False, p=pid: self.phrase_edit_requested.emit(p))
         del_btn = QPushButton("削除")
         del_btn.setProperty("variant", "danger")
-        del_btn.setFixedWidth(52)
+        del_btn.setFixedWidth(_DETAIL_ACTION_BTN_WIDTH)
         del_btn.clicked.connect(lambda _c=False, p=pid: self._on_delete(p))
         btn_col.addWidget(edit_btn)
         btn_col.addWidget(del_btn)
-        btn_col.addStretch()
-        lay.addLayout(btn_col)
+        lay.addWidget(action_col, 0)
 
         self._detail_rows[pid] = frame
         return frame
