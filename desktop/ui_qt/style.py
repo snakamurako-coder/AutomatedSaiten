@@ -381,6 +381,10 @@ QStatusBar {{
 #ToolPaletteWindow, #FormatPaletteWindow {{
     background: {COLORS["surface"]};
 }}
+#ToolPaletteWindow QFrame#FloatingPaletteSection {{
+    margin: 0;
+    padding: 0;
+}}
 #ToolPaletteWindow QPushButton {{
     padding: 3px 8px;
     font-size: 11px;

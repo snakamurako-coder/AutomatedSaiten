@@ -163,6 +163,9 @@ class ToolPaletteWindow(QWidget):
 
         self._brush_frame = QFrame()
         self._brush_frame.setObjectName("FloatingPaletteSection")
+        self._brush_frame.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         brush_lay = QVBoxLayout(self._brush_frame)
         brush_lay.setContentsMargins(0, 0, 0, 0)
         brush_lay.setSpacing(4)
@@ -190,6 +193,9 @@ class ToolPaletteWindow(QWidget):
         self._width_ctrl = SliderSpinControls(
             label="太さ", min_val=1, max_val=20, value=3, label_width=36, spin_width=52
         )
+        self._width_ctrl.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         self._width_ctrl.valueChanged.connect(lambda _v: self._emit_brush())
         brush_lay.addWidget(self._width_ctrl)
 
@@ -202,9 +208,12 @@ class ToolPaletteWindow(QWidget):
             label_width=48,
             spin_width=64,
         )
+        self._alpha_ctrl.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         self._alpha_ctrl.valueChanged.connect(lambda _v: self._emit_brush())
         brush_lay.addWidget(self._alpha_ctrl)
-        draw_lay.addWidget(self._brush_frame)
+        draw_lay.addWidget(self._brush_frame, 0)
 
         tools_row = QHBoxLayout()
         tools_row.setSpacing(2)
@@ -222,7 +231,10 @@ class ToolPaletteWindow(QWidget):
         self._draw_hint = QLabel("スタイラスで手書き（パームリジェクション ON 時は常時描画）")
         self._draw_hint.setObjectName("PaletteHintLabel")
         self._draw_hint.setWordWrap(True)
-        draw_lay.addWidget(self._draw_hint)
+        self._draw_hint.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        draw_lay.addWidget(self._draw_hint, 0)
 
         clear_row = QVBoxLayout()
         clear_row.setSpacing(2)
@@ -238,6 +250,9 @@ class ToolPaletteWindow(QWidget):
 
         self._detail_frame = QFrame()
         self._detail_frame.setObjectName("FloatingPaletteSection")
+        self._detail_frame.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
         detail_lay = QVBoxLayout(self._detail_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
         detail_lay.setSpacing(4)
@@ -265,7 +280,7 @@ class ToolPaletteWindow(QWidget):
         self._show_text_check.toggled.connect(self.show_text_changed.emit)
         detail_lay.addWidget(self._show_text_check)
 
-        draw_lay.addWidget(self._detail_frame)
+        draw_lay.addWidget(self._detail_frame, 0)
         draw_lay.addStretch(1)
 
         self._text_page = QWidget()
@@ -283,7 +298,10 @@ class ToolPaletteWindow(QWidget):
         )
         self._text_hint.setObjectName("PaletteHintLabel")
         self._text_hint.setWordWrap(True)
-        text_lay.addWidget(self._text_hint)
+        self._text_hint.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        text_lay.addWidget(self._text_hint, 0)
 
         self._format_panel = FormatPalettePanel()
         self._text_format_scroll = QScrollArea()
@@ -531,20 +549,17 @@ class ToolPaletteWindow(QWidget):
         if self._phrase_edit_active():
             self._phrase_format_scroll.setMinimumHeight(format_h)
         content_h = min(content_need, stack_max)
-        if content_need <= stack_max:
-            # 収まる場合はスクロール領域を内容高に固定して、全表示にする。
-            self._content_scroll.setMinimumHeight(content_h)
-            self._content_scroll.setMaximumHeight(content_h)
-        else:
-            # 画面に収まらない場合のみスクロールを許可。
-            self._content_scroll.setMinimumHeight(0)
-            self._content_scroll.setMaximumHeight(stack_max)
+        # 見出し〜本文の行間は最短固定。
+        # content_scroll を内容高で上限固定しない（伸ばした余りは本文末尾へ）。
+        self._content_scroll.setMinimumHeight(min(content_h, stack_max))
+        self._content_scroll.setMaximumHeight(stack_max)
         desired_h = chrome + content_h
-        h = max(self.minimumHeight(), min(desired_h, max_h))
+        # ユーザーが縦に伸ばした高さは維持。足りない時だけ引き上げる。
+        h = max(self.minimumHeight(), min(max(geo.height(), desired_h), max_h))
         self._apply_palette_min_width()
         hint_w = min(self._content_width_hint(), max_w)
         min_w = self.minimumWidth()
-        w = max(min_w, min(hint_w, max_w))
+        w = max(min_w, min(max(geo.width(), hint_w), max_w))
         if geo.width() != w or geo.height() != h:
             self.resize(w, h)
         x = min(max(geo.x(), avail.left()), max(avail.left(), avail.right() - w + 1))
