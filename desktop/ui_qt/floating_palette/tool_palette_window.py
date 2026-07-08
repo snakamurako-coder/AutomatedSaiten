@@ -435,8 +435,11 @@ class ToolPaletteWindow(QWidget):
         if self._input_mode != MODE_PHRASE:
             self._phrase_lay.setStretchFactor(self._phrase_panel, 1)
             return
-        compact = self._phrase_format_scroll.isVisible() or self._view_mode == VIEW_SIMPLE
-        self._phrase_lay.setStretchFactor(self._phrase_panel, 0 if compact else 1)
+        # 簡易は内容高に合わせる。詳細はカード固定高のためパネルを伸ばし、余白は一覧末尾へ。
+        if self._phrase_format_scroll.isVisible() or self._view_mode == VIEW_SIMPLE:
+            self._phrase_lay.setStretchFactor(self._phrase_panel, 0)
+        else:
+            self._phrase_lay.setStretchFactor(self._phrase_panel, 1)
 
     def _content_width_hint(self) -> int:
         margins = self.layout().contentsMargins()

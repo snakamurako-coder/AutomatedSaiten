@@ -42,9 +42,11 @@ from ui_qt.style import COLORS
 
 _DETAIL_PLACEMENT_BTN_WIDTH = 40
 _DETAIL_TEXT_MIN_WIDTH = 80
-_DETAIL_BODY_MIN_HEIGHT = 60  # 2倍指定を戻す（120 → 60）
-_DETAIL_CARD_MIN_HEIGHT = 72  # 上下余白込み
+# 高さ調整はカード本体のみ。ウィンドウ伸長の余白はカード間に入れない。
+_DETAIL_BODY_MIN_HEIGHT = 120
+_DETAIL_CARD_MIN_HEIGHT = 132
 _DETAIL_CARD_SPACING = 8
+_DETAIL_VIEWPORT_MAX_CARDS = 3
 _DETAIL_ACTION_BTN_HEIGHT = 22
 _DETAIL_FONT_PX = 12
 _DETAIL_LINE_HEIGHT_PX = 16
@@ -100,10 +102,11 @@ class PhrasePalettePanel(QWidget):
         self._scroll.setFrameShape(QFrame.NoFrame)
         self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
         self._scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        self._scroll.setAlignment(Qt.AlignmentFlag.AlignTop)
         self._scroll.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self._scroll_host = QWidget()
         self._scroll_host.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
         self._detailed_lay = QVBoxLayout(self._scroll_host)
         self._detailed_lay.setContentsMargins(0, 0, 0, 0)
@@ -181,7 +184,7 @@ class PhrasePalettePanel(QWidget):
         elif self._view_mode == VIEW_SIMPLE:
             blocks.append(self._simple_list_height())
         elif self._scroll.isVisible():
-            blocks.append(min(320, self._scroll.sizeHint().height()))
+            blocks.append(self._detailed_viewport_height())
         if self._copy_btn.isVisible():
             blocks.append(self._copy_btn.sizeHint().height())
         total = margins.top() + margins.bottom() + sum(blocks)
@@ -198,6 +201,24 @@ class PhrasePalettePanel(QWidget):
         count = len(self._phrase_btns)
         gap = self._simple_lay.spacing()
         return count * btn_h + gap * max(0, count - 1)
+
+    def _detailed_list_height(self) -> int:
+        count = len(self._detail_rows)
+        if count <= 0:
+            return _DETAIL_CARD_MIN_HEIGHT
+        return (
+            count * _DETAIL_CARD_MIN_HEIGHT
+            + _DETAIL_CARD_SPACING * max(0, count - 1)
+        )
+
+    def _detailed_viewport_height(self) -> int:
+        """ウィンドウ側はカード数に応じて拡げ、超過分だけスクロール."""
+        full = self._detailed_list_height()
+        max_h = (
+            _DETAIL_VIEWPORT_MAX_CARDS * _DETAIL_CARD_MIN_HEIGHT
+            + _DETAIL_CARD_SPACING * max(0, _DETAIL_VIEWPORT_MAX_CARDS - 1)
+        )
+        return max(_DETAIL_CARD_MIN_HEIGHT, min(full, max_h))
 
     def content_min_width(self) -> int:
         self._sync_copy_btn_width()
@@ -340,13 +361,16 @@ class PhrasePalettePanel(QWidget):
                 self._simple_lay.insertWidget(self._simple_lay.count() - 1, btn)
         else:
             self._clear_layout_widgets(self._detailed_lay)
+            self._detailed_lay.setAlignment(Qt.AlignmentFlag.AlignTop)
             self._detailed_lay.addStretch(1)
             self._scroll_host.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
             )
             for tpl in templates:
                 frame = self._make_detailed_row(tpl)
                 self._detailed_lay.insertWidget(self._detailed_lay.count() - 1, frame)
+            # カード高さは固定。余白は末尾 stretch だけが吸収する。
+            self._scroll_host.adjustSize()
 
         self.set_pending_phrase(self._pending_id)
         self.updateGeometry()
