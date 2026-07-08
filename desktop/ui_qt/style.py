@@ -402,9 +402,45 @@ QFrame#PhraseDetailRow[editing="true"] {{
     border: 1px solid {COLORS["accent"]};
     background: {COLORS["accent_soft"]};
 }}
-QLabel#PhraseDetailTitle {{
+QPushButton#PhraseSimpleBtn {{
+    background: {COLORS["bg"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 11px;
+    text-align: left;
+    min-height: 0;
+}}
+QPushButton#PhraseSimpleBtn:hover {{
+    border-color: {COLORS["border_strong"]};
+}}
+QPushButton#PhraseSimpleBtn:checked {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+}}
+QPushButton#PhrasePlacementBtn {{
+    background: {COLORS["bg"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    padding: 4px 2px;
+    font-size: 11px;
+    min-height: 0;
+}}
+QPushButton#PhrasePlacementBtn:hover {{
+    border-color: {COLORS["border_strong"]};
+}}
+QPushButton#PhrasePlacementBtn:checked {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+}}
+QLabel#PhraseDetailBody {{
     font-size: 12px;
-    font-weight: 600;
+}}
+QLabel#PhraseDetailMeta {{
+    font-size: 10px;
+    color: {COLORS["text_muted"]};
 }}
 QFrame#PhrasePreviewCanvas {{
     background: {COLORS["bg"]};

@@ -9,7 +9,6 @@ from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QPushButton,
@@ -23,14 +22,17 @@ from ui_qt.floating_palette.palette_prefs import VIEW_DETAILED, VIEW_SIMPLE
 from ui_qt.floating_palette.phrase_template_prefs import (
     PHRASE_SIMPLE_COUNT,
     delete_phrase_template,
+    phrase_detail_body_text,
     phrase_display_label,
     phrase_has_content,
     phrase_preview_text,
+    phrase_simple_button_label,
+    phrase_style_summary,
     phrase_templates_mru,
 )
 from ui_qt.style import COLORS
 
-_DETAIL_SELECT_MAX_WIDTH = 72
+_DETAIL_PLACEMENT_BTN_WIDTH = 40
 _DETAIL_TEXT_MIN_WIDTH = 80
 
 
@@ -67,9 +69,9 @@ class PhrasePalettePanel(QWidget):
         root.addWidget(self._pending_label)
 
         self._simple_frame = QFrame()
-        self._simple_grid = QGridLayout(self._simple_frame)
-        self._simple_grid.setContentsMargins(0, 0, 0, 0)
-        self._simple_grid.setSpacing(6)
+        self._simple_lay = QVBoxLayout(self._simple_frame)
+        self._simple_lay.setContentsMargins(0, 0, 0, 0)
+        self._simple_lay.setSpacing(4)
         root.addWidget(self._simple_frame)
 
         self._scroll = QScrollArea()
@@ -139,14 +141,18 @@ class PhrasePalettePanel(QWidget):
         if self._view_mode == VIEW_DETAILED:
             row_w = (
                 16
-                + _DETAIL_SELECT_MAX_WIDTH
+                + _DETAIL_PLACEMENT_BTN_WIDTH
                 + 8
                 + _DETAIL_TEXT_MIN_WIDTH
                 + 8
                 + action_w
             )
             return max(220, copy_w, row_w)
-        return max(220, copy_w)
+        simple_w = max(
+            (self._phrase_btns[pid].sizeHint().width() for pid in self._phrase_btns),
+            default=0,
+        )
+        return max(220, copy_w, simple_w)
 
     def set_compact_edit_mode(self, active: bool) -> None:
         self._compact_edit = bool(active)
@@ -221,7 +227,7 @@ class PhrasePalettePanel(QWidget):
                 return tpl
         return None
 
-    def _clear_layout_widgets(self, layout: QGridLayout | QVBoxLayout) -> None:
+    def _clear_layout_widgets(self, layout: QVBoxLayout) -> None:
         while layout.count():
             item = layout.takeAt(0)
             w = item.widget()
@@ -243,15 +249,14 @@ class PhrasePalettePanel(QWidget):
             return
 
         if self._view_mode == VIEW_SIMPLE:
-            self._clear_layout_widgets(self._simple_grid)
+            self._clear_layout_widgets(self._simple_lay)
             self._scroll_host.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Ignored
             )
             simple_items = templates[:PHRASE_SIMPLE_COUNT]
-            for i, tpl in enumerate(simple_items):
-                btn = self._make_select_btn(tpl, compact=True)
-                row, col = divmod(i, 2)
-                self._simple_grid.addWidget(btn, row, col)
+            for tpl in simple_items:
+                btn = self._make_simple_select_btn(tpl)
+                self._simple_lay.addWidget(btn)
         else:
             self._clear_layout_widgets(self._detailed_lay)
             self._detailed_lay.addStretch()
@@ -267,18 +272,17 @@ class PhrasePalettePanel(QWidget):
         self.layout_hint_changed.emit()
 
     def _fill_edit_single_card(self, tpl: dict[str, Any]) -> None:
-        title = QLabel(phrase_display_label(tpl, compact=False))
-        title.setObjectName("PhraseDetailTitle")
-        if not phrase_has_content(tpl):
-            title.setStyleSheet(f"color: {COLORS['danger']}; font-weight: 600;")
-        preview = phrase_preview_text(tpl)
-        body = QLabel(preview if preview else "（文言未登録）")
-        body.setObjectName("PaletteHintLabel")
+        body = QLabel(phrase_detail_body_text(tpl))
+        body.setObjectName("PhraseDetailBody")
         body.setWordWrap(True)
-        if not preview:
+        body.setAlignment(Qt.AlignmentFlag.AlignTop)
+        if not phrase_has_content(tpl):
             body.setStyleSheet(f"color: {COLORS['text_muted']};")
-        self._edit_single_lay.addWidget(title)
+        meta = QLabel(phrase_style_summary(tpl))
+        meta.setObjectName("PhraseDetailMeta")
         self._edit_single_lay.addWidget(body)
+        if phrase_has_content(tpl):
+            self._edit_single_lay.addWidget(meta)
 
     def _style_select_btn(self, btn: QPushButton, tpl: dict[str, Any]) -> None:
         if not phrase_has_content(tpl):
@@ -286,20 +290,48 @@ class PhrasePalettePanel(QWidget):
         else:
             btn.setStyleSheet("")
 
-    def _make_select_btn(self, tpl: dict[str, Any], *, compact: bool) -> QPushButton:
+    def _make_simple_select_btn(self, tpl: dict[str, Any]) -> QPushButton:
         pid = str(tpl.get("id") or "")
-        display = phrase_display_label(tpl, compact=compact)
+        display = phrase_simple_button_label(tpl)
         btn = QPushButton(display)
-        btn.setObjectName("ToolSegmentBtn")
+        btn.setObjectName("PhraseSimpleBtn")
         btn.setCheckable(True)
-        btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        btn.setSizePolicy(
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+        )
         preview = phrase_preview_text(tpl)
-        btn.setToolTip(preview or display)
+        btn.setToolTip(
+            f"{preview or display}\n{phrase_style_summary(tpl)}"
+            if phrase_has_content(tpl)
+            else display
+        )
         self._style_select_btn(btn, tpl)
         btn.clicked.connect(lambda _c=False, p=pid: self._on_phrase_clicked(p))
         self._select_group.addButton(btn)
         self._phrase_btns[pid] = btn
         return btn
+
+    def _make_placement_btn(self, tpl: dict[str, Any]) -> QPushButton:
+        pid = str(tpl.get("id") or "")
+        btn = QPushButton("配置")
+        btn.setObjectName("PhrasePlacementBtn")
+        btn.setCheckable(True)
+        btn.setFixedWidth(_DETAIL_PLACEMENT_BTN_WIDTH)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        preview = phrase_preview_text(tpl)
+        btn.setToolTip(
+            f"配置を有効化\n{preview or '（未登録）'}\n{phrase_style_summary(tpl)}"
+        )
+        self._style_select_btn(btn, tpl)
+        btn.clicked.connect(lambda _c=False, p=pid: self._on_phrase_clicked(p))
+        self._select_group.addButton(btn)
+        self._phrase_btns[pid] = btn
+        return btn
+
+    def _make_select_btn(self, tpl: dict[str, Any], *, compact: bool) -> QPushButton:
+        if compact:
+            return self._make_simple_select_btn(tpl)
+        return self._make_placement_btn(tpl)
 
     def _make_detailed_row(self, tpl: dict[str, Any]) -> QFrame:
         pid = str(tpl.get("id") or "")
@@ -307,30 +339,25 @@ class PhrasePalettePanel(QWidget):
         frame.setObjectName("PhraseDetailRow")
         frame.setProperty("editing", pid == self._editing_id)
         lay = QHBoxLayout(frame)
-        lay.setContentsMargins(8, 8, 8, 8)
+        lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(8)
 
-        select_btn = self._make_select_btn(tpl, compact=False)
-        select_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        select_btn.setMaximumWidth(_DETAIL_SELECT_MAX_WIDTH)
+        select_btn = self._make_placement_btn(tpl)
         lay.addWidget(select_btn, 0)
 
         text_col = QVBoxLayout()
-        text_col.setSpacing(4)
-        title = QLabel(phrase_display_label(tpl, compact=False))
-        title.setObjectName("PhraseDetailTitle")
-        title.setWordWrap(True)
-        if not phrase_has_content(tpl):
-            title.setStyleSheet(f"color: {COLORS['danger']}; font-weight: 600;")
-        preview = phrase_preview_text(tpl)
-        body = QLabel(preview if preview else "（文言未登録）")
-        body.setObjectName("PaletteHintLabel")
+        text_col.setSpacing(2)
+        body = QLabel(phrase_detail_body_text(tpl))
+        body.setObjectName("PhraseDetailBody")
         body.setWordWrap(True)
         body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        if not preview:
+        if not phrase_has_content(tpl):
             body.setStyleSheet(f"color: {COLORS['text_muted']};")
-        text_col.addWidget(title)
         text_col.addWidget(body)
+        if phrase_has_content(tpl):
+            meta = QLabel(phrase_style_summary(tpl))
+            meta.setObjectName("PhraseDetailMeta")
+            text_col.addWidget(meta)
         text_host = QWidget()
         text_host.setMinimumWidth(_DETAIL_TEXT_MIN_WIDTH)
         text_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)

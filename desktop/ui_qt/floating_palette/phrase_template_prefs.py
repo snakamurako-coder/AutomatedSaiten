@@ -19,6 +19,7 @@ from ui_qt.floating_palette.text_rich import (
 
 PHRASE_SIMPLE_COUNT = 6
 PHRASE_UNREGISTERED_LABEL = "（未登録）"
+PHRASE_SIMPLE_TEXT_WIDTH = 30  # 全角15文字相当（半角30文字）
 
 _DEFAULT_PHRASE_TEXTS: tuple[str, ...] = (
     "〇",
@@ -159,15 +160,68 @@ def phrase_has_content(tpl: dict[str, Any]) -> bool:
     return bool(stripped)
 
 
+def _display_width(text: str) -> int:
+    width = 0
+    for ch in text:
+        width += 1 if ord(ch) < 128 else 2
+    return width
+
+
+def truncate_display_width(text: str, max_width: int) -> str:
+    if max_width <= 0:
+        return ""
+    if _display_width(text) <= max_width:
+        return text
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        ch_w = 1 if ord(ch) < 128 else 2
+        if used + ch_w > max_width - 2:
+            break
+        out.append(ch)
+        used += ch_w
+    return "".join(out) + "…"
+
+
+def phrase_text_one_line(tpl: dict[str, Any]) -> str:
+    text = phrase_preview_text(tpl)
+    return re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
+
+
+def phrase_style_summary(tpl: dict[str, Any]) -> str:
+    style = resolve_text_style(tpl.get("style") or {})
+    font_size = int(style.get("fontSize") or 14)
+    line_spacing = int(style.get("lineSpacing") or font_size)
+    newline_count = str(tpl.get("text") or "").count("\n")
+    parts = [f"{font_size}pt", f"行{line_spacing}"]
+    if newline_count > 0:
+        parts.append(f"改{newline_count}")
+    return "·".join(parts)
+
+
+def phrase_simple_button_label(tpl: dict[str, Any]) -> str:
+    if not phrase_has_content(tpl):
+        return PHRASE_UNREGISTERED_LABEL
+    text = truncate_display_width(
+        phrase_text_one_line(tpl), PHRASE_SIMPLE_TEXT_WIDTH
+    )
+    return f"{text}  {phrase_style_summary(tpl)}"
+
+
+def phrase_detail_body_text(tpl: dict[str, Any]) -> str:
+    if not phrase_has_content(tpl):
+        return "（文言未登録）"
+    return phrase_preview_text(tpl)
+
+
 def phrase_display_label(tpl: dict[str, Any], *, compact: bool = False) -> str:
     if not phrase_has_content(tpl):
         return PHRASE_UNREGISTERED_LABEL
+    if compact:
+        return phrase_simple_button_label(tpl)
     label = str(tpl.get("label") or "").strip()
     text = str(tpl.get("text") or "").strip()
-    display = label or text.replace("\n", " ")[:40] or PHRASE_UNREGISTERED_LABEL
-    if compact and len(display) > 8:
-        return display[:7] + "…"
-    return display
+    return label or text.replace("\n", " ")[:40] or PHRASE_UNREGISTERED_LABEL
 
 
 def phrase_preview_text(tpl: dict[str, Any]) -> str:
