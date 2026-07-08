@@ -187,6 +187,7 @@ class FormatPalettePanel(QWidget):
         align_lay.addWidget(self._detail_format_frame)
         self._detail_format_frame.hide()
         root.addWidget(align_frame)
+        root.addSpacing(max(0, self._DETAIL_VERTICAL_INTERVAL - root.spacing()))
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(2)
