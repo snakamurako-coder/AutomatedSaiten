@@ -557,6 +557,25 @@ class TextBoxWidget(QFrame):
         plain = self._editor.toPlainText()
         html = self._editor.toHtml()
         mark_box_html(self._box, html, plain)
+        first_char_color = self._first_char_color_hex()
+        if first_char_color:
+            style = dict(self._box.get("style") or {})
+            if str(style.get("textColor") or "").lower() != first_char_color.lower():
+                style["textColor"] = first_char_color
+                self._box["style"] = resolve_text_style(style)
+
+    def _first_char_color_hex(self) -> str | None:
+        cursor = QTextCursor(self._editor.document())
+        cursor.movePosition(QTextCursor.MoveOperation.Start)
+        if not cursor.movePosition(
+            QTextCursor.MoveOperation.NextCharacter,
+            QTextCursor.MoveMode.KeepAnchor,
+        ):
+            return None
+        color = cursor.charFormat().foreground().color()
+        if not color.isValid():
+            return None
+        return color.name(QColor.NameFormat.HexRgb)
 
     def _update_display_content(self) -> None:
         html = box_text_html(self._box, self._style())
