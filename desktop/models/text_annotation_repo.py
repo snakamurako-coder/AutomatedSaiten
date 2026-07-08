@@ -27,6 +27,8 @@ DEFAULT_TEXT_STYLE: dict[str, Any] = {
     "fillAlpha": 0.0,
     "borderWidth": 0,
     "borderAlpha": 0.0,
+    "textAlignH": "left",
+    "textAlignV": "top",
 }
 
 TEXT_STYLE_TEMPLATE_A: dict[str, Any] = {
@@ -83,6 +85,14 @@ def resolve_text_style(style: dict[str, Any] | None) -> dict[str, Any]:
         merged["borderWidth"] = 0
         merged["borderAlpha"] = 0.0
         merged["fillAlpha"] = 0.2
+    h = str(merged.get("textAlignH") or "left").lower()
+    if h not in ("left", "center", "right"):
+        h = "left"
+    merged["textAlignH"] = h
+    v = str(merged.get("textAlignV") or "top").lower()
+    if v not in ("top", "center", "bottom"):
+        v = "top"
+    merged["textAlignV"] = v
     return merged
 
 

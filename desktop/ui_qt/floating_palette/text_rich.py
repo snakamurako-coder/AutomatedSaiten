@@ -9,6 +9,52 @@ from typing import Any
 TEXT_FORMAT_PLAIN = "plain"
 TEXT_FORMAT_HTML = "html"
 
+TEXT_ALIGN_H_VALUES = ("left", "center", "right")
+TEXT_ALIGN_V_VALUES = ("top", "center", "bottom")
+
+
+def normalize_text_align(style: dict[str, Any] | None) -> tuple[str, str]:
+    st = style or {}
+    h = str(st.get("textAlignH") or "left").lower()
+    v = str(st.get("textAlignV") or "top").lower()
+    if h not in TEXT_ALIGN_H_VALUES:
+        h = "left"
+    if v not in TEXT_ALIGN_V_VALUES:
+        v = "top"
+    return h, v
+
+
+def css_text_align(style: dict[str, Any] | None) -> str:
+    return normalize_text_align(style)[0]
+
+
+def qt_horizontal_alignment(style: dict[str, Any] | None) -> int:
+    from PySide6.QtCore import Qt
+
+    h, _ = normalize_text_align(style)
+    return {
+        "left": Qt.AlignmentFlag.AlignLeft,
+        "center": Qt.AlignmentFlag.AlignHCenter,
+        "right": Qt.AlignmentFlag.AlignRight,
+    }[h]
+
+
+def qt_label_alignment(style: dict[str, Any] | None) -> int:
+    from PySide6.QtCore import Qt
+
+    h, v = normalize_text_align(style)
+    h_align = {
+        "left": Qt.AlignmentFlag.AlignLeft,
+        "center": Qt.AlignmentFlag.AlignHCenter,
+        "right": Qt.AlignmentFlag.AlignRight,
+    }[h]
+    v_align = {
+        "top": Qt.AlignmentFlag.AlignTop,
+        "center": Qt.AlignmentFlag.AlignVCenter,
+        "bottom": Qt.AlignmentFlag.AlignBottom,
+    }[v]
+    return h_align | v_align
+
 
 def plain_to_html(text: str, style: dict[str, Any] | None) -> str:
     st = style or {}
@@ -22,6 +68,7 @@ def plain_to_html(text: str, style: dict[str, Any] | None) -> str:
         f"color:{tc}",
         f"font-size:{fs}pt",
         f"line-height:{ls}pt",
+        f"text-align:{css_text_align(st)}",
         "font-family:Meiryo, sans-serif",
     ]
     if str(st.get("fontWeight") or "") == "bold":
@@ -80,15 +127,39 @@ def html_body_for_label(full_html: str) -> str:
     return raw
 
 
-def html_for_pdf_box(full_html: str, default_style: dict[str, Any]) -> str:
+def html_for_pdf_box(
+    full_html: str,
+    default_style: dict[str, Any],
+    *,
+    box_height: float | None = None,
+) -> str:
     """PyMuPDF insert_htmlbox 向けの簡易 HTML。"""
     tc = str(default_style.get("textColor") or "#111827")
     fs = float(default_style.get("fontSize") or 14)
     ls = float(default_style.get("lineSpacing") or fs)
+    align = css_text_align(default_style)
+    _, v_align = normalize_text_align(default_style)
     body = html_body_for_label(full_html)
     if not body:
         return ""
-    return (
-        f'<div style="font-family: Meiryo, sans-serif; color: {tc}; '
-        f'font-size: {fs}pt; line-height: {ls}pt; margin: 0; padding: 0;">{body}</div>'
-    )
+    outer_styles = [
+        "font-family: Meiryo, sans-serif",
+        f"color: {tc}",
+        f"font-size: {fs}pt",
+        f"line-height: {ls}pt",
+        f"text-align: {align}",
+        "margin: 0",
+        "padding: 0",
+    ]
+    if box_height and box_height > 0:
+        outer_styles.append(f"min-height: {box_height}pt")
+        if v_align == "center":
+            outer_styles.append("display: flex")
+            outer_styles.append("flex-direction: column")
+            outer_styles.append("justify-content: center")
+        elif v_align == "bottom":
+            outer_styles.append("display: flex")
+            outer_styles.append("flex-direction: column")
+            outer_styles.append("justify-content: flex-end")
+    style_attr = "; ".join(outer_styles)
+    return f'<div style="{style_attr};">{body}</div>'

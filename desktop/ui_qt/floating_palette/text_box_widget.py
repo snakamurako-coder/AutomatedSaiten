@@ -31,6 +31,9 @@ from ui_qt.floating_palette.text_rich import (
     box_text_html,
     html_body_for_label,
     mark_box_html,
+    normalize_text_align,
+    qt_horizontal_alignment,
+    qt_label_alignment,
     sync_box_html_from_style,
 )
 
@@ -484,6 +487,7 @@ class TextBoxWidget(QFrame):
         bh = max(16, self.height() - _HANDLE_OVERHANG * 2)
         self._body.setGeometry(_HANDLE_OVERHANG, _HANDLE_OVERHANG, bw, bh)
         self._update_handles()
+        self._apply_vertical_text_inset()
 
     def _content_font(self) -> QFont:
         st = self._style()
@@ -577,13 +581,43 @@ class TextBoxWidget(QFrame):
             "border: none; padding: 0px; margin: 0px; }"
         )
         self._display_label.setStyleSheet(label_css)
-        self._display_label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
-        option = self._editor.document().defaultTextOption()
-        option.setAlignment(Qt.AlignmentFlag.AlignLeft)
-        self._editor.document().setDefaultTextOption(option)
+        self._apply_text_alignment()
         if not self._editing:
             self._update_display_content()
         self._update_handles()
+
+    def _apply_text_alignment(self) -> None:
+        st = self._style()
+        qt_align = qt_label_alignment(st)
+        self._display_label.setAlignment(qt_align)
+        h_align = qt_horizontal_alignment(st)
+        option = self._editor.document().defaultTextOption()
+        option.setAlignment(h_align)
+        self._editor.document().setDefaultTextOption(option)
+        doc = self._editor.document()
+        block = doc.firstBlock()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            block_fmt = cursor.blockFormat()
+            block_fmt.setAlignment(h_align)
+            cursor.mergeBlockFormat(block_fmt)
+            block = block.next()
+        self._apply_vertical_text_inset()
+
+    def _apply_vertical_text_inset(self) -> None:
+        bw = max(1, self._body.width())
+        self._editor.document().setTextWidth(max(1.0, float(bw)))
+        _, v = normalize_text_align(self._style())
+        content_h = self._editor.document().size().height()
+        body_h = max(1.0, float(self._body.height()))
+        free = max(0.0, body_h - content_h)
+        if v == "center":
+            top = int(free / 2)
+        elif v == "bottom":
+            top = int(free)
+        else:
+            top = 0
+        self._editor.setViewportMargins(0, top, 0, 0)
 
     def _line_spacing_pt(self) -> float:
         st = self._style()
@@ -610,6 +644,7 @@ class TextBoxWidget(QFrame):
                 block = block.next()
         finally:
             self._editor.blockSignals(False)
+        self._apply_text_alignment()
         self._sync_editor_to_box()
         if not self._editing:
             self._update_display_content()
@@ -622,6 +657,7 @@ class TextBoxWidget(QFrame):
     def _on_text_changed(self) -> None:
         self._sync_editor_to_box()
         self._update_display_content()
+        self._apply_vertical_text_inset()
         self.changed.emit()
 
     def _begin_pointer(self, global_pos: QPoint) -> None:

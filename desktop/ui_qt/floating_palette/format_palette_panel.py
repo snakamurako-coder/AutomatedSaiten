@@ -24,6 +24,7 @@ from models.text_annotation_repo import (
     TEXT_STYLE_TEMPLATES,
     resolve_text_style,
 )
+from ui_qt.floating_palette.text_rich import normalize_text_align
 from ui_qt.style import COLORS
 
 
@@ -98,6 +99,46 @@ class FormatPalettePanel(QWidget):
         metrics_row.addStretch()
         root.addLayout(metrics_row)
 
+        align_frame = QFrame()
+        align_lay = QVBoxLayout(align_frame)
+        align_lay.setContentsMargins(0, 0, 0, 0)
+        align_lay.setSpacing(4)
+        h_align_row = QHBoxLayout()
+        h_align_row.setSpacing(6)
+        h_align_lbl = QLabel("横")
+        h_align_lbl.setFixedWidth(48)
+        h_align_row.addWidget(h_align_lbl)
+        self._align_h_group = QButtonGroup(self)
+        self._align_h_btns: dict[str, QPushButton] = {}
+        for key, label in (("left", "左"), ("center", "中"), ("right", "右")):
+            btn = QPushButton(label)
+            btn.setObjectName("ToolSegmentBtn")
+            btn.setCheckable(True)
+            btn.setToolTip({"left": "左寄せ", "center": "中央", "right": "右寄せ"}[key])
+            btn.clicked.connect(lambda _c=False, k=key: self._set_align_h(k))
+            self._align_h_group.addButton(btn)
+            h_align_row.addWidget(btn, 1)
+            self._align_h_btns[key] = btn
+        align_lay.addLayout(h_align_row)
+        v_align_row = QHBoxLayout()
+        v_align_row.setSpacing(6)
+        v_align_lbl = QLabel("縦")
+        v_align_lbl.setFixedWidth(48)
+        v_align_row.addWidget(v_align_lbl)
+        self._align_v_group = QButtonGroup(self)
+        self._align_v_btns: dict[str, QPushButton] = {}
+        for key, label in (("top", "上"), ("center", "中"), ("bottom", "下")):
+            btn = QPushButton(label)
+            btn.setObjectName("ToolSegmentBtn")
+            btn.setCheckable(True)
+            btn.setToolTip({"top": "上寄せ", "center": "中央", "bottom": "下寄せ"}[key])
+            btn.clicked.connect(lambda _c=False, k=key: self._set_align_v(k))
+            self._align_v_group.addButton(btn)
+            v_align_row.addWidget(btn, 1)
+            self._align_v_btns[key] = btn
+        align_lay.addLayout(v_align_row)
+        root.addWidget(align_frame)
+
         self._detail_format_frame = QFrame()
         detail_lay = QHBoxLayout(self._detail_format_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
@@ -171,10 +212,10 @@ class FormatPalettePanel(QWidget):
         )
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(220, 220)
+        return QSize(220, 260)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        return QSize(260, 300)
+        return QSize(260, 340)
 
     def _make_action_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)
@@ -308,6 +349,31 @@ class FormatPalettePanel(QWidget):
             return
         self.char_format_changed.emit({key: True})
 
+    def _set_align_h(self, key: str) -> None:
+        if self._loading:
+            return
+        self._style["textAlignH"] = key
+        self._sync_align_ui()
+        self._emit_style()
+
+    def _set_align_v(self, key: str) -> None:
+        if self._loading:
+            return
+        self._style["textAlignV"] = key
+        self._sync_align_ui()
+        self._emit_style()
+
+    def _sync_align_ui(self) -> None:
+        h, v = normalize_text_align(self._style)
+        for key, btn in self._align_h_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(key == h)
+            btn.blockSignals(False)
+        for key, btn in self._align_v_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(key == v)
+            btn.blockSignals(False)
+
     def sync_char_format(self, state: dict[str, Any]) -> None:
         self._sync_char_format_ui(state)
 
@@ -369,6 +435,7 @@ class FormatPalettePanel(QWidget):
                 "underline": False,
             }
         )
+        self._sync_align_ui()
         self._loading = False
 
     def _emit_style(self) -> None:

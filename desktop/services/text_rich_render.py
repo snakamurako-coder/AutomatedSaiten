@@ -7,7 +7,11 @@ from typing import Any
 from PIL import Image
 
 from models.text_annotation_repo import resolve_text_style
-from ui_qt.floating_palette.text_rich import box_text_html, html_for_pdf_box
+from ui_qt.floating_palette.text_rich import (
+    box_text_html,
+    html_for_pdf_box,
+    normalize_text_align,
+)
 
 
 def render_annotation_html_to_pil(
@@ -41,11 +45,19 @@ def render_annotation_html_to_pil(
     canvas_h = max(1, int(size[1]))
     layer = Image.new("RGBA", (canvas_w, canvas_h), (0, 0, 0, 0))
 
-    doc_h = max(h, doc.size().height())
-    qimg = QImage(int(w), int(doc_h), QImage.Format.Format_ARGB32_Premultiplied)
+    doc_h = doc.size().height()
+    _, v_align = normalize_text_align(st)
+    y_off = 0.0
+    if v_align == "center":
+        y_off = max(0.0, (h - doc_h) / 2)
+    elif v_align == "bottom":
+        y_off = max(0.0, h - doc_h)
+
+    qimg = QImage(int(w), int(h), QImage.Format.Format_ARGB32_Premultiplied)
     qimg.fill(Qt.GlobalColor.transparent)
     painter = QPainter(qimg)
     try:
+        painter.translate(0, y_off)
         doc.drawContents(painter)
     finally:
         painter.end()
@@ -82,7 +94,7 @@ def draw_annotation_pdf(page, box: dict[str, Any]) -> None:
         )
         shape.commit()
 
-    html = html_for_pdf_box(box_text_html(box, st), st)
+    html = html_for_pdf_box(box_text_html(box, st), st, box_height=h)
     if not html.strip():
         return
     try:
@@ -93,11 +105,17 @@ def draw_annotation_pdf(page, box: dict[str, Any]) -> None:
             return
         font_path = _resolve_font_file(preferred=str(st.get("fontFamily") or "") or None)
         fs = max(8.0, float(st.get("fontSize") or 14))
+        h_align, _ = normalize_text_align(st)
+        align_map = {
+            "left": fitz.TEXT_ALIGN_LEFT,
+            "center": fitz.TEXT_ALIGN_CENTER,
+            "right": fitz.TEXT_ALIGN_RIGHT,
+        }
         page.insert_textbox(
             rect,
             text,
             fontfile=font_path,
             fontsize=fs,
             color=_hex_to_rgb01(st.get("textColor") or "#111827"),
-            align=fitz.TEXT_ALIGN_LEFT,
+            align=align_map.get(h_align, fitz.TEXT_ALIGN_LEFT),
         )
