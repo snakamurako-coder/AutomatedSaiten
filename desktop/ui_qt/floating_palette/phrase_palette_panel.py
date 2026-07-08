@@ -43,13 +43,14 @@ from ui_qt.style import COLORS
 _DETAIL_PLACEMENT_BTN_WIDTH = 40
 _DETAIL_TEXT_MIN_WIDTH = 80
 # 高さ調整はカード本体のみ。ウィンドウ伸長の余白はカード間に入れない。
-_DETAIL_BODY_MIN_HEIGHT = 120
-_DETAIL_CARD_MIN_HEIGHT = 132
+_DETAIL_BODY_MIN_HEIGHT = 60
+_DETAIL_CARD_MIN_HEIGHT = 72
+_DETAIL_PLACEMENT_BTN_HEIGHT = 60
 _DETAIL_CARD_SPACING = 8
-_DETAIL_VIEWPORT_MAX_CARDS = 3
+_DETAIL_VIEWPORT_MAX_CARDS = 4
 _DETAIL_ACTION_BTN_HEIGHT = 22
-_DETAIL_FONT_PX = 12
-_DETAIL_LINE_HEIGHT_PX = 16
+_DETAIL_FONT_PX = 11
+_DETAIL_LINE_HEIGHT_PX = 15
 
 
 def _detail_action_btn_width(font) -> int:
@@ -128,6 +129,7 @@ class PhrasePalettePanel(QWidget):
 
         action_row = QHBoxLayout()
         action_row.setSpacing(4)
+        action_row.setContentsMargins(0, 0, 0, 0)
         self._copy_btn = QPushButton("テキストボックスからコピー")
         self._copy_btn.setObjectName("PhraseCopyBtn")
         self._copy_btn.setToolTip(
@@ -138,6 +140,7 @@ class PhrasePalettePanel(QWidget):
         self._copy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self._copy_btn)
         action_row.addStretch()
+        # 下余白は最小固定。ウィンドウ伸長で増えないよう末尾 stretch は付けない。
         root.addLayout(action_row)
 
         self._select_group = QButtonGroup(self)
@@ -537,7 +540,7 @@ class PhrasePalettePanel(QWidget):
         btn.setObjectName("PhrasePlacementBtn")
         btn.setCheckable(True)
         btn.setFixedWidth(_DETAIL_PLACEMENT_BTN_WIDTH)
-        btn.setFixedHeight(_DETAIL_BODY_MIN_HEIGHT)
+        btn.setFixedHeight(_DETAIL_PLACEMENT_BTN_HEIGHT)
         btn.setFont(self._palette_placement_btn_font())
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         preview = phrase_preview_text(tpl)
@@ -578,6 +581,7 @@ class PhrasePalettePanel(QWidget):
         lay.setAlignment(Qt.AlignmentFlag.AlignVCenter)
 
         select_btn = self._make_placement_btn(tpl)
+        # カード内で選択ボタンを高さ中央に配置
         lay.addWidget(select_btn, 0, Qt.AlignmentFlag.AlignVCenter)
 
         body = self._make_rich_label(tpl, one_line=False)
@@ -589,6 +593,7 @@ class PhrasePalettePanel(QWidget):
         action_row = QHBoxLayout()
         action_row.setSpacing(4)
         action_row.setContentsMargins(0, 0, 0, 0)
+        action_row.setAlignment(Qt.AlignmentFlag.AlignVCenter)
         edit_btn = self._make_action_btn("編集")
         edit_btn.setToolTip("書式・文言をテキストボックスと同様に編集")
         edit_btn.clicked.connect(lambda _c=False, p=pid: self.phrase_edit_requested.emit(p))

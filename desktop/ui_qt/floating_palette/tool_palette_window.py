@@ -71,10 +71,16 @@ class ToolPaletteWindow(QWidget):
         self.setMinimumSize(_PALETTE_MIN_WIDTH, _PALETTE_MIN_HEIGHT)
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(6, 6, 6, 6)
-        root.setSpacing(4)
+        # 見出し・タブ周囲の余白は最小固定。縦伸長でも増えない。
+        root.setContentsMargins(6, 4, 6, 4)
+        root.setSpacing(2)
 
-        header_row = QHBoxLayout()
+        self._header_wrap = QWidget()
+        self._header_wrap.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        header_row = QHBoxLayout(self._header_wrap)
+        header_row.setContentsMargins(0, 0, 0, 0)
         header_row.setSpacing(4)
         self._title = QLabel("描画")
         self._title.setObjectName("FloatingPaletteTitle")
@@ -103,9 +109,14 @@ class ToolPaletteWindow(QWidget):
         self._view_btn.clicked.connect(self._toggle_view)
         self._resize_view_btn()
         header_row.addWidget(self._view_btn)
-        root.addLayout(header_row)
+        root.addWidget(self._header_wrap, 0)
 
-        mode_row = QHBoxLayout()
+        self._mode_wrap = QWidget()
+        self._mode_wrap.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        mode_row = QHBoxLayout(self._mode_wrap)
+        mode_row.setContentsMargins(0, 0, 0, 0)
         mode_row.setSpacing(2)
         self._mode_group = QButtonGroup(self)
         self._mode_draw_btn = self._make_tab_btn("描画")
@@ -122,7 +133,7 @@ class ToolPaletteWindow(QWidget):
         self._mode_phrase_btn.toggled.connect(
             lambda c: c and self._switch_input_mode(MODE_PHRASE)
         )
-        root.addLayout(mode_row)
+        root.addWidget(self._mode_wrap, 0)
 
         self._content_host = QWidget()
         content_lay = QVBoxLayout(self._content_host)
@@ -320,6 +331,7 @@ class ToolPaletteWindow(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self._content_scroll.setWidget(self._content_host)
+        # stretch=1: 縦伸長の余白は本文領域のみ。見出し/タブ周囲は固定。
         root.addWidget(self._content_scroll, 1)
 
         self._view_mode = VIEW_SIMPLE

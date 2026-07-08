@@ -402,6 +402,8 @@ QStatusBar {{
     font-size: 12px;
     font-weight: 600;
     color: {COLORS["text_secondary"]};
+    margin: 0;
+    padding: 0;
 }}
 #PaletteHintLabel {{
     font-size: 10px;
@@ -492,8 +494,8 @@ QPushButton#PhrasePlacementBtn {{
     border-radius: 6px;
     padding: 2px 2px;
     font-size: 10px;
-    min-height: 120px;
-    max-height: 120px;
+    min-height: 60px;
+    max-height: 60px;
 }}
 QPushButton#PhrasePlacementBtn:hover {{
     border-color: {COLORS["border_strong"]};
@@ -504,12 +506,12 @@ QPushButton#PhrasePlacementBtn:checked {{
     color: {COLORS["accent"]};
 }}
 QLabel#PhraseDetailBody {{
-    font-size: 12px;
-    line-height: 16px;
+    font-size: 11px;
+    line-height: 15px;
     padding: 0;
     margin: 0;
-    min-height: 120px;
-    max-height: 120px;
+    min-height: 60px;
+    max-height: 60px;
 }}
 QFrame#PhrasePreviewCanvas {{
     background: {COLORS["bg"]};
