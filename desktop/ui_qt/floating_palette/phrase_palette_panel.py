@@ -21,14 +21,20 @@ from PySide6.QtWidgets import (
 from ui_qt.floating_palette.palette_prefs import VIEW_DETAILED, VIEW_SIMPLE
 from ui_qt.floating_palette.phrase_template_prefs import (
     PHRASE_SIMPLE_COUNT,
+    PHRASE_SIMPLE_TEXT_WIDTH,
     delete_phrase_template,
     phrase_detail_body_text,
     phrase_display_label,
     phrase_has_content,
+    phrase_palette_content_html,
     phrase_preview_text,
     phrase_simple_button_label,
-    phrase_style_summary,
     phrase_templates_mru,
+)
+from ui_qt.floating_palette.text_rich import (
+    palette_border_css,
+    palette_fill_background,
+    qt_label_alignment,
 )
 from ui_qt.style import COLORS
 
@@ -145,7 +151,8 @@ class PhrasePalettePanel(QWidget):
                 + 8
                 + _DETAIL_TEXT_MIN_WIDTH
                 + 8
-                + action_w
+                + action_w * 2
+                + 4
             )
             return max(220, copy_w, row_w)
         simple_w = max(
@@ -272,17 +279,81 @@ class PhrasePalettePanel(QWidget):
         self.layout_hint_changed.emit()
 
     def _fill_edit_single_card(self, tpl: dict[str, Any]) -> None:
-        body = QLabel(phrase_detail_body_text(tpl))
+        body = QLabel()
         body.setObjectName("PhraseDetailBody")
+        body.setTextFormat(Qt.TextFormat.RichText)
         body.setWordWrap(True)
-        body.setAlignment(Qt.AlignmentFlag.AlignTop)
+        body.setAlignment(qt_label_alignment(tpl.get("style")))
+        body.setText(
+            phrase_palette_content_html(tpl, one_line=False)
+            if phrase_has_content(tpl)
+            else phrase_detail_body_text(tpl)
+        )
+        body.setStyleSheet("background: transparent; border: none;")
         if not phrase_has_content(tpl):
-            body.setStyleSheet(f"color: {COLORS['text_muted']};")
-        meta = QLabel(phrase_style_summary(tpl))
-        meta.setObjectName("PhraseDetailMeta")
+            body.setStyleSheet(f"color: {COLORS['text_muted']}; background: transparent; border: none;")
+        self._edit_single_frame.setStyleSheet(self._phrase_detail_row_qss(tpl, editing=True))
         self._edit_single_lay.addWidget(body)
+
+    def _phrase_simple_btn_qss(self, tpl: dict[str, Any]) -> str:
+        if not phrase_has_content(tpl):
+            return f'QPushButton#PhraseSimpleBtn {{ color: {COLORS["danger"]}; }}'
+        bg = palette_fill_background(tpl.get("style") or {})
+        border = palette_border_css(tpl.get("style") or {})
+        if border == "none":
+            border = f'1px solid {COLORS["border"]}'
+        return (
+            f"QPushButton#PhraseSimpleBtn {{ background: {bg}; border: {border}; }}"
+            f"QPushButton#PhraseSimpleBtn:checked {{"
+            f' background: {COLORS["accent_soft"]};'
+            f' border-color: {COLORS["accent"]};'
+            f" }}"
+        )
+
+    def _phrase_detail_row_qss(self, tpl: dict[str, Any], *, editing: bool) -> str:
+        if not phrase_has_content(tpl):
+            bg = COLORS["surface"]
+        else:
+            fill = palette_fill_background(tpl.get("style") or {})
+            bg = fill if fill != "transparent" else COLORS["surface"]
+        border = palette_border_css(tpl.get("style") or {})
+        if border == "none":
+            border = f'1px solid {COLORS["border"]}'
+        if editing:
+            border = f'1px solid {COLORS["accent"]}'
+            if bg in (COLORS["surface"], "transparent"):
+                bg = COLORS["accent_soft"]
+        return (
+            f"QFrame#PhraseDetailRow {{ background: {bg}; border: {border};"
+            f" border-radius: 8px; }}"
+        )
+
+    def _make_rich_label(
+        self,
+        tpl: dict[str, Any],
+        *,
+        one_line: bool,
+        truncate_width: int | None = None,
+    ) -> QLabel:
+        label = QLabel()
+        label.setObjectName("PhraseDetailBody")
+        label.setTextFormat(Qt.TextFormat.RichText)
+        label.setWordWrap(not one_line)
+        label.setAlignment(qt_label_alignment(tpl.get("style")))
+        label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         if phrase_has_content(tpl):
-            self._edit_single_lay.addWidget(meta)
+            label.setText(
+                phrase_palette_content_html(
+                    tpl, one_line=one_line, truncate_width=truncate_width
+                )
+            )
+            label.setStyleSheet("background: transparent; border: none;")
+        else:
+            label.setText(phrase_detail_body_text(tpl))
+            label.setStyleSheet(
+                f"color: {COLORS['text_muted']}; background: transparent; border: none;"
+            )
+        return label
 
     def _style_select_btn(self, btn: QPushButton, tpl: dict[str, Any]) -> None:
         if not phrase_has_content(tpl):
@@ -292,20 +363,24 @@ class PhrasePalettePanel(QWidget):
 
     def _make_simple_select_btn(self, tpl: dict[str, Any]) -> QPushButton:
         pid = str(tpl.get("id") or "")
-        display = phrase_simple_button_label(tpl)
-        btn = QPushButton(display)
+        btn = QPushButton()
         btn.setObjectName("PhraseSimpleBtn")
         btn.setCheckable(True)
         btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        preview = phrase_preview_text(tpl)
-        btn.setToolTip(
-            f"{preview or display}\n{phrase_style_summary(tpl)}"
-            if phrase_has_content(tpl)
-            else display
+        lay = QHBoxLayout(btn)
+        lay.setContentsMargins(5, 4, 8, 4)
+        lay.setSpacing(0)
+        label = self._make_rich_label(
+            tpl,
+            one_line=True,
+            truncate_width=PHRASE_SIMPLE_TEXT_WIDTH,
         )
-        self._style_select_btn(btn, tpl)
+        lay.addWidget(label, 1)
+        preview = phrase_preview_text(tpl)
+        btn.setToolTip(preview or phrase_simple_button_label(tpl))
+        btn.setStyleSheet(self._phrase_simple_btn_qss(tpl))
         btn.clicked.connect(lambda _c=False, p=pid: self._on_phrase_clicked(p))
         self._select_group.addButton(btn)
         self._phrase_btns[pid] = btn
@@ -313,15 +388,13 @@ class PhrasePalettePanel(QWidget):
 
     def _make_placement_btn(self, tpl: dict[str, Any]) -> QPushButton:
         pid = str(tpl.get("id") or "")
-        btn = QPushButton("配置")
+        btn = QPushButton("選択")
         btn.setObjectName("PhrasePlacementBtn")
         btn.setCheckable(True)
         btn.setFixedWidth(_DETAIL_PLACEMENT_BTN_WIDTH)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
         preview = phrase_preview_text(tpl)
-        btn.setToolTip(
-            f"配置を有効化\n{preview or '（未登録）'}\n{phrase_style_summary(tpl)}"
-        )
+        btn.setToolTip(f"選択して配置\n{preview or '（未登録）'}")
         self._style_select_btn(btn, tpl)
         btn.clicked.connect(lambda _c=False, p=pid: self._on_phrase_clicked(p))
         self._select_group.addButton(btn)
@@ -345,32 +418,14 @@ class PhrasePalettePanel(QWidget):
         select_btn = self._make_placement_btn(tpl)
         lay.addWidget(select_btn, 0)
 
-        text_col = QVBoxLayout()
-        text_col.setSpacing(2)
-        body = QLabel(phrase_detail_body_text(tpl))
-        body.setObjectName("PhraseDetailBody")
-        body.setWordWrap(True)
-        body.setAlignment(Qt.AlignmentFlag.AlignTop)
-        if not phrase_has_content(tpl):
-            body.setStyleSheet(f"color: {COLORS['text_muted']};")
-        text_col.addWidget(body)
-        if phrase_has_content(tpl):
-            meta = QLabel(phrase_style_summary(tpl))
-            meta.setObjectName("PhraseDetailMeta")
-            text_col.addWidget(meta)
-        text_host = QWidget()
-        text_host.setMinimumWidth(_DETAIL_TEXT_MIN_WIDTH)
-        text_host.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
-        text_host.setLayout(text_col)
-        lay.addWidget(text_host, 1)
+        body = self._make_rich_label(tpl, one_line=False)
+        body.setMinimumWidth(_DETAIL_TEXT_MIN_WIDTH)
+        body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+        lay.addWidget(body, 1)
 
-        action_col = QWidget()
         action_w = _detail_action_btn_width(self.font())
-        action_col.setFixedWidth(action_w)
-        action_col.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
-        btn_col = QVBoxLayout(action_col)
-        btn_col.setContentsMargins(0, 0, 0, 0)
-        btn_col.setSpacing(4)
+        action_row = QHBoxLayout()
+        action_row.setSpacing(4)
         edit_btn = QPushButton("編集")
         edit_btn.setObjectName("PaletteActionBtn")
         edit_btn.setFixedWidth(action_w)
@@ -381,9 +436,13 @@ class PhrasePalettePanel(QWidget):
         del_btn.setProperty("variant", "danger")
         del_btn.setFixedWidth(action_w)
         del_btn.clicked.connect(lambda _c=False, p=pid: self._on_delete(p))
-        btn_col.addWidget(edit_btn)
-        btn_col.addWidget(del_btn)
-        lay.addWidget(action_col, 0)
+        action_row.addWidget(edit_btn)
+        action_row.addWidget(del_btn)
+        lay.addLayout(action_row)
+
+        frame.setStyleSheet(
+            self._phrase_detail_row_qss(tpl, editing=pid == self._editing_id)
+        )
 
         self._detail_rows[pid] = frame
         return frame

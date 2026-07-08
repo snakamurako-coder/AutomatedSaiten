@@ -58,11 +58,12 @@ class FormatPalettePanel(QWidget):
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(8)
+        root.setSpacing(6)
 
         tpl_row = QHBoxLayout()
         tpl_row.setSpacing(6)
         tpl_lbl = QLabel("背景")
+        tpl_lbl.setObjectName("FormatPaletteLabel")
         tpl_lbl.setFixedWidth(48)
         tpl_row.addWidget(tpl_lbl)
         tpl_a = QPushButton("なし")
@@ -83,6 +84,7 @@ class FormatPalettePanel(QWidget):
         color_row = QHBoxLayout()
         color_row.setSpacing(6)
         color_lbl = QLabel("文字色")
+        color_lbl.setObjectName("FormatPaletteLabel")
         color_lbl.setFixedWidth(48)
         color_row.addWidget(color_lbl)
         self._color_row = color_row
@@ -93,6 +95,7 @@ class FormatPalettePanel(QWidget):
         metrics_row = QHBoxLayout()
         metrics_row.setSpacing(6)
         size_lbl = QLabel("サイズ")
+        size_lbl.setObjectName("FormatPaletteLabel")
         size_lbl.setFixedWidth(36)
         metrics_row.addWidget(size_lbl)
         self._size_spin = self._make_pt_spin(
@@ -101,6 +104,7 @@ class FormatPalettePanel(QWidget):
         self._size_spin.valueChanged.connect(self._on_size_changed)
         metrics_row.addWidget(self._size_spin)
         spacing_lbl = QLabel("行間")
+        spacing_lbl.setObjectName("FormatPaletteLabel")
         spacing_lbl.setFixedWidth(36)
         metrics_row.addWidget(spacing_lbl)
         self._line_spacing_spin = self._make_pt_spin("改行後の行の高さ（ポイント）")
@@ -110,12 +114,15 @@ class FormatPalettePanel(QWidget):
         root.addLayout(metrics_row)
 
         align_frame = QFrame()
+        align_frame.setFrameShape(QFrame.Shape.NoFrame)
         align_lay = QVBoxLayout(align_frame)
         align_lay.setContentsMargins(0, 0, 0, 0)
-        align_lay.setSpacing(4)
+        align_lay.setSpacing(2)
         h_align_row = QHBoxLayout()
         h_align_row.setSpacing(6)
+        h_align_row.setContentsMargins(0, 0, 0, 0)
         h_align_lbl = QLabel("横")
+        h_align_lbl.setObjectName("FormatPaletteLabel")
         h_align_lbl.setFixedWidth(48)
         h_align_row.addWidget(h_align_lbl)
         self._align_h_group = QButtonGroup(self)
@@ -134,7 +141,9 @@ class FormatPalettePanel(QWidget):
         align_lay.addLayout(h_align_row)
         v_align_row = QHBoxLayout()
         v_align_row.setSpacing(6)
+        v_align_row.setContentsMargins(0, 0, 0, 0)
         v_align_lbl = QLabel("縦")
+        v_align_lbl.setObjectName("FormatPaletteLabel")
         v_align_lbl.setFixedWidth(48)
         v_align_row.addWidget(v_align_lbl)
         self._align_v_group = QButtonGroup(self)
@@ -151,13 +160,13 @@ class FormatPalettePanel(QWidget):
             self._align_v_btns[key] = btn
         v_align_row.addStretch()
         align_lay.addLayout(v_align_row)
-        root.addWidget(align_frame)
 
-        self._detail_format_frame = QFrame()
+        self._detail_format_frame = QWidget()
         detail_lay = QHBoxLayout(self._detail_format_frame)
         detail_lay.setContentsMargins(0, 0, 0, 0)
         detail_lay.setSpacing(6)
         deco_lbl = QLabel("装飾")
+        deco_lbl.setObjectName("FormatPaletteLabel")
         deco_lbl.setFixedWidth(48)
         detail_lay.addWidget(deco_lbl)
         self._bold_btn = self._make_deco_btn("太字", "太字", bold=True)
@@ -174,8 +183,9 @@ class FormatPalettePanel(QWidget):
             self._tighten_segment_btn(deco_btn, deco_label)
             detail_lay.addWidget(deco_btn)
         detail_lay.addStretch()
-        root.addWidget(self._detail_format_frame)
+        align_lay.addWidget(self._detail_format_frame)
         self._detail_format_frame.hide()
+        root.addWidget(align_frame)
 
         btn_row = QHBoxLayout()
         btn_row.setSpacing(4)
@@ -292,7 +302,9 @@ class FormatPalettePanel(QWidget):
         return max(self._action_btn_width(label) for label in labels)
 
     def _tighten_segment_btn(self, btn: QPushButton, label: str) -> None:
+        fm = QFontMetrics(btn.font())
         btn.setFixedWidth(self._segment_btn_width(label, btn.font()))
+        btn.setFixedHeight(fm.height() + 6)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def _tighten_action_btn(self, btn: QPushButton, label: str) -> None:

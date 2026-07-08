@@ -14,6 +14,8 @@ from ui_qt.floating_palette.text_rich import (
     box_has_saved_html,
     box_text_html,
     html_body_for_label,
+    plain_to_palette_html,
+    sanitize_html_for_palette,
     sync_box_html_from_style,
 )
 
@@ -188,24 +190,34 @@ def phrase_text_one_line(tpl: dict[str, Any]) -> str:
     return re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
 
 
-def phrase_style_summary(tpl: dict[str, Any]) -> str:
-    style = resolve_text_style(tpl.get("style") or {})
-    font_size = int(style.get("fontSize") or 14)
-    line_spacing = int(style.get("lineSpacing") or font_size)
-    newline_count = str(tpl.get("text") or "").count("\n")
-    parts = [f"{font_size}pt", f"行{line_spacing}"]
-    if newline_count > 0:
-        parts.append(f"改{newline_count}")
-    return "·".join(parts)
+def phrase_palette_content_html(
+    tpl: dict[str, Any],
+    *,
+    one_line: bool = False,
+    truncate_width: int | None = None,
+) -> str:
+    if not phrase_has_content(tpl):
+        return plain_to_palette_html(PHRASE_UNREGISTERED_LABEL, None, one_line=True)
+    st = resolve_text_style(tpl.get("style") or {})
+    plain = phrase_preview_text(tpl)
+    line_plain = phrase_text_one_line(tpl)
+    target_plain = line_plain if one_line else plain
+    truncated = False
+    if truncate_width is not None and _display_width(target_plain) > truncate_width:
+        target_plain = truncate_display_width(target_plain, truncate_width)
+        truncated = True
+    if truncated or not box_has_saved_html(tpl):
+        return plain_to_palette_html(target_plain, st, one_line=one_line)
+    body = html_body_for_label(box_text_html(tpl, st))
+    if not body:
+        return plain_to_palette_html(target_plain, st, one_line=one_line)
+    return sanitize_html_for_palette(body, one_line=one_line)
 
 
 def phrase_simple_button_label(tpl: dict[str, Any]) -> str:
     if not phrase_has_content(tpl):
         return PHRASE_UNREGISTERED_LABEL
-    text = truncate_display_width(
-        phrase_text_one_line(tpl), PHRASE_SIMPLE_TEXT_WIDTH
-    )
-    return f"{text}  {phrase_style_summary(tpl)}"
+    return truncate_display_width(phrase_text_one_line(tpl), PHRASE_SIMPLE_TEXT_WIDTH)
 
 
 def phrase_detail_body_text(tpl: dict[str, Any]) -> str:

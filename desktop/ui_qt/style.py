@@ -438,10 +438,6 @@ QPushButton#PhrasePlacementBtn:checked {{
 QLabel#PhraseDetailBody {{
     font-size: 12px;
 }}
-QLabel#PhraseDetailMeta {{
-    font-size: 10px;
-    color: {COLORS["text_muted"]};
-}}
 QFrame#PhrasePreviewCanvas {{
     background: {COLORS["bg"]};
     border: 1px dashed {COLORS["border_strong"]};
@@ -472,9 +468,14 @@ QPushButton#ToolSegmentBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 6px;
-    padding: 4px 6px;
+    padding: 2px 6px;
     font-size: 12px;
     min-height: 0;
+    max-height: 28px;
+}}
+QLabel#FormatPaletteLabel {{
+    padding: 0;
+    margin: 0;
 }}
 QPushButton#ToolSegmentBtn:hover {{
     border-color: {COLORS["border_strong"]};

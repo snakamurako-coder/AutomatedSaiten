@@ -62,7 +62,7 @@ class PhraseEditPreviewPanel(QWidget):
         root.addWidget(self._canvas, 1)
 
         self._text_box: TextBoxWidget | None = None
-        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return QSize(220, _PREVIEW_MIN_H + 36)
@@ -152,6 +152,7 @@ class PhraseEditPreviewPanel(QWidget):
         self._text_box.show()
         self._update_canvas_height()
         self._layout_box()
+        self.layout_changed.emit()
 
     def _update_canvas_height(self) -> None:
         target = _PREVIEW_EDIT_MIN_H if self._text_editing else _PREVIEW_MIN_H
@@ -201,3 +202,5 @@ class PhraseEditPreviewPanel(QWidget):
         self._hint.setText(self._hint_text())
         self._update_canvas_height()
         self._layout_box()
+        self.updateGeometry()
+        self.layout_changed.emit()

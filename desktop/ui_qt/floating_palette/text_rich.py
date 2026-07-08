@@ -170,3 +170,94 @@ def html_for_pdf_box(
             outer_styles.append("justify-content: flex-end")
     style_attr = "; ".join(outer_styles)
     return f'<div style="{style_attr};">{body}</div>'
+
+
+_PALETTE_FONT_SIZE = "12px"
+_PALETTE_LINE_HEIGHT = "1.35"
+
+
+def _hex_rgb_tuple(hex_color: str) -> tuple[int, int, int]:
+    h = str(hex_color or "#ffffff").lstrip("#")
+    if len(h) == 3:
+        h = "".join(c * 2 for c in h)
+    if len(h) != 6:
+        return (255, 255, 255)
+    return int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+
+
+def palette_fill_background(style: dict[str, Any] | None) -> str:
+    from models.text_annotation_repo import resolve_text_style
+
+    st = resolve_text_style(style)
+    fa = float(st.get("fillAlpha", 0))
+    if fa <= 0:
+        return "transparent"
+    r, g, b = _hex_rgb_tuple(str(st.get("fillColor") or "#ffffff"))
+    return f"rgba({r}, {g}, {b}, {fa})"
+
+
+def palette_border_css(style: dict[str, Any] | None) -> str:
+    from models.text_annotation_repo import resolve_text_style
+
+    st = resolve_text_style(style)
+    bw = float(st.get("borderWidth") or 0)
+    ba = float(st.get("borderAlpha") or 0)
+    if bw <= 0 or ba <= 0:
+        return "none"
+    r, g, b = _hex_rgb_tuple(
+        str(st.get("borderColor") or st.get("textColor") or "#111827")
+    )
+    return f"{bw}px solid rgba({r}, {g}, {b}, {ba})"
+
+
+def plain_to_palette_html(
+    text: str,
+    style: dict[str, Any] | None,
+    *,
+    one_line: bool = False,
+) -> str:
+    st = style or {}
+    tc = str(st.get("textColor") or "#111827")
+    body_text = str(text or "")
+    if one_line:
+        body_text = re.sub(r"\s+", " ", body_text.replace("\n", " ")).strip()
+        body = html_lib.escape(body_text)
+    else:
+        body = html_lib.escape(body_text).replace("\n", "<br>")
+    span_styles = [
+        "margin:0",
+        "padding:0",
+        f"color:{tc}",
+        f"font-size:{_PALETTE_FONT_SIZE}",
+        f"line-height:{_PALETTE_LINE_HEIGHT}",
+        f"text-align:{css_text_align(st)}",
+        "font-family:Meiryo, sans-serif",
+    ]
+    if str(st.get("fontWeight") or "") == "bold":
+        span_styles.append("font-weight:bold")
+    if str(st.get("fontStyle") or "") == "italic":
+        span_styles.append("font-style:italic")
+    if str(st.get("textDecoration") or "") == "underline":
+        span_styles.append("text-decoration:underline")
+    span_style = "; ".join(span_styles)
+    return f'<span style="{span_style}">{body}</span>'
+
+
+def sanitize_html_for_palette(html: str, *, one_line: bool) -> str:
+    text = str(html or "").strip()
+    if not text:
+        return ""
+    text = re.sub(r"font-size:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"line-height:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r'font-size="[^"]*"',
+        f'font-size="{_PALETTE_FONT_SIZE}"',
+        text,
+        flags=re.IGNORECASE,
+    )
+    if one_line:
+        text = re.sub(r"<br\s*/?>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"</p>\s*<p[^>]*>", " ", text, flags=re.IGNORECASE)
+        text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
+    return text.strip()

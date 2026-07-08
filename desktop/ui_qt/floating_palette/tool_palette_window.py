@@ -282,7 +282,6 @@ class ToolPaletteWindow(QWidget):
         phrase_lay.addWidget(self._phrase_panel, 1)
 
         self._phrase_preview = PhraseEditPreviewPanel()
-        self._phrase_preview.setMaximumHeight(300)
         self._phrase_preview.hide()
         self._phrase_preview.layout_changed.connect(self._schedule_fit_to_screen)
         phrase_lay.addWidget(self._phrase_preview, 0)
@@ -339,10 +338,72 @@ class ToolPaletteWindow(QWidget):
     def _schedule_fit_to_screen(self) -> None:
         self._fit_timer.start()
 
+    def _phrase_edit_active(self) -> bool:
+        return (
+            self._input_mode == MODE_PHRASE
+            and self._phrase_format_scroll.isVisible()
+        )
+
     def _stack_chrome_height(self) -> int:
-        margins = self.layout().contentsMargins()
-        header = self._title.height() if self._title.isVisible() else 0
-        return margins.top() + margins.bottom() + header + 88
+        root = self.layout()
+        if root is None:
+            return 100
+        margins = root.contentsMargins()
+        chrome = margins.top() + margins.bottom()
+        gap_count = 0
+        for i in range(root.count()):
+            item = root.itemAt(i)
+            if item is None:
+                continue
+            w = item.widget()
+            if w is self._content_scroll:
+                continue
+            lay = item.layout()
+            if w is not None and w.isVisible():
+                chrome += w.sizeHint().height()
+                gap_count += 1
+            elif lay is not None:
+                chrome += lay.sizeHint().height()
+                gap_count += 1
+        chrome += root.spacing() * max(0, gap_count - 1)
+        return chrome
+
+    def _phrase_edit_content_height(self) -> int:
+        self._phrase_panel.updateGeometry()
+        self._phrase_preview.updateGeometry()
+        self._format_panel.updateGeometry()
+        lay = self._phrase_lay
+        spacing = lay.spacing()
+        margins = lay.contentsMargins()
+        panel_h = max(
+            self._phrase_panel.sizeHint().height(),
+            self._phrase_panel.minimumSizeHint().height(),
+        )
+        preview_h = max(
+            self._phrase_preview.sizeHint().height(),
+            self._phrase_preview.minimumSizeHint().height(),
+        )
+        format_h = max(
+            self._format_panel.sizeHint().height(),
+            self._format_panel.minimumSizeHint().height(),
+        )
+        return (
+            panel_h
+            + preview_h
+            + format_h
+            + spacing * 2
+            + margins.top()
+            + margins.bottom()
+            + 4
+        )
+
+    def _content_height_hint(self) -> int:
+        page = self._stack.currentWidget()
+        if page is None:
+            return 200
+        if self._phrase_edit_active():
+            return self._phrase_edit_content_height()
+        return max(page.minimumSizeHint().height(), page.sizeHint().height())
 
     def _content_width_hint(self) -> int:
         margins = self.layout().contentsMargins()
@@ -386,16 +447,31 @@ class ToolPaletteWindow(QWidget):
         assert screen is not None
         avail = screen.availableGeometry()
         max_w, max_h = bounds
+        geo = self.geometry()
         self.setMaximumWidth(max_w)
         self.setMaximumHeight(max_h)
-        stack_max = max(180, max_h - self._stack_chrome_height())
-        self._content_scroll.setMaximumHeight(stack_max)
+        chrome = self._stack_chrome_height()
+        stack_max = max(180, max_h - chrome)
+        content_need = self._content_height_hint()
+        if self._phrase_edit_active():
+            format_h = max(
+                self._format_panel.sizeHint().height(),
+                self._format_panel.minimumSizeHint().height(),
+            )
+            self._phrase_format_scroll.setMinimumHeight(format_h)
+            content_h = min(content_need, stack_max)
+            self._content_scroll.setMaximumHeight(stack_max)
+            self._content_scroll.setMinimumHeight(content_h)
+            desired_h = chrome + content_h
+            h = max(self.minimumHeight(), min(desired_h, max_h))
+        else:
+            self._content_scroll.setMaximumHeight(stack_max)
+            self._content_scroll.setMinimumHeight(0)
+            h = max(self.minimumHeight(), min(geo.height(), max_h))
         self._apply_palette_min_width()
         hint_w = min(self._content_width_hint(), max_w)
-        geo = self.geometry()
         min_w = self.minimumWidth()
         w = max(min_w, min(hint_w, max_w))
-        h = max(self.minimumHeight(), min(geo.height(), max_h))
         if geo.width() != w or geo.height() != h:
             self.resize(w, h)
         x = min(max(geo.x(), avail.left()), max(avail.left(), avail.right() - w + 1))
@@ -651,17 +727,29 @@ class ToolPaletteWindow(QWidget):
         self._phrase_panel.set_compact_edit_mode(visible)
         self._phrase_lay.setStretchFactor(self._phrase_panel, 0 if visible else 1)
         if visible:
+            format_h = self._format_panel.minimumSizeHint().height()
             self._phrase_format_scroll.setVerticalScrollBarPolicy(
                 Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             )
             self._phrase_format_scroll.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            )
+            self._phrase_format_scroll.setMinimumHeight(format_h)
+            self._phrase_preview.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            )
+            self._stack.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
             )
         else:
             self._phrase_format_scroll.setVerticalScrollBarPolicy(
                 Qt.ScrollBarPolicy.ScrollBarAsNeeded
             )
             self._phrase_format_scroll.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            )
+            self._phrase_format_scroll.setMinimumHeight(0)
+            self._stack.setSizePolicy(
                 QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
             )
         self._schedule_fit_to_screen()
