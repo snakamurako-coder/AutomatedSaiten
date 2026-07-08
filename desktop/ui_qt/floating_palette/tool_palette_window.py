@@ -41,6 +41,8 @@ MODE_TEXT = "text"
 MODE_PHRASE = "phrase"
 
 _PALETTE_MIN_WIDTH = 236
+_PALETTE_MIN_HEIGHT_DEFAULT = 260
+_PALETTE_MIN_HEIGHT_SIMPLE = 140
 
 
 class ToolPaletteWindow(QWidget):
@@ -67,7 +69,7 @@ class ToolPaletteWindow(QWidget):
         self.setWindowTitle("描画ツール")
         self.setObjectName("ToolPaletteWindow")
         self.resize(260, 320)
-        self.setMinimumSize(_PALETTE_MIN_WIDTH, 260)
+        self.setMinimumSize(_PALETTE_MIN_WIDTH, _PALETTE_MIN_HEIGHT_DEFAULT)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(6, 6, 6, 6)
@@ -355,6 +357,12 @@ class ToolPaletteWindow(QWidget):
     def _fit_height_to_content(self) -> bool:
         return self._phrase_edit_active() or self._phrase_simple_active()
 
+    def _apply_min_height_policy(self) -> None:
+        if self._phrase_simple_active():
+            self.setMinimumHeight(_PALETTE_MIN_HEIGHT_SIMPLE)
+        else:
+            self.setMinimumHeight(_PALETTE_MIN_HEIGHT_DEFAULT)
+
     def _phrase_page_content_height(self) -> int:
         lay = self._phrase_lay
         margins = lay.contentsMargins()
@@ -468,6 +476,7 @@ class ToolPaletteWindow(QWidget):
         return max_w, max_h
 
     def _fit_to_screen(self) -> None:
+        self._apply_min_height_policy()
         bounds = self._screen_bounds()
         if bounds is None:
             return
@@ -711,6 +720,7 @@ class ToolPaletteWindow(QWidget):
         self.view_mode_changed.emit(self._view_mode)
 
     def _apply_view_mode(self) -> None:
+        self._apply_min_height_policy()
         detailed = self._view_mode == VIEW_DETAILED
         self._detail_frame.setVisible(detailed)
         self._format_panel.set_detailed_controls_visible(detailed)
