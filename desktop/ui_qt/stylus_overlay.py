@@ -818,6 +818,25 @@ class CropInkImageStack(QWidget):
         self._sync_layer_order()
         lay.addWidget(self.container)
         self.setFixedSize(self.container.size())
+        self.sync_place_cursor()
+
+    def sync_place_cursor(self) -> None:
+        cross = (
+            self.text_layer.has_phrase_place_pending()
+            or self.text_layer.has_speech_place_pending()
+            or (
+                self._tool_mode == TOOL_TEXT
+                and getattr(self.text_layer, "_placement_mode", False)
+            )
+        )
+        cursor = Qt.CursorShape.CrossCursor if cross else Qt.CursorShape.ArrowCursor
+        if cross:
+            self.container.setCursor(cursor)
+            self.text_layer.setCursor(cursor)
+        else:
+            self.container.unsetCursor()
+            if not getattr(self.text_layer, "_placement_mode", False):
+                self.text_layer.unsetCursor()
 
     @property
     def result_id(self) -> int:
@@ -963,19 +982,9 @@ class CropInkImageStack(QWidget):
         else:
             local = self._map_to_text_layer(watched, event.position())
         if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress, QEvent.Type.TouchBegin):
-            if self.text_layer.try_speech_place_at(local, event):
+            if self.text_layer.handle_click_place_event(et, local, event):
                 return True
-            if self.text_layer.try_phrase_place_at(local, event):
-                return True
-        if self._tool_mode == TOOL_TEXT and self.text_layer.handle_placement_event(
-            et, local, event
-        ):
-            return True
-        if self._placement_pending() and et in (
-            QEvent.Type.MouseButtonPress,
-            QEvent.Type.TabletPress,
-            QEvent.Type.TouchBegin,
-        ):
+        if self.text_layer.handle_placement_event(et, local, event):
             return True
         return super().eventFilter(watched, event)
 
@@ -1035,6 +1044,7 @@ class CropInkImageStack(QWidget):
             self.text_layer.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self._sync_input_routing()
         self._sync_layer_order()
+        self.sync_place_cursor()
 
     def set_brush(self, color: str, width: float, alpha: float) -> None:
         self.ink_overlay.set_brush(color, width, alpha)

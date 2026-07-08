@@ -357,11 +357,12 @@ class PaletteController:
         def on_placed(phrase_id: str = pid) -> None:
             self._on_phrase_placed(phrase_id)
 
+        stack.set_tool_mode(TOOL_PHRASE)
         stack.text_layer.set_phrase_place_template(
             copy.deepcopy(self._pending_phrase_template),
             on_placed=on_placed,
         )
-        stack.set_tool_mode(TOOL_PHRASE)
+        stack.sync_place_cursor()
 
     def _ensure_phrase_tool_mode(self) -> None:
         if (
@@ -710,6 +711,7 @@ class PaletteController:
         self.tool_window.phrase_panel.set_pending_phrase(None)
         for stack in self._stacks():
             stack.text_layer.clear_phrase_place_template()
+            stack.sync_place_cursor()
 
     def _on_phrase_selected(self, phrase_id: str) -> None:
         template = self._phrase_template_by_id(phrase_id)
@@ -736,6 +738,7 @@ class PaletteController:
         self.tool_window.phrase_panel.reload_templates()
         for stack in self._stacks():
             stack.text_layer.clear_phrase_place_template()
+            stack.sync_place_cursor()
 
     def _on_copy_phrase_from_textbox(self) -> None:
         box: dict[str, Any] | None = None

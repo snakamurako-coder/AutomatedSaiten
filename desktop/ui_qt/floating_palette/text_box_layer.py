@@ -104,11 +104,21 @@ class TextBoxLayer(QWidget):
 
     def set_placement_mode(self, enabled: bool) -> None:
         self._placement_mode = bool(enabled)
-        if enabled:
-            self.setCursor(Qt.CursorShape.CrossCursor)
-        else:
+        if not enabled:
             self._cancel_place_drag()
+        self._refresh_place_cursor()
+
+    def _refresh_place_cursor(self) -> None:
+        if self._placement_mode or self._placement_pending():
+            self.setCursor(Qt.CursorShape.CrossCursor)
+        elif not self._placing:
             self.unsetCursor()
+        parent = self.parentWidget()
+        while parent is not None:
+            if hasattr(parent, "sync_place_cursor"):
+                parent.sync_place_cursor()
+                break
+            parent = parent.parentWidget()
 
     def set_palm_rejection(self, enabled: bool) -> None:
         self._palm_rejection = bool(enabled)
@@ -290,10 +300,10 @@ class TextBoxLayer(QWidget):
         chunk = str(text or "").strip()
         self._speech_place_text = chunk or None
         self._speech_place_on_placed = on_placed if chunk else None
+        self._refresh_place_cursor()
         if self._speech_place_text:
-            self.setCursor(Qt.CursorShape.CrossCursor)
-        elif not self._placement_mode:
-            self.unsetCursor()
+            self.set_text_tool_mode(True)
+            self._apply_layer_visibility()
 
     def clear_speech_place_text(self) -> None:
         self.set_speech_place_text(None)
@@ -309,18 +319,20 @@ class TextBoxLayer(QWidget):
     ) -> None:
         self._phrase_place_template = copy.deepcopy(template) if template else None
         self._phrase_place_on_placed = on_placed if template else None
+        self._refresh_place_cursor()
         if self._phrase_place_template:
-            self.setCursor(Qt.CursorShape.CrossCursor)
-        elif not self._placement_mode and not self._speech_place_text:
-            self.unsetCursor()
+            self.set_text_tool_mode(True)
+            self._apply_layer_visibility()
 
     def clear_phrase_place_template(self) -> None:
         self.set_phrase_place_template(None)
 
-    def try_phrase_place_at(self, local_pos: QPointF, event) -> bool:
-        if not self._phrase_place_template:
+    def handle_click_place_event(
+        self, et: QEvent.Type, local_pos: QPointF, event
+    ) -> bool:
+        """定型文・音声入力のクリック配置（ドラッグ不要）。"""
+        if not self._placement_pending():
             return False
-        et = event.type()
         if et not in (
             QEvent.Type.MouseButtonPress,
             QEvent.Type.TabletPress,
@@ -331,13 +343,19 @@ class TextBoxLayer(QWidget):
             return False
         if self._reject_placement_event(event):
             return False
-        lx, ly = int(local_pos.x()), int(local_pos.y())
-        if self.childAt(lx, ly) not in (None, self._rubber):
-            return False
+        if self._try_speech_place_click(local_pos):
+            return True
         return self._try_phrase_place_click(local_pos)
+
+    def try_phrase_place_at(self, local_pos: QPointF, event) -> bool:
+        return self.handle_click_place_event(event.type(), local_pos, event)
 
     def _try_phrase_place_click(self, pos: QPointF) -> bool:
         if not self._phrase_place_template:
+            return False
+        lx, ly = int(pos.x()), int(pos.y())
+        child = self.childAt(lx, ly)
+        if child is not None and child is not self._rubber:
             return False
         template = copy.deepcopy(self._phrase_place_template)
         callback = self._phrase_place_on_placed
@@ -348,6 +366,7 @@ class TextBoxLayer(QWidget):
         self.place_box_from_template(pos.x(), pos.y(), template)
         if callback:
             callback()
+        self._refresh_place_cursor()
         return True
 
     def place_box_from_template(
@@ -379,19 +398,7 @@ class TextBoxLayer(QWidget):
         return self._widgets[bid].box_data() if bid in self._widgets else box
 
     def try_speech_place_at(self, local_pos: QPointF, event) -> bool:
-        if not self._speech_place_text:
-            return False
-        et = event.type()
-        if et not in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress, QEvent.Type.TouchBegin):
-            return False
-        if isinstance(event, QMouseEvent) and event.button() != Qt.LeftButton:
-            return False
-        if self._reject_placement_event(event):
-            return False
-        lx, ly = int(local_pos.x()), int(local_pos.y())
-        if self.childAt(lx, ly) not in (None, self._rubber):
-            return False
-        return self._try_speech_place_click(local_pos)
+        return self.handle_click_place_event(event.type(), local_pos, event)
 
     def _try_speech_place_click(self, pos: QPointF) -> bool:
         if not self._speech_place_text:
@@ -438,16 +445,12 @@ class TextBoxLayer(QWidget):
 
     def handle_placement_event(self, et: QEvent.Type, local_pos: QPointF, event) -> bool:
         """テキスト配置ドラッグ（container / ink からの転送も含む）。"""
+        if self.handle_click_place_event(et, local_pos, event):
+            return True
         if not self._placement_mode:
             return False
         if self._reject_placement_event(event):
             return False
-
-        if et in (QEvent.Type.MouseButtonPress, QEvent.Type.TabletPress):
-            if self._try_speech_place_click(local_pos):
-                return True
-            if self._try_phrase_place_click(local_pos):
-                return True
 
         lx, ly = int(local_pos.x()), int(local_pos.y())
 
@@ -611,34 +614,26 @@ class TextBoxLayer(QWidget):
         self._persist_annotations()
 
     def tabletEvent(self, event: QTabletEvent) -> None:  # noqa: N802
-        if event.type() == QEvent.Type.TabletPress:
-            pos = event.position()
-            if self._try_phrase_place_click(pos):
-                event.accept()
-                return
-            if self._try_speech_place_click(pos):
-                event.accept()
-                return
+        if self.handle_click_place_event(event.type(), event.position(), event):
+            event.accept()
+            return
         super().tabletEvent(event)
 
     def touchEvent(self, event: QTouchEvent) -> None:  # noqa: N802
         points = event.points()
         if points and points[0].state() == Qt.TouchPointState.TouchPointPressed:
-            pos = points[0].position()
-            if self._try_phrase_place_click(pos):
-                event.accept()
-                return
-            if self._try_speech_place_click(pos):
+            if self.handle_click_place_event(
+                QEvent.Type.TouchBegin, points[0].position(), event
+            ):
                 event.accept()
                 return
         super().touchEvent(event)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.LeftButton:
-            if self._try_speech_place_click(event.position()):
-                event.accept()
-                return
-            if self._try_phrase_place_click(event.position()):
+            if self.handle_click_place_event(
+                QEvent.Type.MouseButtonPress, event.position(), event
+            ):
                 event.accept()
                 return
         if self._placement_mode and event.button() == Qt.LeftButton:
