@@ -255,12 +255,12 @@ def palette_styled_html(
     ]
     if not omit_color:
         span_styles.insert(2, f"color:{tc}")
-    if str(st.get("fontWeight") or "") == "bold":
-        span_styles.append("font-weight:bold")
-    if str(st.get("fontStyle") or "") == "italic":
-        span_styles.append("font-style:italic")
-    if str(st.get("textDecoration") or "") == "underline":
-        span_styles.append("text-decoration:underline")
+        if str(st.get("fontWeight") or "") == "bold":
+            span_styles.append("font-weight:bold")
+        if str(st.get("fontStyle") or "") == "italic":
+            span_styles.append("font-style:italic")
+        if str(st.get("textDecoration") or "") == "underline":
+            span_styles.append("text-decoration:underline")
     span_style = "; ".join(span_styles)
     return f'<span style="{span_style}">{inner_html}</span>'
 
@@ -282,23 +282,168 @@ def plain_to_palette_html(
     return palette_styled_html(body, style, detail=detail, align_left=align_left)
 
 
-def sanitize_html_for_palette(html: str, *, one_line: bool, align_left: bool = False) -> str:
+def display_width(text: str) -> int:
+    width = 0
+    for ch in text:
+        width += 1 if ord(ch) < 128 else 2
+    return width
+
+
+def truncate_display_width(
+    text: str, max_width: int, ellipsis: str = "…"
+) -> str:
+    if max_width <= 0:
+        return ""
+    if display_width(text) <= max_width:
+        return text
+    ell_w = display_width(ellipsis)
+    out: list[str] = []
+    used = 0
+    for ch in text:
+        ch_w = 1 if ord(ch) < 128 else 2
+        if used + ch_w > max_width - ell_w:
+            break
+        out.append(ch)
+        used += ch_w
+    return "".join(out) + ellipsis
+
+
+def _strip_html_tags(html: str) -> str:
+    return re.sub(r"<[^>]+>", "", html or "").replace("&nbsp;", " ")
+
+
+def _split_html_lines(fragment: str) -> list[str]:
+    text = re.sub(r"</p>\s*<p[^>]*>", "<br>", fragment, flags=re.IGNORECASE)
+    text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
+    parts = re.split(r"<br\s*/?>", text, flags=re.IGNORECASE)
+    return [part.strip() for part in parts]
+
+
+def _clean_qt_html_fragment(html: str) -> str:
+    text = re.sub(r"<!--.*?-->", "", str(html or ""), flags=re.DOTALL)
+    text = html_body_for_label(text) or text
+    text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def truncate_rich_html_by_width(
+    html_fragment: str,
+    max_width: int,
+    *,
+    ellipsis: str = "…",
+) -> str:
+    fragment = str(html_fragment or "").strip()
+    if not fragment or max_width <= 0:
+        return fragment
+    plain_one = re.sub(
+        r"\s+", " ", _strip_html_tags(fragment).replace("\n", " ")
+    ).strip()
+    if display_width(plain_one) <= max_width:
+        return fragment
+
+    from PySide6.QtGui import QTextCursor, QTextDocument
+
+    doc = QTextDocument()
+    doc.setHtml(f"<html><body>{fragment}</body></html>")
+    plain = doc.toPlainText()
+    plain_one = re.sub(r"\s+", " ", plain.replace("\n", " ")).strip()
+    if display_width(plain_one) <= max_width:
+        return fragment
+
+    cut_plain = truncate_display_width(plain_one, max_width, ellipsis=ellipsis)
+    end_chars = len(cut_plain)
+    if cut_plain.endswith(ellipsis):
+        end_chars -= len(ellipsis)
+    end_chars = max(0, end_chars)
+
+    cur = QTextCursor(doc)
+    cur.movePosition(QTextCursor.MoveOperation.Start)
+    for _ in range(end_chars):
+        if not cur.movePosition(QTextCursor.MoveOperation.NextCharacter):
+            break
+    cur.setPosition(0, QTextCursor.MoveMode.KeepAnchor)
+    body = _clean_qt_html_fragment(cur.selection().toHtml())
+    if not body:
+        return html_lib.escape(cut_plain)
+    plain_body = _strip_html_tags(body)
+    if cut_plain.endswith(ellipsis) and not plain_body.endswith(ellipsis):
+        body = f"{body}{html_lib.escape(ellipsis)}"
+    return body.strip()
+
+
+def clip_rich_html_lines(
+    html_fragment: str,
+    max_lines: int,
+    line_width: int,
+    *,
+    ellipsis: str = "...",
+) -> str:
+    fragment = str(html_fragment or "").strip()
+    if not fragment or max_lines <= 0:
+        return fragment
+    parts = _split_html_lines(fragment)[:max_lines]
+    out: list[str] = []
+    for part in parts:
+        if not part:
+            out.append("")
+            continue
+        plain = _strip_html_tags(part)
+        if display_width(plain) > line_width:
+            part = truncate_rich_html_by_width(part, line_width, ellipsis=ellipsis)
+        out.append(part)
+    return "<br>".join(out)
+
+
+def _strip_palette_font_styles(html: str) -> str:
+    text = str(html or "")
+    text = re.sub(r"font-size:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"line-height:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
+    text = re.sub(r'\s*font point-size="[^"]*"', "", text, flags=re.IGNORECASE)
+    text = re.sub(r'font-size="[^"]*"', "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<font[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</font>", "", text, flags=re.IGNORECASE)
+    return text
+
+
+def _apply_palette_font_to_inline_styles(html: str, *, detail: bool) -> str:
+    fs = _PALETTE_DETAIL_FONT_SIZE if detail else _PALETTE_FONT_SIZE
+    lh = _PALETTE_DETAIL_LINE_HEIGHT if detail else _PALETTE_LINE_HEIGHT
+
+    def fix_style(match: re.Match[str]) -> str:
+        style = _strip_palette_font_styles(match.group(1))
+        style = re.sub(r"\s+", " ", style).strip().strip(";").strip()
+        prefix = f"font-size:{fs}; line-height:{lh}"
+        if style:
+            return f'style="{prefix}; {style}"'
+        return f'style="{prefix}"'
+
+    return re.sub(r'style="([^"]*)"', fix_style, html, flags=re.IGNORECASE)
+
+
+def _flatten_block_tags_for_palette(html: str) -> str:
+    text = re.sub(r"</p>\s*<p[^>]*>", "<br>", html, flags=re.IGNORECASE)
+    text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
+    return text
+
+
+def sanitize_html_for_palette(
+    html: str,
+    *,
+    one_line: bool,
+    align_left: bool = False,
+    detail: bool = False,
+) -> str:
     text = str(html or "").strip()
     if not text:
         return ""
-    text = re.sub(r"font-size:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
-    text = re.sub(r"line-height:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
-    text = re.sub(
-        r'font-size="[^"]*"',
-        f'font-size="{_PALETTE_FONT_SIZE}"',
-        text,
-        flags=re.IGNORECASE,
-    )
+    text = _strip_palette_font_styles(text)
+    if one_line or detail:
+        text = _flatten_block_tags_for_palette(text)
     if one_line:
         text = re.sub(r"<br\s*/?>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"</p>\s*<p[^>]*>", " ", text, flags=re.IGNORECASE)
-        text = re.sub(r"<p[^>]*>", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"</p>", "", text, flags=re.IGNORECASE)
     if align_left:
         text = re.sub(
             r"text-align:\s*[^;\"']+;?",
@@ -308,4 +453,9 @@ def sanitize_html_for_palette(html: str, *, one_line: bool, align_left: bool = F
         )
         if not re.search(r"text-align:", text, flags=re.IGNORECASE):
             text = f'<span style="text-align:left">{text}</span>'
+    text = _apply_palette_font_to_inline_styles(text, detail=detail)
+    fs = _PALETTE_DETAIL_FONT_SIZE if detail else _PALETTE_FONT_SIZE
+    lh = _PALETTE_DETAIL_LINE_HEIGHT if detail else _PALETTE_LINE_HEIGHT
+    if not re.search(r"font-size:", text, flags=re.IGNORECASE):
+        text = f'<span style="font-size:{fs}; line-height:{lh}">{text}</span>'
     return text.strip()

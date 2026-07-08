@@ -14,12 +14,16 @@ from ui_qt.floating_palette.text_rich import (
     TEXT_FORMAT_HTML,
     box_has_saved_html,
     box_text_html,
+    clip_rich_html_lines,
+    display_width,
     extract_primary_text_color,
     html_body_for_label,
     palette_styled_html,
     plain_to_palette_html,
     sanitize_html_for_palette,
     sync_box_html_from_style,
+    truncate_display_width,
+    truncate_rich_html_by_width,
 )
 
 PHRASE_SIMPLE_COUNT = 6
@@ -168,32 +172,6 @@ def phrase_has_content(tpl: dict[str, Any]) -> bool:
     return bool(stripped)
 
 
-def _display_width(text: str) -> int:
-    width = 0
-    for ch in text:
-        width += 1 if ord(ch) < 128 else 2
-    return width
-
-
-def truncate_display_width(
-    text: str, max_width: int, ellipsis: str = "…"
-) -> str:
-    if max_width <= 0:
-        return ""
-    if _display_width(text) <= max_width:
-        return text
-    ell_w = _display_width(ellipsis)
-    out: list[str] = []
-    used = 0
-    for ch in text:
-        ch_w = 1 if ord(ch) < 128 else 2
-        if used + ch_w > max_width - ell_w:
-            break
-        out.append(ch)
-        used += ch_w
-    return "".join(out) + ellipsis
-
-
 def phrase_detail_display_lines(
     text: str,
     *,
@@ -222,25 +200,76 @@ def phrase_display_style(tpl: dict[str, Any]) -> dict[str, Any]:
     return st
 
 
+def _phrase_palette_rich_html(
+    tpl: dict[str, Any],
+    *,
+    one_line: bool = False,
+    detail: bool = False,
+    align_left: bool = False,
+    truncate_width: int | None = None,
+    max_lines: int | None = None,
+    line_width: int | None = None,
+) -> str:
+    st = phrase_display_style(tpl)
+    if not box_has_saved_html(tpl):
+        plain = phrase_text_one_line(tpl) if one_line else phrase_preview_text(tpl)
+        if truncate_width is not None and one_line:
+            plain = truncate_display_width(plain, truncate_width)
+        elif max_lines is not None and not one_line:
+            lines = phrase_detail_display_lines(
+                plain,
+                max_lines=max_lines,
+                line_width=line_width or PHRASE_DETAIL_LINE_WIDTH,
+            )
+            inner = "<br>".join(html_lib.escape(line) for line in lines)
+            return palette_styled_html(inner, st, detail=detail)
+        return plain_to_palette_html(
+            plain, st, one_line=one_line, detail=detail, align_left=align_left
+        )
+
+    body = html_body_for_label(box_text_html(tpl, st))
+    if not body:
+        plain = phrase_text_one_line(tpl) if one_line else phrase_preview_text(tpl)
+        return plain_to_palette_html(
+            plain, st, one_line=one_line, detail=detail, align_left=align_left
+        )
+
+    sanitized = sanitize_html_for_palette(
+        body, one_line=one_line, align_left=align_left, detail=detail
+    )
+    if max_lines is not None:
+        sanitized = clip_rich_html_lines(
+            sanitized,
+            max_lines,
+            line_width or PHRASE_DETAIL_LINE_WIDTH,
+            ellipsis=PHRASE_DETAIL_ELLIPSIS,
+        )
+        sanitized = sanitize_html_for_palette(
+            sanitized, one_line=False, align_left=align_left, detail=detail
+        )
+    elif truncate_width is not None:
+        sanitized = truncate_rich_html_by_width(sanitized, truncate_width)
+        sanitized = sanitize_html_for_palette(
+            sanitized, one_line=one_line, align_left=align_left, detail=detail
+        )
+
+    return palette_styled_html(
+        sanitized, st, detail=detail, align_left=align_left, omit_color=True
+    )
+
+
 def phrase_palette_detail_html(tpl: dict[str, Any]) -> str:
     """詳細タブ用：最大3行・行ごとに幅制限・固定フォント。"""
     if not phrase_has_content(tpl):
         return plain_to_palette_html(
             "（文言未登録）", None, detail=True, one_line=True
         )
-    st = phrase_display_style(tpl)
-    plain = phrase_preview_text(tpl)
-    one_line = len(plain.split("\n")) <= 1
-    line_plain = phrase_text_one_line(tpl)
-    within_width = _display_width(line_plain) <= PHRASE_DETAIL_LINE_WIDTH
-    if box_has_saved_html(tpl) and one_line and within_width:
-        body = html_body_for_label(box_text_html(tpl, st))
-        if body:
-            sanitized = sanitize_html_for_palette(body, one_line=False)
-            return palette_styled_html(sanitized, st, detail=True, omit_color=True)
-    lines = phrase_detail_display_lines(plain)
-    inner = "<br>".join(html_lib.escape(line) for line in lines)
-    return palette_styled_html(inner, st, detail=True)
+    return _phrase_palette_rich_html(
+        tpl,
+        detail=True,
+        max_lines=PHRASE_DETAIL_MAX_LINES,
+        line_width=PHRASE_DETAIL_LINE_WIDTH,
+    )
 
 
 def phrase_palette_content_html(
@@ -253,31 +282,12 @@ def phrase_palette_content_html(
         return plain_to_palette_html(
             PHRASE_UNREGISTERED_LABEL, None, one_line=True, align_left=one_line
         )
-    st = phrase_display_style(tpl)
-    plain = phrase_preview_text(tpl)
-    line_plain = phrase_text_one_line(tpl)
-    target_plain = line_plain if one_line else plain
-    truncated = False
-    if truncate_width is not None and _display_width(target_plain) > truncate_width:
-        target_plain = truncate_display_width(target_plain, truncate_width)
-        truncated = True
-    if truncated or not box_has_saved_html(tpl):
-        return plain_to_palette_html(
-            target_plain, st, one_line=one_line, align_left=one_line
-        )
-    body = html_body_for_label(box_text_html(tpl, st))
-    if not body:
-        return plain_to_palette_html(
-            target_plain, st, one_line=one_line, align_left=one_line
-        )
-    sanitized = sanitize_html_for_palette(
-        body, one_line=one_line, align_left=one_line
+    return _phrase_palette_rich_html(
+        tpl,
+        one_line=one_line,
+        align_left=one_line,
+        truncate_width=truncate_width if one_line else None,
     )
-    if one_line:
-        return palette_styled_html(
-            sanitized, st, align_left=True, omit_color=True
-        )
-    return sanitized
 
 
 def phrase_simple_button_label(tpl: dict[str, Any]) -> str:

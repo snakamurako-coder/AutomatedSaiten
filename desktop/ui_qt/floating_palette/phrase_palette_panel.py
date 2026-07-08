@@ -350,6 +350,7 @@ class PhrasePalettePanel(QWidget):
         )
         body.setWordWrap(False)
         body.setMinimumHeight(60)
+        body.setFont(self._palette_detail_label_font())
         body.setStyleSheet("background: transparent; border: none;")
         if not phrase_has_content(tpl):
             body.setStyleSheet(f"color: {COLORS['text_muted']}; background: transparent; border: none;")
@@ -389,6 +390,11 @@ class PhrasePalettePanel(QWidget):
             f" border-radius: 8px; }}"
         )
 
+    def _palette_detail_label_font(self) -> QFont:
+        font = QFont("Meiryo")
+        font.setPixelSize(14)
+        return font
+
     def _make_rich_label(
         self,
         tpl: dict[str, Any],
@@ -407,6 +413,7 @@ class PhrasePalettePanel(QWidget):
         else:
             label.setMinimumHeight(60)
             label.setAlignment(qt_label_alignment(tpl.get("style")))
+            label.setFont(self._palette_detail_label_font())
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         if phrase_has_content(tpl):
             label.setText(
