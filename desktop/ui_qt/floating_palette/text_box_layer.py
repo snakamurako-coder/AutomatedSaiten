@@ -61,6 +61,7 @@ class TextBoxLayer(QWidget):
         self._palm_rejection = True
         self._undo_stack: AnnotationUndoStack | None = None
         self._undo_stack_ref: Any | None = None
+        self._focus_guard_widgets: list[QWidget] = []
         self._placing = False
         self._place_origin: QPointF | None = None
         self._rubber = QFrame(self)
@@ -197,6 +198,11 @@ class TextBoxLayer(QWidget):
         if w is None:
             return
         w.apply_char_format(changes)
+
+    def set_focus_guard_widgets(self, widgets: list[QWidget] | tuple[QWidget, ...]) -> None:
+        self._focus_guard_widgets = [w for w in widgets if w is not None]
+        for w in self._widgets.values():
+            w.set_focus_guard_widgets(self._focus_guard_widgets)
 
     def clear_selection(self) -> None:
         self.select_box(None)
@@ -549,6 +555,9 @@ class TextBoxLayer(QWidget):
             w.show()
             w.raise_()
             self._widgets[bid] = w
+        if self._focus_guard_widgets:
+            for w in self._widgets.values():
+                w.set_focus_guard_widgets(self._focus_guard_widgets)
         self._rubber.raise_()
 
     def _on_widget_selected(self, box_id: str) -> None:

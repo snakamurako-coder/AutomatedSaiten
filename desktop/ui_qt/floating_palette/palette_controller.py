@@ -359,6 +359,9 @@ class PaletteController:
 
         stack._palette_on_char_format_state = on_char_format_state  # type: ignore[attr-defined]
         stack.text_layer.char_format_state_changed.connect(on_char_format_state)
+        stack.text_layer.set_focus_guard_widgets(
+            self.tool_window.text_format_focus_widgets()
+        )
 
         color, width, alpha = self.tool_window.current_brush()
         stack.set_palm_rejection(self._palm_rejection)
@@ -633,16 +636,7 @@ class PaletteController:
     def _on_char_format_changed(self, changes: dict[str, Any]) -> None:
         if self._editing_phrase_id:
             preview = self.tool_window.phrase_preview
-            if preview.is_text_editing():
-                preview.apply_char_format(changes)
-            else:
-                tpl = self._phrase_template_by_id(self._editing_phrase_id)
-                if tpl is not None:
-                    merged = self._phrase_style_from_char_changes(
-                        tpl.get("style") or {}, changes
-                    )
-                    preview.apply_style_dict(merged)
-                    self.tool_window.format_panel.load_style(merged)
+            preview.apply_char_format(changes)
             self._persist_phrase_from_preview(reload_list=False)
             return
         for stack in self._stacks():
@@ -795,6 +789,10 @@ class PaletteController:
         self.tool_window.phrase_preview.load_template(template)
         self.tool_window.set_phrase_format_editor_visible(True)
         fp = self.tool_window.format_panel
+        fp.set_detailed_controls_visible(True)
+        self.tool_window.phrase_preview.set_focus_guard_widgets(
+            self.tool_window.phrase_format_focus_widgets()
+        )
         fp.load_style(template.get("style") or {})
         self._sync_phrase_format_char_state(template)
 
@@ -813,10 +811,13 @@ class PaletteController:
         if not self._editing_phrase_id:
             return
         self.tool_window.phrase_preview.finish_text_editing()
+        self.tool_window.phrase_preview.set_focus_guard_widgets(())
         self._persist_phrase_from_preview(reload_list=True)
         self._editing_phrase_id = None
         self.tool_window.phrase_panel.set_editing_phrase(None)
         self.tool_window.set_phrase_format_editor_visible(False)
+        detailed = str(self.tool_window._view_mode or "") == VIEW_DETAILED
+        self.tool_window.format_panel.set_detailed_controls_visible(detailed)
 
     def _sync_phrase_format_char_state(self, tpl: dict[str, Any]) -> None:
         st = resolve_text_style(tpl.get("style") or {})
@@ -832,36 +833,6 @@ class PaletteController:
                 "underline": False,
             }
         )
-
-    def _phrase_style_from_char_changes(
-        self, style: dict[str, Any], changes: dict[str, Any]
-    ) -> dict[str, Any]:
-        merged = resolve_text_style(copy.deepcopy(style))
-        if "color" in changes:
-            merged["textColor"] = str(changes["color"])
-        if "fontSize" in changes:
-            merged["fontSize"] = float(changes["fontSize"])
-        if "lineSpacing" in changes:
-            merged["lineSpacing"] = float(changes["lineSpacing"])
-        if "bold" in changes:
-            merged["fontWeight"] = "bold" if changes["bold"] else "normal"
-        if "italic" in changes:
-            merged["fontStyle"] = "italic" if changes["italic"] else "normal"
-        if changes.get("toggleBold"):
-            merged["fontWeight"] = (
-                "normal" if str(merged.get("fontWeight")) == "bold" else "bold"
-            )
-        if changes.get("toggleItalic"):
-            merged["fontStyle"] = (
-                "normal" if str(merged.get("fontStyle")) == "italic" else "italic"
-            )
-        if changes.get("toggleUnderline"):
-            merged["textDecoration"] = (
-                "none"
-                if str(merged.get("textDecoration")) == "underline"
-                else "underline"
-            )
-        return resolve_text_style(merged)
 
     def _persist_phrase_from_preview(self, *, reload_list: bool) -> None:
         pid = self._editing_phrase_id

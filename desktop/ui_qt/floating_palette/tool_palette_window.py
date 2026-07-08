@@ -273,9 +273,10 @@ class ToolPaletteWindow(QWidget):
         phrase_lay.addWidget(self._phrase_panel, 1)
 
         self._phrase_preview = PhraseEditPreviewPanel()
+        self._phrase_preview.setMaximumHeight(300)
         self._phrase_preview.hide()
-        self._phrase_preview.layout_changed.connect(self._clamp_geometry)
-        phrase_lay.addWidget(self._phrase_preview)
+        self._phrase_preview.layout_changed.connect(self._fit_to_screen)
+        phrase_lay.addWidget(self._phrase_preview, 0)
 
         self._phrase_format_scroll = QScrollArea()
         self._phrase_format_scroll.setWidgetResizable(True)
@@ -287,12 +288,13 @@ class ToolPaletteWindow(QWidget):
             Qt.ScrollBarPolicy.ScrollBarAsNeeded
         )
         self._phrase_format_scroll.setSizePolicy(
-            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding
+            QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
         )
+        self._phrase_format_scroll.setMaximumHeight(360)
         self._phrase_format_placeholder = QWidget()
         self._phrase_format_scroll.setWidget(self._phrase_format_placeholder)
         self._phrase_format_scroll.hide()
-        phrase_lay.addWidget(self._phrase_format_scroll, 1)
+        phrase_lay.addWidget(self._phrase_format_scroll, 0)
 
         self._stack.addWidget(self._draw_page)
         self._stack.addWidget(self._text_page)
@@ -311,22 +313,39 @@ class ToolPaletteWindow(QWidget):
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
-        self._clamp_geometry()
+        self._fit_to_screen()
 
-    def _clamp_geometry(self) -> None:
+    def _screen_bounds(self) -> tuple[int, int] | None:
         screen = self.screen()
         if screen is None:
-            return
+            return None
         avail = screen.availableGeometry()
+        max_w = max(self.minimumWidth(), avail.width() - 16)
         max_h = max(self.minimumHeight(), avail.height() - 32)
+        return max_w, max_h
+
+    def _fit_to_screen(self) -> None:
+        bounds = self._screen_bounds()
+        if bounds is None:
+            return
+        screen = self.screen()
+        assert screen is not None
+        avail = screen.availableGeometry()
+        max_w, max_h = bounds
+        self.setMaximumWidth(max_w)
         self.setMaximumHeight(max_h)
         geo = self.geometry()
-        w = max(self.minimumWidth(), min(geo.width(), avail.width() - 16))
+        w = max(self.minimumWidth(), min(geo.width(), max_w))
         h = max(self.minimumHeight(), min(geo.height(), max_h))
+        if geo.width() != w or geo.height() != h:
+            self.resize(w, h)
         x = min(max(geo.x(), avail.left()), max(avail.left(), avail.right() - w + 1))
         y = min(max(geo.y(), avail.top()), max(avail.top(), avail.bottom() - h + 1))
-        if (geo.x(), geo.y(), geo.width(), geo.height()) != (x, y, w, h):
-            self.setGeometry(x, y, w, h)
+        if geo.x() != x or geo.y() != y:
+            self.move(x, y)
+
+    def _clamp_geometry(self) -> None:
+        self._fit_to_screen()
 
     @property
     def format_panel(self) -> FormatPalettePanel:
@@ -339,6 +358,12 @@ class ToolPaletteWindow(QWidget):
     @property
     def phrase_preview(self) -> PhraseEditPreviewPanel:
         return self._phrase_preview
+
+    def phrase_format_focus_widgets(self) -> list[QWidget]:
+        return [self._format_panel, self._phrase_format_scroll]
+
+    def text_format_focus_widgets(self) -> list[QWidget]:
+        return [self._format_panel, self._text_format_scroll]
 
     def _make_tab_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)

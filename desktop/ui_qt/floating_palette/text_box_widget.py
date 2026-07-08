@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 
 from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
 from ui_qt.floating_palette.text_rich import (
+    TEXT_FORMAT_HTML,
     box_text_html,
     html_body_for_label,
     mark_box_html,
@@ -114,6 +115,8 @@ class TextBoxWidget(QFrame):
         self._editing = False
         self._text_tool_mode = False
         self._preview_mode = False
+        self._preview_resize = False
+        self._focus_guard_widgets: list[QWidget] = []
         self._moving = False
         self._resizing = False
         self._resize_corner: str | None = None
@@ -267,6 +270,7 @@ class TextBoxWidget(QFrame):
         self._update_display_content()
         self._emit_char_format_state()
         self.changed.emit()
+        QTimer.singleShot(0, self._focus_editor)
 
     def set_selected(self, on: bool) -> None:
         self._selected = bool(on)
@@ -375,6 +379,19 @@ class TextBoxWidget(QFrame):
         if self._preview_mode:
             self.unsetCursor()
 
+    def set_preview_resize_enabled(self, enabled: bool) -> None:
+        self._preview_resize = bool(enabled)
+        self._update_handles()
+
+    def set_focus_guard_widgets(self, widgets: list[QWidget] | tuple[QWidget, ...]) -> None:
+        self._focus_guard_widgets = [w for w in widgets if w is not None]
+
+    def _has_rich_html(self) -> bool:
+        return (
+            str(self._box.get("textFormat") or "") == TEXT_FORMAT_HTML
+            and bool(str(self._box.get("textHtml") or "").strip())
+        )
+
     def append_transcript(self, text: str) -> None:
         chunk = str(text or "").strip()
         if not chunk:
@@ -395,6 +412,9 @@ class TextBoxWidget(QFrame):
         self._apply_style()
         if self._editing:
             self._apply_default_char_format()
+            self._apply_block_line_spacing()
+        elif self._has_rich_html():
+            self._load_editor_content()
             self._apply_block_line_spacing()
         else:
             sync_box_html_from_style(self._box)
@@ -423,16 +443,24 @@ class TextBoxWidget(QFrame):
     def _check_editing_finished(self) -> None:
         if self._suppress_focus_check or not self._editing:
             return
-        fw = QApplication.focusWidget()
-        w: QWidget | None = fw
-        while w is not None:
-            if w is self._editor:
-                return
-            w = w.parentWidget()
+        if self._is_editing_focus_retained():
+            return
         self._set_editing_mode(False)
         self.editing_committed.emit()
         self.changed.emit()
         self.editing_finished.emit(self.box_id)
+
+    def _is_editing_focus_retained(self) -> bool:
+        fw = QApplication.focusWidget()
+        w: QWidget | None = fw
+        while w is not None:
+            if w is self._editor:
+                return True
+            for guard in self._focus_guard_widgets:
+                if w is guard or guard.isAncestorOf(w):
+                    return True
+            w = w.parentWidget()
+        return False
 
     def _style(self) -> dict[str, Any]:
         st = self._box.get("style") or {}
@@ -461,7 +489,9 @@ class TextBoxWidget(QFrame):
         self._update_handles()
 
     def _update_handles(self) -> None:
-        show = self._selected and not self._editing and not self._preview_mode
+        show = self._selected and not self._editing and (
+            not self._preview_mode or self._preview_resize
+        )
         half = _HANDLE_SIZE // 2
         ox = _HANDLE_OVERHANG
         oy = _HANDLE_OVERHANG
@@ -699,7 +729,7 @@ class TextBoxWidget(QFrame):
         self._moving = False
 
     def _begin_resize(self, corner: str, global_pos: QPoint) -> None:
-        if self._preview_mode:
+        if self._preview_mode and not self._preview_resize:
             return
         if not self._selected:
             self.selected.emit(self.box_id)
