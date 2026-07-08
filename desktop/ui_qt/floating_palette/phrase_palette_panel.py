@@ -42,6 +42,7 @@ from ui_qt.style import COLORS
 
 _DETAIL_PLACEMENT_BTN_WIDTH = 40
 _DETAIL_TEXT_MIN_WIDTH = 80
+_DETAIL_BODY_MIN_HEIGHT = 120  # 旧60pxの2倍
 
 
 def _detail_action_btn_width(font) -> int:
@@ -356,7 +357,8 @@ class PhrasePalettePanel(QWidget):
             else phrase_detail_body_text(tpl)
         )
         body.setWordWrap(False)
-        body.setMinimumHeight(60)
+        body.setMinimumHeight(_DETAIL_BODY_MIN_HEIGHT)
+        body.setMaximumHeight(16777215)
         body.setFont(self._palette_detail_label_font())
         body.setStyleSheet("background: transparent; border: none;")
         if not phrase_has_content(tpl):
@@ -404,7 +406,7 @@ class PhrasePalettePanel(QWidget):
 
     def _palette_detail_label_font(self) -> QFont:
         font = QFont("Meiryo")
-        font.setPixelSize(14)
+        font.setPixelSize(13)
         return font
 
     def _simple_btn_width_hint(self, tpl: dict[str, Any]) -> int:
@@ -434,7 +436,11 @@ class PhrasePalettePanel(QWidget):
             label.setMaximumHeight(self._SIMPLE_BTN_HEIGHT - 4)
         else:
             label.setObjectName("PhraseDetailBody")
-            label.setMinimumHeight(60)
+            label.setMinimumHeight(_DETAIL_BODY_MIN_HEIGHT)
+            label.setMaximumHeight(16777215)
+            label.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
             label.setAlignment(qt_label_alignment(tpl.get("style")))
             label.setFont(self._palette_detail_label_font())
         label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
@@ -495,7 +501,9 @@ class PhrasePalettePanel(QWidget):
         btn.setObjectName("PhrasePlacementBtn")
         btn.setCheckable(True)
         btn.setFixedWidth(_DETAIL_PLACEMENT_BTN_WIDTH)
-        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Preferred)
+        btn.setMinimumHeight(_DETAIL_BODY_MIN_HEIGHT)
+        btn.setMaximumHeight(16777215)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
         preview = phrase_preview_text(tpl)
         btn.setToolTip(f"選択して配置\n{preview or '（未登録）'}")
         self._style_select_btn(btn, tpl)
@@ -514,6 +522,8 @@ class PhrasePalettePanel(QWidget):
         frame = QFrame()
         frame.setObjectName("PhraseDetailRow")
         frame.setProperty("editing", pid == self._editing_id)
+        frame.setMinimumHeight(_DETAIL_BODY_MIN_HEIGHT + 12)
+        frame.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         lay = QHBoxLayout(frame)
         lay.setContentsMargins(8, 6, 8, 6)
         lay.setSpacing(8)
@@ -523,12 +533,15 @@ class PhrasePalettePanel(QWidget):
 
         body = self._make_rich_label(tpl, one_line=False)
         body.setMinimumWidth(_DETAIL_TEXT_MIN_WIDTH)
+        body.setMinimumHeight(_DETAIL_BODY_MIN_HEIGHT)
+        body.setMaximumHeight(16777215)
         body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
         lay.addWidget(body, 1)
 
         action_w = _detail_action_btn_width(self.font())
-        action_row = QHBoxLayout()
-        action_row.setSpacing(4)
+        action_col = QVBoxLayout()
+        action_col.setSpacing(4)
+        action_col.setContentsMargins(0, 0, 0, 0)
         edit_btn = QPushButton("編集")
         edit_btn.setObjectName("PaletteActionBtn")
         edit_btn.setFixedWidth(action_w)
@@ -539,9 +552,10 @@ class PhrasePalettePanel(QWidget):
         del_btn.setProperty("variant", "danger")
         del_btn.setFixedWidth(action_w)
         del_btn.clicked.connect(lambda _c=False, p=pid: self._on_delete(p))
-        action_row.addWidget(edit_btn)
-        action_row.addWidget(del_btn)
-        lay.addLayout(action_row)
+        action_col.addWidget(edit_btn)
+        action_col.addWidget(del_btn)
+        action_col.addStretch(1)
+        lay.addLayout(action_col)
 
         frame.setStyleSheet(
             self._phrase_detail_row_qss(tpl, editing=pid == self._editing_id)
