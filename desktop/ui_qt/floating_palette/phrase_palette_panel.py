@@ -429,9 +429,9 @@ class PhrasePalettePanel(QWidget):
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
             label.setSizePolicy(
-                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
             )
-            label.setMaximumHeight(20)
+            label.setMaximumHeight(self._SIMPLE_BTN_HEIGHT - 4)
         else:
             label.setObjectName("PhraseDetailBody")
             label.setMinimumHeight(60)
@@ -469,9 +469,11 @@ class PhrasePalettePanel(QWidget):
         btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
+        btn.setMinimumHeight(self._SIMPLE_BTN_HEIGHT)
+        btn.setMaximumHeight(self._SIMPLE_BTN_HEIGHT)
         btn.setFixedHeight(self._SIMPLE_BTN_HEIGHT)
         lay = QHBoxLayout(btn)
-        lay.setContentsMargins(5, 1, 6, 1)
+        lay.setContentsMargins(6, 4, 8, 4)
         lay.setSpacing(0)
         label = self._make_rich_label(
             tpl,

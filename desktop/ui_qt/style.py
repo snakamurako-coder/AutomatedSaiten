@@ -434,7 +434,7 @@ QPushButton#PhraseSimpleBtn {{
     padding: 0 6px;
     font-size: 11px;
     text-align: left;
-    min-height: 0;
+    min-height: 36px;
     max-height: 36px;
 }}
 QPushButton#PhraseCopyBtn {{
