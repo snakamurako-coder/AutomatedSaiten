@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -38,6 +38,8 @@ from ui_qt.style import COLORS
 class PhraseBatchUpdateDialog(QDialog):
     """同一 phraseGroupId の配置を現在のテスト内で一括更新する。"""
 
+    applied = Signal(int)
+
     def __init__(
         self,
         parent: QWidget | None,
@@ -53,6 +55,7 @@ class PhraseBatchUpdateDialog(QDialog):
 
         self.setWindowTitle("定型文一括更新")
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
+        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setMinimumSize(520, 480)
 
         root = QVBoxLayout(self)
@@ -161,6 +164,15 @@ class PhraseBatchUpdateDialog(QDialog):
     def changed_count(self) -> int:
         return self._changed_count
 
+    def showEvent(self, event) -> None:  # type: ignore[override]
+        super().showEvent(event)
+        self.raise_()
+        self.activateWindow()
+
+    def _notify_applied(self, count: int) -> None:
+        if count > 0:
+            self.applied.emit(count)
+
     def _reload_placements(self) -> None:
         placements = find_phrase_placements(self._test_id, self._group_id)
         self._table.setRowCount(len(placements))
@@ -190,6 +202,7 @@ class PhraseBatchUpdateDialog(QDialog):
         )
         self._changed_count += count
         self._reload_placements()
+        self._notify_applied(count)
         h.info(self, "一斉削除", f"{count} 件を削除しました。")
 
     def _on_append(self) -> None:
@@ -210,6 +223,7 @@ class PhraseBatchUpdateDialog(QDialog):
         )
         self._changed_count += count
         self._reload_placements()
+        self._notify_applied(count)
         h.info(self, "一斉追加", f"{count} 件を更新しました。")
 
     def _on_replace(self) -> None:
@@ -231,4 +245,5 @@ class PhraseBatchUpdateDialog(QDialog):
         )
         self._changed_count += count
         self._reload_placements()
+        self._notify_applied(count)
         h.info(self, "一斉変更", f"{count} 件を更新しました。")

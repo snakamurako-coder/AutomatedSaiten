@@ -855,10 +855,18 @@ class PaletteController:
             test_id=str(test_id),
             template=template,
         )
-        dlg.exec()
-        if dlg.changed_count > 0:
-            self._reload_all_stack_annotations()
-            self._refresh_crop_grid_annotations()
+        dlg.applied.connect(self._on_phrase_batch_applied)
+        self.set_settings_overlay_active(True)
+        try:
+            dlg.raise_()
+            dlg.activateWindow()
+            dlg.exec()
+        finally:
+            self.set_settings_overlay_active(False)
+
+    def _on_phrase_batch_applied(self, _count: int) -> None:
+        self._reload_all_stack_annotations()
+        self._refresh_crop_grid_annotations()
 
     def _reload_all_stack_annotations(self) -> None:
         if not self._page:
