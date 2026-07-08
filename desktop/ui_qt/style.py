@@ -456,6 +456,16 @@ QPushButton#PhraseSimpleBtn:checked {{
 QPushButton#PhraseSimpleBtn QLabel {{
     background: transparent;
     border: none;
+    padding: 0;
+    margin: 0;
+}}
+QLabel#PhraseSimpleBody {{
+    font-size: 12px;
+    line-height: 16px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
 }}
 QPushButton#PhrasePlacementBtn {{
     background: {COLORS["bg"]};

@@ -173,7 +173,7 @@ def html_for_pdf_box(
 
 
 _PALETTE_FONT_SIZE = "12px"
-_PALETTE_LINE_HEIGHT = "1.35"
+_PALETTE_LINE_HEIGHT = "16px"
 _PALETTE_DETAIL_FONT_SIZE = "14px"
 _PALETTE_DETAIL_LINE_HEIGHT = "20px"
 
@@ -453,9 +453,10 @@ def sanitize_html_for_palette(
         )
         if not re.search(r"text-align:", text, flags=re.IGNORECASE):
             text = f'<span style="text-align:left">{text}</span>'
-    text = _apply_palette_font_to_inline_styles(text, detail=detail)
-    fs = _PALETTE_DETAIL_FONT_SIZE if detail else _PALETTE_FONT_SIZE
-    lh = _PALETTE_DETAIL_LINE_HEIGHT if detail else _PALETTE_LINE_HEIGHT
-    if not re.search(r"font-size:", text, flags=re.IGNORECASE):
-        text = f'<span style="font-size:{fs}; line-height:{lh}">{text}</span>'
+    if detail:
+        text = _apply_palette_font_to_inline_styles(text, detail=True)
+        fs = _PALETTE_DETAIL_FONT_SIZE
+        lh = _PALETTE_DETAIL_LINE_HEIGHT
+        if not re.search(r"font-size:", text, flags=re.IGNORECASE):
+            text = f'<span style="font-size:{fs}; line-height:{lh}">{text}</span>'
     return text.strip()

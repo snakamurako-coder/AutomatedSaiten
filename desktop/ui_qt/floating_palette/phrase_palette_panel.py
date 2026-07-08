@@ -185,7 +185,7 @@ class PhrasePalettePanel(QWidget):
     def _simple_list_height(self) -> int:
         if not self._phrase_btns:
             return 0
-        btn_h = max(btn.sizeHint().height() for btn in self._phrase_btns.values())
+        btn_h = 24
         count = len(self._phrase_btns)
         gap = self._simple_lay.spacing()
         return count * btn_h + gap * max(0, count - 1)
@@ -208,7 +208,12 @@ class PhrasePalettePanel(QWidget):
             )
             return max(220, copy_w, row_w)
         simple_w = max(
-            (self._phrase_btns[pid].sizeHint().width() for pid in self._phrase_btns),
+            (
+                self._simple_btn_width_hint(
+                    self._template_for_id(pid) or {}
+                )
+                for pid in self._phrase_btns
+            ),
             default=0,
         )
         return max(220, copy_w, simple_w)
@@ -390,10 +395,20 @@ class PhrasePalettePanel(QWidget):
             f" border-radius: 8px; }}"
         )
 
+    def _palette_simple_label_font(self) -> QFont:
+        font = QFont("Meiryo")
+        font.setPixelSize(12)
+        return font
+
     def _palette_detail_label_font(self) -> QFont:
         font = QFont("Meiryo")
         font.setPixelSize(14)
         return font
+
+    def _simple_btn_width_hint(self, tpl: dict[str, Any]) -> int:
+        fm = QFontMetrics(self._palette_simple_label_font())
+        text = phrase_simple_button_label(tpl)
+        return fm.horizontalAdvance(text) + 20
 
     def _make_rich_label(
         self,
@@ -403,14 +418,20 @@ class PhrasePalettePanel(QWidget):
         truncate_width: int | None = None,
     ) -> QLabel:
         label = QLabel()
-        label.setObjectName("PhraseDetailBody")
         label.setTextFormat(Qt.TextFormat.RichText)
         label.setWordWrap(False)
         if one_line:
+            label.setObjectName("PhraseSimpleBody")
+            label.setFont(self._palette_simple_label_font())
             label.setAlignment(
                 Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
             )
+            label.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Ignored
+            )
+            label.setMaximumHeight(20)
         else:
+            label.setObjectName("PhraseDetailBody")
             label.setMinimumHeight(60)
             label.setAlignment(qt_label_alignment(tpl.get("style")))
             label.setFont(self._palette_detail_label_font())
@@ -423,7 +444,8 @@ class PhrasePalettePanel(QWidget):
                 if one_line
                 else phrase_palette_detail_html(tpl)
             )
-            label.setStyleSheet("background: transparent; border: none;")
+            if not one_line:
+                label.setStyleSheet("background: transparent; border: none;")
         else:
             label.setText(phrase_detail_body_text(tpl))
             label.setStyleSheet(
@@ -445,10 +467,9 @@ class PhrasePalettePanel(QWidget):
         btn.setSizePolicy(
             QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
         )
-        btn_h = btn.sizeHint().height()
-        btn.setFixedHeight(btn_h)
+        btn.setFixedHeight(24)
         lay = QHBoxLayout(btn)
-        lay.setContentsMargins(6, 1, 8, 1)
+        lay.setContentsMargins(6, 2, 8, 2)
         lay.setSpacing(0)
         label = self._make_rich_label(
             tpl,
