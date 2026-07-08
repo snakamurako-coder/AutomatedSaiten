@@ -109,6 +109,7 @@ class TextBoxWidget(QFrame):
         self._selected = False
         self._editing = False
         self._text_tool_mode = False
+        self._preview_mode = False
         self._moving = False
         self._resizing = False
         self._resize_corner: str | None = None
@@ -360,6 +361,16 @@ class TextBoxWidget(QFrame):
         self._text_tool_mode = enabled
         self._apply_style()
 
+    def set_preview_mode(self, enabled: bool) -> None:
+        self._preview_mode = bool(enabled)
+        if self._preview_mode:
+            self._moving = False
+            self._resizing = False
+            self._press_origin = None
+        self._update_handles()
+        if self._preview_mode:
+            self.unsetCursor()
+
     def append_transcript(self, text: str) -> None:
         chunk = str(text or "").strip()
         if not chunk:
@@ -381,6 +392,8 @@ class TextBoxWidget(QFrame):
         if self._editing:
             self._apply_default_char_format()
         self._apply_block_line_spacing()
+        if not self._editing:
+            self._update_display_content()
 
     def _set_editing_mode(self, editing: bool) -> None:
         self._editing = bool(editing)
@@ -442,7 +455,7 @@ class TextBoxWidget(QFrame):
         self._update_handles()
 
     def _update_handles(self) -> None:
-        show = self._selected and not self._editing
+        show = self._selected and not self._editing and not self._preview_mode
         half = _HANDLE_SIZE // 2
         ox = _HANDLE_OVERHANG
         oy = _HANDLE_OVERHANG
@@ -647,6 +660,8 @@ class TextBoxWidget(QFrame):
         self._moving = False
 
     def _begin_resize(self, corner: str, global_pos: QPoint) -> None:
+        if self._preview_mode:
+            return
         if not self._selected:
             self.selected.emit(self.box_id)
         self._press_origin = None
@@ -704,7 +719,11 @@ class TextBoxWidget(QFrame):
         return self._body.geometry().contains(pos)
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if event.button() == Qt.LeftButton and not self._editing:
+        if (
+            event.button() == Qt.LeftButton
+            and not self._editing
+            and not self._preview_mode
+        ):
             if not self._point_in_body(event.position().toPoint()):
                 super().mousePressEvent(event)
                 return
@@ -718,12 +737,16 @@ class TextBoxWidget(QFrame):
             self._update_resize(event.globalPosition().toPoint())
             event.accept()
             return
-        if event.buttons() & Qt.LeftButton:
+        if not self._preview_mode and event.buttons() & Qt.LeftButton:
             self._update_move_drag(event.globalPosition().toPoint())
             if self._moving:
                 event.accept()
                 return
-        if not self._editing and self._point_in_body(event.position().toPoint()):
+        if (
+            not self._preview_mode
+            and not self._editing
+            and self._point_in_body(event.position().toPoint())
+        ):
             self.setCursor(Qt.CursorShape.SizeAllCursor)
         else:
             self.unsetCursor()

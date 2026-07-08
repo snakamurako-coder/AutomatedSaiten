@@ -9,7 +9,12 @@ from typing import Any
 
 from config import load_config, save_config
 from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
-from ui_qt.floating_palette.text_rich import box_text_html, html_body_for_label
+from ui_qt.floating_palette.text_rich import (
+    TEXT_FORMAT_HTML,
+    box_text_html,
+    html_body_for_label,
+    plain_to_html,
+)
 
 PHRASE_SIMPLE_COUNT = 6
 PHRASE_UNREGISTERED_LABEL = "（未登録）"
@@ -171,6 +176,51 @@ def phrase_preview_text(tpl: dict[str, Any]) -> str:
     html = box_text_html(tpl, tpl.get("style"))
     body = html_body_for_label(html)
     return re.sub(r"<[^>]+>", "", body or "").replace("&nbsp;", " ").strip()
+
+
+def apply_phrase_template_to_box(box: dict[str, Any], template: dict[str, Any]) -> None:
+    style = copy.deepcopy(template.get("style") or {})
+    box["style"] = style
+    text = str(template.get("text") or "")
+    html = str(template.get("textHtml") or "").strip()
+    fmt = str(template.get("textFormat") or "plain")
+    box["text"] = text
+    if html:
+        box["textHtml"] = html
+        box["textFormat"] = TEXT_FORMAT_HTML
+    elif text.strip():
+        box["textHtml"] = plain_to_html(text, style)
+        box["textFormat"] = TEXT_FORMAT_HTML
+    else:
+        box["textHtml"] = ""
+        box["textFormat"] = fmt if fmt != TEXT_FORMAT_HTML else "plain"
+
+
+def phrase_template_to_box(tpl: dict[str, Any]) -> dict[str, Any]:
+    from models.text_annotation_repo import new_text_box
+
+    box = new_text_box(
+        0.0,
+        0.0,
+        width=max(40.0, float(tpl.get("width") or 120.0)),
+        height=max(24.0, float(tpl.get("height") or 36.0)),
+    )
+    apply_phrase_template_to_box(box, tpl)
+    return box
+
+
+def phrase_updates_from_box(phrase_id: str, box: dict[str, Any]) -> dict[str, Any]:
+    text = str(box.get("text") or "")
+    label = text.replace("\n", " ").strip()[:20]
+    return {
+        "text": text,
+        "label": label,
+        "textHtml": str(box.get("textHtml") or ""),
+        "textFormat": str(box.get("textFormat") or "plain"),
+        "style": resolve_text_style(copy.deepcopy(box.get("style") or {})),
+        "width": max(40.0, float(box.get("width") or 120.0)),
+        "height": max(24.0, float(box.get("height") or 36.0)),
+    }
 
 
 def phrase_from_text_box(box: dict[str, Any]) -> dict[str, Any]:

@@ -406,6 +406,11 @@ QLabel#PhraseDetailTitle {{
     font-size: 12px;
     font-weight: 600;
 }}
+QFrame#PhrasePreviewCanvas {{
+    background: {COLORS["bg"]};
+    border: 1px dashed {COLORS["border_strong"]};
+    border-radius: 8px;
+}}
 QPushButton#PaletteIconBtn {{
     background: transparent;
     border: 1px solid {COLORS["border"]};

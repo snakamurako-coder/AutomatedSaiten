@@ -21,7 +21,7 @@ from PySide6.QtWidgets import (
 
 from ui_qt.crop_widgets import SliderSpinControls
 from ui_qt.floating_palette.format_palette_panel import FormatPalettePanel
-from ui_qt.floating_palette.phrase_palette_panel import PhrasePalettePanel
+from ui_qt.floating_palette.phrase_edit_preview_panel import PhraseEditPreviewPanel
 from ui_qt.floating_palette.palette_prefs import (
     PALETTE_COLORS,
     TOOL_ERASER,
@@ -271,6 +271,10 @@ class ToolPaletteWindow(QWidget):
         self._phrase_panel = PhrasePalettePanel()
         phrase_lay.addWidget(self._phrase_panel, 1)
 
+        self._phrase_preview = PhraseEditPreviewPanel()
+        self._phrase_preview.hide()
+        phrase_lay.addWidget(self._phrase_preview)
+
         self._phrase_format_scroll = QScrollArea()
         self._phrase_format_scroll.setWidgetResizable(True)
         self._phrase_format_scroll.setFrameShape(QFrame.NoFrame)
@@ -329,6 +333,10 @@ class ToolPaletteWindow(QWidget):
     @property
     def phrase_panel(self) -> PhrasePalettePanel:
         return self._phrase_panel
+
+    @property
+    def phrase_preview(self) -> PhraseEditPreviewPanel:
+        return self._phrase_preview
 
     def _make_tab_btn(self, label: str) -> QPushButton:
         btn = QPushButton(label)
@@ -553,6 +561,7 @@ class ToolPaletteWindow(QWidget):
             ):
                 self._text_format_scroll.setWidget(panel)
         panel.set_template_edit_mode(visible)
+        self._phrase_preview.setVisible(visible)
         self._clamp_geometry()
 
     @staticmethod
