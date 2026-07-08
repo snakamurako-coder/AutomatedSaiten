@@ -444,7 +444,10 @@ QPushButton#PhraseSimpleBtn:hover {{
 QPushButton#PhraseSimpleBtn:checked {{
     background: {COLORS["accent_soft"]};
     border-color: {COLORS["accent"]};
-    color: {COLORS["accent"]};
+}}
+QPushButton#PhraseSimpleBtn QLabel {{
+    background: transparent;
+    border: none;
 }}
 QPushButton#PhrasePlacementBtn {{
     background: {COLORS["bg"]};

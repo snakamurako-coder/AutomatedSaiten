@@ -212,12 +212,33 @@ def palette_border_css(style: dict[str, Any] | None) -> str:
     return f"{bw}px solid rgba({r}, {g}, {b}, {ba})"
 
 
+def extract_primary_text_color(html: str) -> str | None:
+    """リッチ HTML から主要な文字色を抽出する。"""
+    raw = str(html or "").strip()
+    if not raw:
+        return None
+    body = html_body_for_label(raw) if "<body" in raw.lower() else raw
+    hex_matches = re.findall(r"color:\s*(#[0-9a-fA-F]{6})\b", body, flags=re.IGNORECASE)
+    if hex_matches:
+        return hex_matches[0].lower()
+    rgb_matches = re.findall(
+        r"color:\s*rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
+        body,
+        flags=re.IGNORECASE,
+    )
+    if rgb_matches:
+        r, g, b = (int(x) for x in rgb_matches[0])
+        return f"#{r:02x}{g:02x}{b:02x}"
+    return None
+
+
 def palette_styled_html(
     inner_html: str,
     style: dict[str, Any] | None,
     *,
     detail: bool = False,
     align_left: bool = False,
+    omit_color: bool = False,
 ) -> str:
     st = style or {}
     tc = str(st.get("textColor") or "#111827")
@@ -227,12 +248,13 @@ def palette_styled_html(
     span_styles = [
         "margin:0",
         "padding:0",
-        f"color:{tc}",
         f"font-size:{fs}",
         f"line-height:{lh}",
         f"text-align:{align}",
         "font-family:Meiryo, sans-serif",
     ]
+    if not omit_color:
+        span_styles.insert(2, f"color:{tc}")
     if str(st.get("fontWeight") or "") == "bold":
         span_styles.append("font-weight:bold")
     if str(st.get("fontStyle") or "") == "italic":

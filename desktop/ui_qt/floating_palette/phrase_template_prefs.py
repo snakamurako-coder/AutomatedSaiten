@@ -14,6 +14,7 @@ from ui_qt.floating_palette.text_rich import (
     TEXT_FORMAT_HTML,
     box_has_saved_html,
     box_text_html,
+    extract_primary_text_color,
     html_body_for_label,
     palette_styled_html,
     plain_to_palette_html,
@@ -211,14 +212,33 @@ def phrase_text_one_line(tpl: dict[str, Any]) -> str:
     return re.sub(r"\s+", " ", text.replace("\n", " ")).strip()
 
 
+def phrase_display_style(tpl: dict[str, Any]) -> dict[str, Any]:
+    """パレット表示用の書式（HTML 内の文字色を style に反映）。"""
+    st = resolve_text_style(tpl.get("style") or {})
+    if box_has_saved_html(tpl):
+        tc = extract_primary_text_color(str(tpl.get("textHtml") or ""))
+        if tc:
+            st = {**st, "textColor": tc}
+    return st
+
+
 def phrase_palette_detail_html(tpl: dict[str, Any]) -> str:
     """詳細タブ用：最大3行・行ごとに幅制限・固定フォント。"""
     if not phrase_has_content(tpl):
         return plain_to_palette_html(
             "（文言未登録）", None, detail=True, one_line=True
         )
-    st = resolve_text_style(tpl.get("style") or {})
-    lines = phrase_detail_display_lines(phrase_preview_text(tpl))
+    st = phrase_display_style(tpl)
+    plain = phrase_preview_text(tpl)
+    one_line = len(plain.split("\n")) <= 1
+    line_plain = phrase_text_one_line(tpl)
+    within_width = _display_width(line_plain) <= PHRASE_DETAIL_LINE_WIDTH
+    if box_has_saved_html(tpl) and one_line and within_width:
+        body = html_body_for_label(box_text_html(tpl, st))
+        if body:
+            sanitized = sanitize_html_for_palette(body, one_line=False)
+            return palette_styled_html(sanitized, st, detail=True, omit_color=True)
+    lines = phrase_detail_display_lines(plain)
     inner = "<br>".join(html_lib.escape(line) for line in lines)
     return palette_styled_html(inner, st, detail=True)
 
@@ -233,7 +253,7 @@ def phrase_palette_content_html(
         return plain_to_palette_html(
             PHRASE_UNREGISTERED_LABEL, None, one_line=True, align_left=one_line
         )
-    st = resolve_text_style(tpl.get("style") or {})
+    st = phrase_display_style(tpl)
     plain = phrase_preview_text(tpl)
     line_plain = phrase_text_one_line(tpl)
     target_plain = line_plain if one_line else plain
@@ -254,7 +274,9 @@ def phrase_palette_content_html(
         body, one_line=one_line, align_left=one_line
     )
     if one_line:
-        return palette_styled_html(sanitized, st, align_left=True)
+        return palette_styled_html(
+            sanitized, st, align_left=True, omit_color=True
+        )
     return sanitized
 
 
@@ -315,16 +337,20 @@ def phrase_template_to_box(tpl: dict[str, Any]) -> dict[str, Any]:
 def phrase_updates_from_box(phrase_id: str, box: dict[str, Any]) -> dict[str, Any]:
     text = str(box.get("text") or "")
     label = text.replace("\n", " ").strip()[:20]
+    style = resolve_text_style(copy.deepcopy(box.get("style") or {}))
     html = str(box.get("textHtml") or "")
     fmt = str(box.get("textFormat") or "plain")
     if html.strip():
         fmt = TEXT_FORMAT_HTML
+        tc = extract_primary_text_color(html)
+        if tc:
+            style["textColor"] = tc
     return {
         "text": text,
         "label": label,
         "textHtml": html,
         "textFormat": fmt,
-        "style": resolve_text_style(copy.deepcopy(box.get("style") or {})),
+        "style": style,
         "width": max(40.0, float(box.get("width") or 120.0)),
         "height": max(24.0, float(box.get("height") or 36.0)),
     }
