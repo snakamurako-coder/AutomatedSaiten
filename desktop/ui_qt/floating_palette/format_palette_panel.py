@@ -139,7 +139,6 @@ class FormatPalettePanel(QWidget):
             h_align_row.addWidget(btn)
             self._align_h_btns[key] = btn
         h_align_row.addStretch()
-        align_lay.addLayout(h_align_row)
         v_align_row = QHBoxLayout()
         v_align_row.setSpacing(4)
         v_align_row.setContentsMargins(0, 0, 0, 0)
@@ -160,7 +159,6 @@ class FormatPalettePanel(QWidget):
             v_align_row.addWidget(btn)
             self._align_v_btns[key] = btn
         v_align_row.addStretch()
-        align_lay.addLayout(v_align_row)
 
         self._detail_format_frame = QWidget()
         detail_lay = QHBoxLayout(self._detail_format_frame)
@@ -185,6 +183,8 @@ class FormatPalettePanel(QWidget):
             detail_lay.addWidget(deco_btn)
         detail_lay.addStretch()
         align_lay.addWidget(self._detail_format_frame)
+        align_lay.addLayout(h_align_row)
+        align_lay.addLayout(v_align_row)
         self._detail_format_frame.hide()
         root.addWidget(align_frame)
         root.addSpacing(max(0, self._DETAIL_VERTICAL_INTERVAL - root.spacing()))
