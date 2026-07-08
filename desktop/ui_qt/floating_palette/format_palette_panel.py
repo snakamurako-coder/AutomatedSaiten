@@ -115,6 +115,7 @@ class FormatPalettePanel(QWidget):
         root.addLayout(metrics_row)
 
         align_frame = QFrame()
+        self._align_frame = align_frame
         align_frame.setFrameShape(QFrame.Shape.NoFrame)
         align_lay = QVBoxLayout(align_frame)
         align_lay.setContentsMargins(0, 0, 0, 0)
@@ -328,7 +329,8 @@ class FormatPalettePanel(QWidget):
         spin.setToolTip(tooltip)
         fm = QFontMetrics(spin.font())
         frame = spin.style().pixelMetric(QStyle.PixelMetric.PM_SpinBoxFrameWidth, None, spin)
-        spin.setFixedWidth(fm.horizontalAdvance("14 pt") + frame * 2 + 20)
+        # "pt" が欠けないよう余裕を持たせる（簡易/詳細/定型文編集で共通）。
+        spin.setFixedWidth(fm.horizontalAdvance("144 pt") + frame * 2 + 24)
         return spin
 
     def _make_deco_btn(
@@ -352,6 +354,8 @@ class FormatPalettePanel(QWidget):
         return btn
 
     def set_detailed_controls_visible(self, visible: bool) -> None:
+        if _qt_widget_alive(getattr(self, "_align_frame", None)):
+            self._align_frame.setVisible(bool(visible))
         if not _qt_widget_alive(self._detail_format_frame):
             return
         self._detail_format_frame.setVisible(bool(visible))

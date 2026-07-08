@@ -236,27 +236,14 @@ class ToolPaletteWindow(QWidget):
         )
         draw_lay.addWidget(self._draw_hint, 0)
 
-        clear_row = QVBoxLayout()
-        clear_row.setSpacing(2)
-        self._clear_ink_btn = QPushButton("選択画像のペン描写を全消去")
-        self._clear_ink_btn.setToolTip("最後にクリックした画像の手書きをすべて消去")
-        self._clear_ink_btn.clicked.connect(self.clear_ink_requested.emit)
-        clear_row.addWidget(self._clear_ink_btn)
-        self._clear_text_btn = QPushButton("選択画像のテキストボックスを全消去")
-        self._clear_text_btn.setToolTip("最後にクリックした画像のテキストボックスをすべて消去")
-        self._clear_text_btn.clicked.connect(self.clear_text_boxes_requested.emit)
-        clear_row.addWidget(self._clear_text_btn)
-        draw_lay.addLayout(clear_row)
-
-        self._detail_frame = QFrame()
-        self._detail_frame.setObjectName("FloatingPaletteSection")
-        self._detail_frame.setSizePolicy(
+        self._eraser_frame = QFrame()
+        self._eraser_frame.setObjectName("FloatingPaletteSection")
+        self._eraser_frame.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
         )
-        detail_lay = QVBoxLayout(self._detail_frame)
-        detail_lay.setContentsMargins(0, 0, 0, 0)
-        detail_lay.setSpacing(4)
-
+        eraser_lay = QVBoxLayout(self._eraser_frame)
+        eraser_lay.setContentsMargins(0, 0, 0, 0)
+        eraser_lay.setSpacing(0)
         eraser_row = QHBoxLayout()
         eraser_lbl = QLabel("消しゴム")
         eraser_lbl.setFixedWidth(48)
@@ -268,16 +255,44 @@ class ToolPaletteWindow(QWidget):
             lambda _i: self.eraser_mode_changed.emit(self._eraser_combo.currentData())
         )
         eraser_row.addWidget(self._eraser_combo, 1)
-        detail_lay.addLayout(eraser_row)
+        eraser_lay.addLayout(eraser_row)
+        draw_lay.addWidget(self._eraser_frame, 0)
+
+        self._draw_clear_frame = QFrame()
+        self._draw_clear_frame.setObjectName("FloatingPaletteSection")
+        self._draw_clear_frame.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        clear_row = QVBoxLayout(self._draw_clear_frame)
+        clear_row.setContentsMargins(0, 0, 0, 0)
+        clear_row.setSpacing(2)
+        self._clear_ink_btn = QPushButton("選択画像のペン描写を全消去")
+        self._clear_ink_btn.setToolTip("最後にクリックした画像の手書きをすべて消去")
+        self._clear_ink_btn.clicked.connect(self.clear_ink_requested.emit)
+        clear_row.addWidget(self._clear_ink_btn)
+        self._clear_text_btn = QPushButton("選択画像のテキストボックスを全消去")
+        self._clear_text_btn.setToolTip("最後にクリックした画像のテキストボックスをすべて消去")
+        self._clear_text_btn.clicked.connect(self.clear_text_boxes_requested.emit)
+        clear_row.addWidget(self._clear_text_btn)
+        draw_lay.addWidget(self._draw_clear_frame, 0)
+
+        self._detail_frame = QFrame()
+        self._detail_frame.setObjectName("FloatingPaletteSection")
+        self._detail_frame.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        detail_lay = QVBoxLayout(self._detail_frame)
+        detail_lay.setContentsMargins(0, 0, 0, 0)
+        detail_lay.setSpacing(4)
 
         self._show_ink_check = QCheckBox("手書きレイヤー表示")
         self._show_ink_check.setChecked(True)
-        self._show_ink_check.toggled.connect(self.show_ink_changed.emit)
+        self._show_ink_check.toggled.connect(self._on_show_ink_toggled_from_draw)
         detail_lay.addWidget(self._show_ink_check)
 
         self._show_text_check = QCheckBox("テキストボックスレイヤー表示")
         self._show_text_check.setChecked(True)
-        self._show_text_check.toggled.connect(self.show_text_changed.emit)
+        self._show_text_check.toggled.connect(self._on_show_text_toggled_from_draw)
         detail_lay.addWidget(self._show_text_check)
 
         draw_lay.addWidget(self._detail_frame, 0)
@@ -318,6 +333,41 @@ class ToolPaletteWindow(QWidget):
         )
         self._text_format_scroll.setWidget(self._format_panel)
         text_lay.addWidget(self._text_format_scroll, 0)
+
+        self._text_detail_frame = QFrame()
+        self._text_detail_frame.setObjectName("FloatingPaletteSection")
+        self._text_detail_frame.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        text_detail_lay = QVBoxLayout(self._text_detail_frame)
+        text_detail_lay.setContentsMargins(0, 0, 0, 0)
+        text_detail_lay.setSpacing(4)
+
+        text_clear_row = QVBoxLayout()
+        text_clear_row.setSpacing(2)
+        self._text_clear_ink_btn = QPushButton("選択画像のペン描写を全消去")
+        self._text_clear_ink_btn.setToolTip("最後にクリックした画像の手書きをすべて消去")
+        self._text_clear_ink_btn.clicked.connect(self.clear_ink_requested.emit)
+        text_clear_row.addWidget(self._text_clear_ink_btn)
+        self._text_clear_text_btn = QPushButton("選択画像のテキストボックスを全消去")
+        self._text_clear_text_btn.setToolTip(
+            "最後にクリックした画像のテキストボックスをすべて消去"
+        )
+        self._text_clear_text_btn.clicked.connect(self.clear_text_boxes_requested.emit)
+        text_clear_row.addWidget(self._text_clear_text_btn)
+        text_detail_lay.addLayout(text_clear_row)
+
+        self._text_show_ink_check = QCheckBox("手書きレイヤー表示")
+        self._text_show_ink_check.setChecked(True)
+        self._text_show_ink_check.toggled.connect(self._on_show_ink_toggled_from_text)
+        text_detail_lay.addWidget(self._text_show_ink_check)
+
+        self._text_show_text_check = QCheckBox("テキストボックスレイヤー表示")
+        self._text_show_text_check.setChecked(True)
+        self._text_show_text_check.toggled.connect(self._on_show_text_toggled_from_text)
+        text_detail_lay.addWidget(self._text_show_text_check)
+
+        text_lay.addWidget(self._text_detail_frame, 0)
         text_lay.addStretch(1)
 
         self._phrase_page = QWidget()
@@ -768,7 +818,10 @@ class ToolPaletteWindow(QWidget):
     def _apply_view_mode(self) -> None:
         self._apply_min_height_policy()
         detailed = self._view_mode == VIEW_DETAILED
+        self._eraser_frame.setVisible(detailed)
+        self._draw_clear_frame.setVisible(detailed)
         self._detail_frame.setVisible(detailed)
+        self._text_detail_frame.setVisible(detailed)
         self._format_panel.set_detailed_controls_visible(detailed)
         self._phrase_panel.set_view_mode(self._view_mode)
         self._view_btn.setText("簡易" if detailed else "詳細")
@@ -893,10 +946,46 @@ class ToolPaletteWindow(QWidget):
             self._eraser_combo.setCurrentIndex(idx)
 
     def set_show_ink(self, visible: bool) -> None:
-        self._show_ink_check.setChecked(bool(visible))
+        checked = bool(visible)
+        self._show_ink_check.blockSignals(True)
+        self._show_ink_check.setChecked(checked)
+        self._show_ink_check.blockSignals(False)
+        self._text_show_ink_check.blockSignals(True)
+        self._text_show_ink_check.setChecked(checked)
+        self._text_show_ink_check.blockSignals(False)
 
     def set_show_text(self, visible: bool) -> None:
-        self._show_text_check.setChecked(bool(visible))
+        checked = bool(visible)
+        self._show_text_check.blockSignals(True)
+        self._show_text_check.setChecked(checked)
+        self._show_text_check.blockSignals(False)
+        self._text_show_text_check.blockSignals(True)
+        self._text_show_text_check.setChecked(checked)
+        self._text_show_text_check.blockSignals(False)
+
+    def _on_show_ink_toggled_from_draw(self, checked: bool) -> None:
+        self._text_show_ink_check.blockSignals(True)
+        self._text_show_ink_check.setChecked(bool(checked))
+        self._text_show_ink_check.blockSignals(False)
+        self.show_ink_changed.emit(bool(checked))
+
+    def _on_show_ink_toggled_from_text(self, checked: bool) -> None:
+        self._show_ink_check.blockSignals(True)
+        self._show_ink_check.setChecked(bool(checked))
+        self._show_ink_check.blockSignals(False)
+        self.show_ink_changed.emit(bool(checked))
+
+    def _on_show_text_toggled_from_draw(self, checked: bool) -> None:
+        self._text_show_text_check.blockSignals(True)
+        self._text_show_text_check.setChecked(bool(checked))
+        self._text_show_text_check.blockSignals(False)
+        self.show_text_changed.emit(bool(checked))
+
+    def _on_show_text_toggled_from_text(self, checked: bool) -> None:
+        self._show_text_check.blockSignals(True)
+        self._show_text_check.setChecked(bool(checked))
+        self._show_text_check.blockSignals(False)
+        self.show_text_changed.emit(bool(checked))
 
     def current_brush(self) -> tuple[str, float, float]:
         return (
