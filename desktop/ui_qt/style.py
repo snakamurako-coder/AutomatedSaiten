@@ -422,6 +422,8 @@ QFrame#PhraseDetailRow {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 8px;
+    margin: 0;
+    padding: 0;
 }}
 QFrame#PhraseDetailRow[editing="true"] {{
     border: 1px solid {COLORS["accent"]};
@@ -490,8 +492,8 @@ QPushButton#PhrasePlacementBtn {{
     border-radius: 6px;
     padding: 4px 2px;
     font-size: 11px;
-    min-height: 0;
-    max-height: none;
+    min-height: 120px;
+    max-height: 120px;
 }}
 QPushButton#PhrasePlacementBtn:hover {{
     border-color: {COLORS["border_strong"]};
@@ -507,6 +509,7 @@ QLabel#PhraseDetailBody {{
     padding: 0;
     margin: 0;
     min-height: 120px;
+    max-height: 120px;
 }}
 QFrame#PhrasePreviewCanvas {{
     background: {COLORS["bg"]};
@@ -563,7 +566,7 @@ QPushButton#PaletteActionBtn {{
     padding: 2px 4px;
     font-size: 9px;
     font-weight: 500;
-    min-height: 20px;
+    min-height: 22px;
     max-height: 22px;
 }}
 QPushButton#PaletteActionBtn:hover {{
