@@ -262,9 +262,16 @@ class TextBoxWidget(QFrame):
             self._box["style"] = resolve_text_style(style)
             self._apply_block_line_spacing(pt)
         if cursor.hasSelection():
+            # 現仕様維持: 選択範囲がある時は選択文字だけに適用。
             cursor.mergeCharFormat(fmt)
             self._editor.setTextCursor(cursor)
         else:
+            # 新仕様: 未選択時は編集中テキストボックス内の全文字へ適用。
+            whole_cursor = QTextCursor(self._editor.document())
+            whole_cursor.select(QTextCursor.SelectionType.Document)
+            if whole_cursor.hasSelection():
+                whole_cursor.mergeCharFormat(fmt)
+            # 以後の入力にも同じ書式を継続適用。
             self._editor.mergeCurrentCharFormat(fmt)
         self._sync_editor_to_box()
         self._update_display_content()
