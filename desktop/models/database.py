@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS grading_criteria (
     judgment TEXT DEFAULT '×',
     score INTEGER DEFAULT 0,
     reason TEXT DEFAULT '',
+    uniform_feedback_json TEXT DEFAULT '',
     PRIMARY KEY (test_id, field_id, answer_text),
     FOREIGN KEY (test_id) REFERENCES tests(id) ON DELETE CASCADE
 );
@@ -218,6 +219,13 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE results ADD COLUMN external_score REAL DEFAULT 0")
     if "total_score" not in cols:
         conn.execute("ALTER TABLE results ADD COLUMN total_score REAL DEFAULT 0")
+    criteria_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(grading_criteria)").fetchall()
+    }
+    if "uniform_feedback_json" not in criteria_cols:
+        conn.execute(
+            "ALTER TABLE grading_criteria ADD COLUMN uniform_feedback_json TEXT DEFAULT ''"
+        )
 
 
 def init_db() -> None:

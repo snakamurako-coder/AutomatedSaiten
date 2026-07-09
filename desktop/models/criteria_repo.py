@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter
+import json
 from typing import Any
 
 from models.database import connect, init_db
@@ -30,7 +31,7 @@ def get_grading_criteria(test_id: str, field_id: str | None = None) -> list[dict
         if field_id:
             rows = conn.execute(
                 """
-                SELECT field_id, answer_text, judgment, score, reason
+                SELECT field_id, answer_text, judgment, score, reason, uniform_feedback_json
                 FROM grading_criteria
                 WHERE test_id = ? AND field_id = ?
                 ORDER BY answer_text
@@ -40,23 +41,35 @@ def get_grading_criteria(test_id: str, field_id: str | None = None) -> list[dict
         else:
             rows = conn.execute(
                 """
-                SELECT field_id, answer_text, judgment, score, reason
+                SELECT field_id, answer_text, judgment, score, reason, uniform_feedback_json
                 FROM grading_criteria
                 WHERE test_id = ?
                 ORDER BY field_id, answer_text
                 """,
                 (test_id,),
             ).fetchall()
-    return [
-        {
-            "fieldId": r["field_id"],
-            "answer_text": r["answer_text"],
-            "judgment": r["judgment"],
-            "score": int(r["score"]),
-            "reason": r["reason"] or "",
-        }
-        for r in rows
-    ]
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        uniform_feedback: dict[str, Any] | None = None
+        raw = str(r["uniform_feedback_json"] or "").strip()
+        if raw:
+            try:
+                parsed = json.loads(raw)
+                if isinstance(parsed, dict):
+                    uniform_feedback = parsed
+            except json.JSONDecodeError:
+                uniform_feedback = None
+        out.append(
+            {
+                "fieldId": r["field_id"],
+                "answer_text": r["answer_text"],
+                "judgment": r["judgment"],
+                "score": int(r["score"]),
+                "reason": r["reason"] or "",
+                "uniform_feedback": uniform_feedback,
+            }
+        )
+    return out
 
 
 def get_criteria_grouped_by_field(test_id: str) -> dict[str, list[dict[str, Any]]]:
@@ -85,8 +98,8 @@ def save_grading_criteria(
             conn.execute(
                 """
                 INSERT INTO grading_criteria(
-                    test_id, field_id, answer_text, judgment, score, reason
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    test_id, field_id, answer_text, judgment, score, reason, uniform_feedback_json
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     test_id,
@@ -95,6 +108,9 @@ def save_grading_criteria(
                     str(rule.get("judgment") or "×"),
                     int(rule.get("score") or rule.get("recommended_score") or 0),
                     str(rule.get("reason") or ""),
+                    json.dumps(rule.get("uniform_feedback"), ensure_ascii=False)
+                    if isinstance(rule.get("uniform_feedback"), dict)
+                    else "",
                 ),
             )
         touch_progress_conn(conn, test_id, 4)
@@ -120,6 +136,7 @@ def merge_unique_with_criteria(
                 "judgment": base.get("judgment", ""),
                 "score": base.get("score", ""),
                 "reason": base.get("reason", ""),
+                "uniform_feedback": base.get("uniform_feedback"),
                 "deemed": False,
                 "incorrect": False,
             }
@@ -133,11 +150,39 @@ def merge_unique_with_criteria(
                     "judgment": rule.get("judgment", ""),
                     "score": rule.get("score", ""),
                     "reason": rule.get("reason", ""),
+                    "uniform_feedback": rule.get("uniform_feedback"),
                     "deemed": False,
                     "incorrect": False,
                 }
             )
     return merged
+
+
+def save_uniform_feedback_config(
+    test_id: str,
+    field_id: str,
+    answer_text: str,
+    config: dict[str, Any] | None,
+) -> None:
+    init_db()
+    answer = str(answer_text or "").strip()
+    if not answer:
+        return
+    payload = (
+        json.dumps(config, ensure_ascii=False)
+        if isinstance(config, dict) and config
+        else ""
+    )
+    with connect() as conn:
+        conn.execute(
+            """
+            UPDATE grading_criteria
+            SET uniform_feedback_json = ?
+            WHERE test_id = ? AND field_id = ? AND answer_text = ?
+            """,
+            (payload, test_id, field_id, answer),
+        )
+        conn.commit()
 
 
 def build_rule_map(test_id: str) -> dict[str, dict[str, dict[str, Any]]]:
@@ -165,6 +210,7 @@ def get_field_answer_details(test_id: str, field_id: str) -> list[dict[str, Any]
                 "fileId": row.get("sourcePath") or row.get("warpedPath") or "",
                 "fileName": row["fileName"],
                 "studentId": row["studentId"],
+                "studentName": row.get("name") or "",
                 "warpedPath": row.get("warpedPath") or "",
             }
         )
@@ -210,6 +256,7 @@ def get_answer_rows_for_pattern(
             "fileName": row["fileName"],
             "fileId": row["fileId"],
             "warpedPath": row["warpedPath"],
+            "studentName": row.get("studentName") or "",
             "answer_text": row["answer"],
         }
         for row in get_field_answer_details(test_id, field_id)

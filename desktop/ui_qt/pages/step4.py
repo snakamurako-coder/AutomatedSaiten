@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 from typing import Any
 
 from PySide6.QtCore import Qt
@@ -30,7 +31,11 @@ from models.criteria_repo import (
     save_grading_criteria,
 )
 from models.ink_repo import get_ink_strokes_batch, save_ink_strokes
-from models.text_annotation_repo import get_text_annotations_batch, save_text_annotations
+from models.text_annotation_repo import (
+    get_text_annotations,
+    get_text_annotations_batch,
+    save_text_annotations,
+)
 from models.database import connect
 from models.test_repo import get_answer_fields, get_points_conn
 from models.text_processing import (
@@ -54,6 +59,7 @@ from ui_qt.criteria_widgets import (
     wrap_table_cell,
 )
 from ui_qt.crop_widgets import CropDisplayControls
+from ui_qt.uniform_feedback_dialog import UniformFeedbackDialog
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.layout_helpers import (
     CollapsibleSection,
@@ -208,11 +214,22 @@ class Step4Page(QWidget):
         return box
 
     def _build_criteria_table(self) -> QTableWidget:
-        self.criteria_table = QTableWidget(0, 8)
+        self.criteria_table = QTableWidget(0, 10)
         self.criteria_table.setHorizontalHeaderLabels(
-            ["みなし", "不正解", "解答", "人数", "判定", "得点", "備考", "操作"]
+            [
+                "みなし",
+                "不正解",
+                "解答",
+                "人数",
+                "判定",
+                "得点",
+                "一律フィードバック",
+                "一律フィードバックID",
+                "備考",
+                "操作",
+            ]
         )
-        widths = [52, 52, 280, 52, 72, 118, 220, 60]
+        widths = [52, 52, 220, 52, 72, 118, 180, 130, 200, 60]
         for i, w in enumerate(widths):
             self.criteria_table.setColumnWidth(i, w)
         self.criteria_table.horizontalHeader().setStretchLastSection(True)
@@ -259,8 +276,10 @@ class Step4Page(QWidget):
         elif col == 5:
             focus_score_widget(self.criteria_table, row, col)
         elif col == 6:
+            self._open_uniform_feedback_dialog(row)
+        elif col == 8:
             start_cell_edit(self.criteria_table, row, col)
-        elif col == 7:
+        elif col == 9:
             if row < len(self._criteria_rows):
                 ans = self._criteria_rows[row]["answer_text"]
                 if not self._should_skip_crop(ans):
@@ -268,7 +287,7 @@ class Step4Page(QWidget):
 
     def _on_criteria_item_changed(self, item: QTableWidgetItem) -> None:
         row, col = item.row(), item.column()
-        if row < 0 or row >= len(self._criteria_rows) or col != 6:
+        if row < 0 or row >= len(self._criteria_rows) or col != 8:
             return
         self._criteria_rows[row]["reason"] = item.text().strip()
 
@@ -451,7 +470,7 @@ class Step4Page(QWidget):
             score_w = find_score_widget(t, i)
             if score_w is not None:
                 self._criteria_rows[i]["score"] = score_w.value()
-            reason_item = t.item(i, 6)
+            reason_item = t.item(i, 8)
             if reason_item is not None:
                 self._criteria_rows[i]["reason"] = reason_item.text().strip()
 
@@ -482,7 +501,7 @@ class Step4Page(QWidget):
             elif row.get("incorrect") or self._is_incorrect(fid, ans):
                 bg = COLORS["danger_soft"]
             color = QColor(bg) if bg else QColor()
-            for c in (0, 1, 2, 3, 6, 7):
+            for c in (0, 1, 2, 3, 6, 7, 8, 9):
                 item = t.item(i, c)
                 if item is None:
                     continue
@@ -657,6 +676,54 @@ class Step4Page(QWidget):
             return
         self._aggregate()
 
+    def _open_uniform_feedback_dialog(self, row_index: int) -> None:
+        if row_index < 0 or row_index >= len(self._criteria_rows):
+            return
+        fid = self._selected_field_id()
+        if not fid or not self.app.active_test_id:
+            return
+        field = next((f for f in self._fields if str(f.get("id")) == fid), None)
+        if field is None:
+            h.warn(self, "一律フィードバック", "記述欄が見つかりません。")
+            return
+        row = self._criteria_rows[row_index]
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None and hasattr(ctrl, "set_settings_overlay_active"):
+            ctrl.set_settings_overlay_active(True)
+        dlg = UniformFeedbackDialog(
+            self,
+            test_id=str(self.app.active_test_id),
+            field=field,
+            answer_text=str(row.get("answer_text") or ""),
+            initial_config=row.get("uniform_feedback")
+            if isinstance(row.get("uniform_feedback"), dict)
+            else None,
+        )
+        dlg.applied.connect(lambda _c, cfg, r=row_index: self._on_uniform_feedback_applied(r, cfg))
+        try:
+            dlg.exec()
+        finally:
+            if ctrl is not None and hasattr(ctrl, "set_settings_overlay_active"):
+                ctrl.set_settings_overlay_active(False)
+
+    def _on_uniform_feedback_applied(self, row_index: int, config: dict[str, Any]) -> None:
+        if 0 <= row_index < len(self._criteria_rows):
+            self._criteria_rows[row_index]["uniform_feedback"] = copy.deepcopy(config or {})
+        self._render_criteria_table()
+        self.palette_refresh_annotation_cache()
+        self._reload_visible_stack_annotations()
+
+    def _reload_visible_stack_annotations(self) -> None:
+        test_id = self.palette_test_id()
+        fid = self._selected_field_id() or ""
+        if not test_id or not fid:
+            return
+        for stack in self._ink_stacks:
+            rid_attr = getattr(stack, "result_id", 0)
+            rid = int(rid_attr() if callable(rid_attr) else rid_attr)
+            items = get_text_annotations(test_id, rid, fid)
+            stack.text_layer.set_annotations(items)
+
     def _render_criteria_table(self) -> None:
         self._sync_criteria_from_widgets()
         fid = self._selected_field_id() or ""
@@ -676,6 +743,15 @@ class Step4Page(QWidget):
             count_item = make_readonly_item(str(row.get("count", 0)), center=True)
             answer_item = make_readonly_item(ans)
             reason_item = make_editable_item(str(row.get("reason", "") or ""))
+            uniform_cfg = row.get("uniform_feedback") or {}
+            uniform_text = "（未設定）"
+            uniform_gid = "—"
+            if isinstance(uniform_cfg, dict) and uniform_cfg:
+                preview_text = str(uniform_cfg.get("text") or uniform_cfg.get("label") or "")
+                uniform_text = preview_text if preview_text else "（未設定）"
+                uniform_gid = str(uniform_cfg.get("phraseGroupId") or "") or "—"
+            uniform_item = make_readonly_item(uniform_text)
+            uniform_gid_item = make_readonly_item(uniform_gid, center=True)
 
             judgment = self._default_judgment(row)
             score_val = self._default_score(row, max_score)
@@ -698,14 +774,16 @@ class Step4Page(QWidget):
             t.setItem(i, 3, count_item)
             t.setCellWidget(i, 4, wrap_table_cell(j_combo))
             t.setCellWidget(i, 5, wrap_table_cell(score_widget))
-            t.setItem(i, 6, reason_item)
+            t.setItem(i, 6, uniform_item)
+            t.setItem(i, 7, uniform_gid_item)
+            t.setItem(i, 8, reason_item)
 
             if self._should_skip_crop(ans):
                 action_item = make_readonly_item("除外", center=True)
             else:
                 action_item = make_readonly_item("表示", center=True)
 
-            t.setItem(i, 7, action_item)
+            t.setItem(i, 9, action_item)
             t.setRowHeight(i, 36)
         t.blockSignals(False)
         self._apply_criteria_table_styles()
@@ -784,6 +862,9 @@ class Step4Page(QWidget):
                     "judgment": judgment,
                     "score": score,
                     "reason": row.get("reason") or "",
+                    "uniform_feedback": row.get("uniform_feedback")
+                    if isinstance(row.get("uniform_feedback"), dict)
+                    else None,
                 }
             )
         if not rules:

@@ -508,6 +508,48 @@ def phrase_template_by_group_id(group_id: str) -> dict[str, Any] | None:
     return None
 
 
+def clone_phrase_content_with_new_group_id(template: dict[str, Any]) -> dict[str, Any]:
+    src = dict(template or {})
+    reserved = load_used_phrase_group_ids() | {
+        str(t.get("phraseGroupId") or "").strip() for t in load_phrase_templates()
+    }
+    gid = _generate_phrase_group_id(reserved=reserved)
+    cloned = {
+        "id": str(src.get("id") or str(uuid.uuid4())),
+        "phraseGroupId": gid,
+        "label": str(src.get("label") or ""),
+        "text": str(src.get("text") or ""),
+        "textHtml": str(src.get("textHtml") or ""),
+        "textFormat": str(src.get("textFormat") or "plain"),
+        "style": copy.deepcopy(src.get("style") or {}),
+        "width": float(src.get("width") or 120.0),
+        "height": float(src.get("height") or 36.0),
+    }
+    norm = _normalize_template(cloned, reserved_group_ids=reserved)
+    if norm is None:
+        raise ValueError("invalid phrase template")
+    return norm
+
+
+def template_dict_from_uniform_config(config: dict[str, Any]) -> dict[str, Any]:
+    raw = dict(config or {})
+    base = {
+        "id": str(raw.get("phraseTemplateId") or raw.get("id") or str(uuid.uuid4())),
+        "phraseGroupId": str(raw.get("phraseGroupId") or ""),
+        "label": str(raw.get("label") or ""),
+        "text": str(raw.get("text") or ""),
+        "textHtml": str(raw.get("textHtml") or ""),
+        "textFormat": str(raw.get("textFormat") or "plain"),
+        "style": copy.deepcopy(raw.get("style") or {}),
+        "width": float(raw.get("width") or 120.0),
+        "height": float(raw.get("height") or 36.0),
+    }
+    norm = _normalize_template(base)
+    if norm is None:
+        raise ValueError("invalid uniform feedback config")
+    return norm
+
+
 def add_phrase_template(template: dict[str, Any]) -> dict[str, Any]:
     norm = _normalize_template(template)
     if norm is None:
