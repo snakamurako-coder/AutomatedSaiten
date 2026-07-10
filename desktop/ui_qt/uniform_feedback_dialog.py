@@ -141,7 +141,6 @@ class UniformFeedbackDialog(QDialog):
             btn = QPushButton(label)
             btn.setObjectName("PhrasePlacementBtn")
             btn.setCheckable(True)
-            btn.setAutoExclusive(True)
             btn.setProperty("placement_h", hpos)
             btn.setProperty("placement_v", vpos)
             self._placement_group.addButton(btn, i)
@@ -262,9 +261,18 @@ class UniformFeedbackDialog(QDialog):
     def _current_template(self) -> dict[str, Any] | None:
         if self._active_template is None:
             return None
+        self._preview.finish_text_editing()
         updates = self._preview.export_updates()
         current = {**self._active_template, **updates}
         return current
+
+    def _template_for_apply(self, tpl: dict[str, Any]) -> dict[str, Any]:
+        merged = copy.deepcopy(tpl)
+        if self._src_existing.isChecked() and self._id_new.isChecked():
+            return clone_phrase_content_with_new_group_id(merged)
+        if not str(merged.get("phraseGroupId") or "").strip():
+            return clone_phrase_content_with_new_group_id(merged)
+        return merged
 
     def _on_save_phrase(self) -> None:
         tpl = self._current_template()
@@ -323,8 +331,7 @@ class UniformFeedbackDialog(QDialog):
         if tpl is None:
             h.warn(self, "一律フィードバック", "文言が選択されていません。")
             return
-        if self._src_existing.isChecked() and self._id_new.isChecked():
-            tpl = clone_phrase_content_with_new_group_id(tpl)
+        tpl = self._template_for_apply(tpl)
         placement_h, placement_v = self._selected_placement()
         use_correction = self._confirm_correction(tpl, placement_h, placement_v)
         count = apply_uniform_feedback(

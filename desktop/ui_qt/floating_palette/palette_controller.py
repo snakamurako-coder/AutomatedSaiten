@@ -836,28 +836,39 @@ class PaletteController:
     def _on_phrase_batch_update_requested(self, group_id: str) -> None:
         self.open_phrase_batch_update_dialog(group_id)
 
-    def open_phrase_batch_update_dialog(self, group_id: str) -> None:
+    def open_phrase_batch_update_dialog(
+        self,
+        group_id: str,
+        *,
+        test_id: str | None = None,
+        template: dict[str, Any] | None = None,
+    ) -> None:
         """定型文詳細のグループ ID クリックと同じ一括更新ダイアログを開く。"""
-        gid = str(group_id or "").strip()
-        if not gid or not self._page:
-            return
-        test_id_fn = getattr(self._page, "palette_test_id", None)
-        test_id = test_id_fn() if callable(test_id_fn) else None
-        if not test_id:
-            from ui_qt import helpers as h
+        from ui_qt import helpers as h
 
+        gid = str(group_id or "").strip()
+        if not gid:
+            return
+        resolved_test_id = str(test_id or "").strip()
+        if not resolved_test_id and self._page is not None:
+            test_id_fn = getattr(self._page, "palette_test_id", None)
+            resolved_test_id = str(test_id_fn() or "") if callable(test_id_fn) else ""
+        if not resolved_test_id:
+            app = getattr(self._main, "app", None)
+            resolved_test_id = str(getattr(app, "active_test_id", None) or "")
+        if not resolved_test_id:
             h.warn(self._main, "一括更新", "テストが選択されていません。")
             return
-        template = phrase_template_by_group_id(gid)
-        if template is None:
-            from ui_qt import helpers as h
-
+        tpl = dict(template) if isinstance(template, dict) else None
+        if tpl is None:
+            tpl = phrase_template_by_group_id(gid)
+        if tpl is None:
             h.warn(self._main, "一括更新", f"定型文 ID {gid} が見つかりません。")
             return
         dlg = PhraseBatchUpdateDialog(
             self._main,
-            test_id=str(test_id),
-            template=template,
+            test_id=resolved_test_id,
+            template=tpl,
         )
         dlg.applied.connect(self._on_phrase_batch_applied)
         self.set_settings_overlay_active(True)

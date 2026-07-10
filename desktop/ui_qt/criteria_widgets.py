@@ -163,6 +163,36 @@ class ScoreStepWidget(QWidget):
         return super().eventFilter(watched, event)
 
 
+_PHRASE_GROUP_ID_BTN_STYLE = (
+    "QPushButton#PhraseGroupIdBtn {"
+    " color: #2563eb; font-size: 10px; font-weight: 700;"
+    " border: none; padding: 0; text-align: center;"
+    "}"
+    "QPushButton#PhraseGroupIdBtn:hover { text-decoration: underline; }"
+)
+
+
+def make_phrase_group_id_cell(
+    group_id: str,
+    on_click: Callable[[], None],
+) -> QWidget:
+    """定型文グループ ID 用クリック可能セル（詳細版パレットと同じ見た目）。"""
+    wrap = QWidget()
+    lay = QHBoxLayout(wrap)
+    lay.setContentsMargins(2, 0, 2, 0)
+    lay.setSpacing(0)
+    lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    btn = QPushButton(str(group_id or ""))
+    btn.setObjectName("PhraseGroupIdBtn")
+    btn.setFlat(True)
+    btn.setCursor(Qt.CursorShape.PointingHandCursor)
+    btn.setToolTip("クリックで定型文一括更新")
+    btn.clicked.connect(on_click)
+    btn.setStyleSheet(_PHRASE_GROUP_ID_BTN_STYLE)
+    lay.addWidget(btn)
+    return wrap
+
+
 def wrap_table_cell(widget: QWidget) -> QWidget:
     """テーブルセル中央寄せ用ラッパー。"""
     wrap = QWidget()

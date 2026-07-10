@@ -56,9 +56,11 @@ from ui_qt.criteria_widgets import (
     find_score_widget,
     focus_score_widget,
     make_judgment_combo,
+    make_phrase_group_id_cell,
     open_judgment_combo,
     wrap_table_cell,
 )
+from ui_qt.floating_palette.phrase_template_prefs import template_dict_from_uniform_config
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.uniform_feedback_dialog import UniformFeedbackDialog
 from ui_qt.stylus_overlay import CropInkImageStack
@@ -687,8 +689,18 @@ class Step4Page(QWidget):
         if not gid:
             return
         ctrl = getattr(self.app, "palette_controller", None)
-        if ctrl is not None and hasattr(ctrl, "open_phrase_batch_update_dialog"):
-            ctrl.open_phrase_batch_update_dialog(gid)
+        if ctrl is None or not hasattr(ctrl, "open_phrase_batch_update_dialog"):
+            return
+        template = None
+        try:
+            template = template_dict_from_uniform_config(uniform_cfg)
+        except ValueError:
+            template = None
+        ctrl.open_phrase_batch_update_dialog(
+            gid,
+            test_id=str(self.app.active_test_id or ""),
+            template=template,
+        )
 
     def _open_uniform_feedback_dialog(self, row_index: int) -> None:
         if row_index < 0 or row_index >= len(self._criteria_rows):
@@ -726,6 +738,8 @@ class Step4Page(QWidget):
         self._render_criteria_table()
         self.palette_refresh_annotation_cache()
         self._reload_visible_stack_annotations()
+        if self._crop_grid_results:
+            self._render_crop_grid()
 
     def _reload_visible_stack_annotations(self) -> None:
         test_id = self.palette_test_id()
@@ -766,9 +780,12 @@ class Step4Page(QWidget):
                 uniform_gid = str(uniform_cfg.get("phraseGroupId") or "") or "—"
             uniform_item = make_readonly_item(uniform_text)
             uniform_gid_item = make_readonly_item(uniform_gid, center=True)
+            uniform_gid_widget = None
             if uniform_gid and uniform_gid != "—":
-                uniform_gid_item.setForeground(QColor("#2563eb"))
-                uniform_gid_item.setToolTip("クリックで定型文一括更新")
+                uniform_gid_widget = make_phrase_group_id_cell(
+                    uniform_gid,
+                    lambda _c=False, r=i: self._open_uniform_feedback_batch_update(r),
+                )
 
             judgment = self._default_judgment(row)
             score_val = self._default_score(row, max_score)
@@ -792,7 +809,10 @@ class Step4Page(QWidget):
             t.setCellWidget(i, 4, wrap_table_cell(j_combo))
             t.setCellWidget(i, 5, wrap_table_cell(score_widget))
             t.setItem(i, 6, uniform_item)
-            t.setItem(i, 7, uniform_gid_item)
+            if uniform_gid_widget is not None:
+                t.setCellWidget(i, 7, wrap_table_cell(uniform_gid_widget))
+            else:
+                t.setItem(i, 7, uniform_gid_item)
             t.setItem(i, 8, reason_item)
 
             if self._should_skip_crop(ans):
