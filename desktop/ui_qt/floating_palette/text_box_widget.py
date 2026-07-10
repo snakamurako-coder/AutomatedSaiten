@@ -600,7 +600,7 @@ class TextBoxWidget(QFrame):
         try:
             self._editor.setHtml(html)
             self._setup_tight_document()
-            self._sync_editor_font_size_from_style()
+            self._apply_editor_format_from_style()
         finally:
             self._editor.blockSignals(False)
         disp_font = self._content_font()
@@ -609,6 +609,33 @@ class TextBoxWidget(QFrame):
 
     def _has_rich_character_styles(self) -> bool:
         return html_has_rich_character_styles(box_text_html(self._box, self._style()))
+
+    def _apply_editor_format_from_style(self) -> None:
+        if self._has_rich_character_styles():
+            self._sync_editor_font_size_from_style()
+        else:
+            self._sync_editor_char_format_from_style()
+
+    def _sync_editor_char_format_from_style(self) -> None:
+        """通常テキスト: 色・サイズを全ブロックへ反映。"""
+        st = scaled_canvas_text_style(self._style(), self._scale)
+        disp_pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
+        fmt = QTextCharFormat()
+        fmt.setFontPointSize(disp_pt)
+        fmt.setFontFamily("Meiryo")
+        fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
+        doc = self._editor.document()
+        self._editor.blockSignals(True)
+        try:
+            block = doc.firstBlock()
+            while block.isValid():
+                cursor = QTextCursor(block)
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.mergeCharFormat(fmt)
+                block = block.next()
+            self._editor.mergeCurrentCharFormat(fmt)
+        finally:
+            self._editor.blockSignals(False)
 
     def _sync_editor_font_size_from_style(self) -> None:
         """文字色は維持し、表示倍率付きのフォントサイズだけ全ブロックへ反映。"""
@@ -832,9 +859,9 @@ class TextBoxWidget(QFrame):
         self._apply_block_line_spacing()
 
     def _on_text_changed(self) -> None:
-        self._sync_editor_to_box()
         if self._editing:
-            self._sync_editor_font_size_from_style()
+            self._apply_editor_format_from_style()
+        self._sync_editor_to_box()
         self._update_display_content()
         self._apply_vertical_text_inset()
         self.changed.emit()

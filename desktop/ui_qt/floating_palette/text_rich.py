@@ -532,18 +532,13 @@ def html_has_rich_character_styles(html: str) -> bool:
     return False
 
 
-def _apply_display_font_sizes_to_html(html: str, disp_st: dict[str, Any]) -> str:
-    """既存の文字色・装飾を保ちつつ font-size / line-height だけ表示倍率で上書き。"""
+def _upsert_font_size_on_inline_styles(html: str, disp_st: dict[str, Any]) -> str:
     fs = float(disp_st.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14)
     ls = float(
         disp_st.get("lineSpacing")
         or DEFAULT_TEXT_STYLE.get("lineSpacing")
         or 20
     )
-    text = strip_canvas_font_styles(str(html or "").strip())
-    if not text:
-        return ""
-    base_font = f"font-size:{fs:g}pt; line-height:{ls:g}pt; font-family:Meiryo,sans-serif"
 
     def fix_style_attr(match: re.Match[str]) -> str:
         quote, style = match.group(1), match.group(2)
@@ -553,43 +548,27 @@ def _apply_display_font_sizes_to_html(html: str, disp_st: dict[str, Any]) -> str
             style = _upsert_css_property(style, "font-family", "Meiryo,sans-serif")
         return f"style={quote}{style}{quote}"
 
-    text = re.sub(r'style=(["\'])([^"\']*)\1', fix_style_attr, text, flags=re.IGNORECASE)
-
-    def fix_bare_p_tag(match: re.Match[str]) -> str:
-        attrs = match.group(1) or ""
-        if re.search(r"\bstyle\s*=", attrs, re.IGNORECASE):
-            return match.group(0)
-        return f'<p style="{base_font}"{attrs}>'
-
-    text = re.sub(r"<p\b([^>]*)>", fix_bare_p_tag, text, flags=re.IGNORECASE)
-
-    def fix_bare_span_tag(match: re.Match[str]) -> str:
-        attrs = match.group(1) or ""
-        if re.search(r"\bstyle\s*=", attrs, re.IGNORECASE):
-            return match.group(0)
-        return f'<span style="{base_font}"{attrs}>'
-
-    text = re.sub(r"<span\b([^>]*)>", fix_bare_span_tag, text, flags=re.IGNORECASE)
-
-    if not re.search(r"font-size\s*:", text, re.IGNORECASE):
-        text = f'<p style="{base_font}">{text}</p>'
-    elif not re.search(r"<p\b", text, re.IGNORECASE):
-        text = f'<p style="{base_font}">{text}</p>'
-    return text
+    return re.sub(r'style=(["\'])([^"\']*)\1', fix_style_attr, html, flags=re.IGNORECASE)
 
 
-def _restyle_paragraphs_html(
-    inner: str,
-    disp_st: dict[str, Any],
-    *,
-    include_color: bool = True,
-) -> str:
+def _restyle_rich_html_for_canvas(inner: str, disp_st: dict[str, Any]) -> str:
+    """リッチ HTML: 文字色は維持し <p> / inline に表示倍率付き font-size を付与。"""
+    text = strip_canvas_font_styles(str(inner or "").strip())
+    if not text:
+        return ""
+    p_style = _paragraph_style_attr(disp_st, include_color=False)
+    if re.search(r"<p\b", text, re.I):
+        text = re.sub(r"<p[^>]*>", f'<p style="{p_style}">', text, flags=re.I)
+    else:
+        text = f'<p style="{p_style}">{text}</p>'
+    return _upsert_font_size_on_inline_styles(text, disp_st)
+
+
+def _restyle_paragraphs_html(inner: str, disp_st: dict[str, Any]) -> str:
     """複数 <p> に表示用スタイルを付与する。"""
     text = strip_canvas_font_styles(str(inner or "").strip())
     if not text:
         return ""
-    if not include_color:
-        return _apply_display_font_sizes_to_html(text, disp_st)
     p_style = _paragraph_style_attr(disp_st, include_color=True)
     if re.search(r"<p\b", text, re.I):
         return re.sub(r"<p[^>]*>", f'<p style="{p_style}">', text, flags=re.I)
@@ -606,18 +585,18 @@ def build_canvas_label_html(
     """QLabel 表示用 HTML。<p> に表示倍率付き font-size を直接付与する。"""
     st = style or {}
     disp_st = scaled_canvas_text_style(st, display_scale)
-    plain = str(box.get("text") or editor_plain or "")
     saved_html = box_text_html(box, st)
     if html_has_rich_character_styles(saved_html):
         body = html_body_for_label(html_for_canvas_display(saved_html))
         if html_has_visible_text(body):
-            return _apply_display_font_sizes_to_html(body, disp_st)
+            return _restyle_rich_html_for_canvas(body, disp_st)
+    plain = str(box.get("text") or editor_plain or "")
     if plain.strip():
         return html_body_for_label(plain_to_html(plain, disp_st))
     body = label_body_from_box_content(box, st, editor_plain=editor_plain)
     if not body:
         return ""
-    return _restyle_paragraphs_html(body, disp_st, include_color=True)
+    return _restyle_paragraphs_html(body, disp_st)
 
 
 def build_canvas_editor_html(
