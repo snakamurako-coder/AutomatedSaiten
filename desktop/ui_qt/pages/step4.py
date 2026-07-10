@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -57,6 +57,7 @@ from ui_qt.criteria_widgets import (
     focus_score_widget,
     make_judgment_combo,
     make_phrase_group_id_cell,
+    make_table_action_cell,
     open_judgment_combo,
     wrap_table_cell,
 )
@@ -504,7 +505,7 @@ class Step4Page(QWidget):
             elif row.get("incorrect") or self._is_incorrect(fid, ans):
                 bg = COLORS["danger_soft"]
             color = QColor(bg) if bg else QColor()
-            for c in (0, 1, 2, 3, 6, 7, 8, 9):
+            for c in (0, 1, 2, 3, 6, 7, 8):
                 item = t.item(i, c)
                 if item is None:
                     continue
@@ -818,11 +819,17 @@ class Step4Page(QWidget):
             t.setItem(i, 8, reason_item)
 
             if self._should_skip_crop(ans):
-                action_item = make_readonly_item("除外", center=True)
+                action_widget = make_table_action_cell("除外", None)
             else:
-                action_item = make_readonly_item("表示", center=True)
+                action_widget = make_table_action_cell(
+                    "表示",
+                    lambda _c=False, r=i: self._show_answer_pattern_crops(
+                        str(self._criteria_rows[r].get("answer_text") or "")
+                    ),
+                    tooltip="クリックで回答欄画像を下に表示",
+                )
 
-            t.setItem(i, 9, action_item)
+            t.setCellWidget(i, 9, wrap_table_cell(action_widget))
             t.setRowHeight(i, 36)
         t.blockSignals(False)
         self._apply_criteria_table_styles()
@@ -999,10 +1006,18 @@ class Step4Page(QWidget):
                 show_item,
                 make_readonly_item(str(row.get("studentId") or "-")),
                 make_readonly_item(str(row.get("fileName") or "")),
-                make_readonly_item("表示", center=True),
             ]
             for c, item in enumerate(items):
                 t.setItem(i, c, item)
+            if row.get("skip_img"):
+                action_widget = make_table_action_cell("—", None)
+            else:
+                action_widget = make_table_action_cell(
+                    "表示",
+                    lambda _c=False, a=ans: self._show_answer_pattern_crops(a),
+                    tooltip="クリックで回答欄画像を下に表示",
+                )
+            t.setCellWidget(i, 7, wrap_table_cell(action_widget))
         t.blockSignals(False)
 
     def _select_all_outlier(self, checked: bool) -> None:
@@ -1066,8 +1081,18 @@ class Step4Page(QWidget):
                 r["text_annotations"] = text_map.get(rid, [])
             self._crop_grid_results = results
             self._render_crop_grid()
+            self._scroll_to_crop_viewer()
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
+
+    def _scroll_to_crop_viewer(self) -> None:
+        if not hasattr(self, "_scroll") or not hasattr(self, "crop_scroll"):
+            return
+
+        def _do() -> None:
+            self._scroll.ensureWidgetVisible(self.crop_scroll, 0, 32)
+
+        QTimer.singleShot(0, _do)
 
     def viewer_scroll(self) -> QScrollArea:
         return self.crop_scroll

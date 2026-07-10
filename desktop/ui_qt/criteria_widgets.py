@@ -193,6 +193,44 @@ def make_phrase_group_id_cell(
     return wrap
 
 
+def make_table_action_cell(
+    label: str,
+    on_click: Callable[[], None] | None,
+    *,
+    tooltip: str = "",
+) -> QWidget:
+    """表内の「表示」など、タップ可能な操作セル。"""
+    wrap = QWidget()
+    lay = QHBoxLayout(wrap)
+    lay.setContentsMargins(2, 0, 2, 0)
+    lay.setSpacing(0)
+    lay.setAlignment(Qt.AlignmentFlag.AlignCenter)
+    btn = QPushButton(str(label or ""))
+    btn.setObjectName("CriteriaActionBtn")
+    btn.setFlat(True)
+    if on_click is not None:
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(on_click)
+        btn.setStyleSheet(
+            "QPushButton#CriteriaActionBtn {"
+            " color: #2563eb; font-size: 11px; font-weight: 700;"
+            " border: none; padding: 0;"
+            "}"
+            "QPushButton#CriteriaActionBtn:hover { text-decoration: underline; }"
+        )
+    else:
+        btn.setEnabled(False)
+        btn.setStyleSheet(
+            "QPushButton#CriteriaActionBtn {"
+            " color: #94a3b8; font-size: 11px; border: none; padding: 0;"
+            "}"
+        )
+    if tooltip:
+        btn.setToolTip(tooltip)
+    lay.addWidget(btn)
+    return wrap
+
+
 def wrap_table_cell(widget: QWidget) -> QWidget:
     """テーブルセル中央寄せ用ラッパー。"""
     wrap = QWidget()
