@@ -419,8 +419,24 @@ def strip_canvas_font_styles(html: str) -> str:
 
 
 def html_for_canvas_display(html: str) -> str:
-    """ズーム付きキャンバス上の QLabel / QTextEdit 表示向け HTML。"""
+    """ズーム付きキャンバス上の QTextEdit 読み込み向け HTML（inline サイズ除去）。"""
     return strip_canvas_font_styles(html)
+
+
+def wrap_label_body_for_display(
+    body_html: str,
+    *,
+    font_pt: float,
+    line_pt: float,
+) -> str:
+    """QLabel RichText 表示用: 除去済み body に表示倍率付きラッパーを付与（保存はしない）。"""
+    body = str(body_html or "").strip()
+    if not body:
+        return ""
+    return (
+        f'<div style="font-size:{font_pt:g}pt; line-height:{line_pt:g}pt; '
+        f'font-family:Meiryo,sans-serif;">{body}</div>'
+    )
 
 
 def _strip_palette_font_styles(html: str) -> str:

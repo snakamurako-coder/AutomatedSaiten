@@ -42,6 +42,7 @@ from ui_qt.floating_palette.text_rich import (
     qt_horizontal_alignment,
     qt_label_alignment,
     sync_box_html_from_style,
+    wrap_label_body_for_display,
 )
 
 _DEFAULT_FONT_PT = int(DEFAULT_TEXT_STYLE.get("fontSize") or 14)
@@ -575,8 +576,8 @@ class TextBoxWidget(QFrame):
     def _content_font(self) -> QFont:
         st = self._style()
         font = QFont("Meiryo")
-        font.setPointSize(
-            int(round(self._native_pt_to_display(float(st.get("fontSize") or _DEFAULT_FONT_PT))))
+        font.setPointSizeF(
+            self._native_pt_to_display(float(st.get("fontSize") or _DEFAULT_FONT_PT))
         )
         return font
 
@@ -589,7 +590,7 @@ class TextBoxWidget(QFrame):
             self._normalize_document_char_sizes_for_display()
         finally:
             self._editor.blockSignals(False)
-        self._sync_editor_to_box()
+        self._editor.document().setDefaultFont(self._content_font())
         self._update_display_content()
 
     def _normalize_document_char_sizes_for_display(self) -> None:
@@ -643,7 +644,19 @@ class TextBoxWidget(QFrame):
 
     def _update_display_content(self) -> None:
         html = html_for_canvas_display(box_text_html(self._box, self._style()))
-        self._display_label.setText(html_body_for_label(html) or self._editor.toPlainText())
+        body = html_body_for_label(html) or self._editor.toPlainText()
+        if str(body or "").strip():
+            self._display_label.setText(
+                wrap_label_body_for_display(
+                    body,
+                    font_pt=self._native_pt_to_display(
+                        float(self._style().get("fontSize") or _DEFAULT_FONT_PT)
+                    ),
+                    line_pt=self._display_line_spacing_pt(),
+                )
+            )
+        else:
+            self._display_label.setText("")
 
     def _apply_default_char_format(self) -> None:
         st = self._style()
@@ -687,7 +700,9 @@ class TextBoxWidget(QFrame):
             f"QFrame {{ background: {bg}; border: {border_css}; border-radius: 0px; }}"
         )
         font = self._content_font()
+        disp_pt = font.pointSizeF()
         self._editor.setFont(font)
+        self._editor.document().setDefaultFont(font)
         self._display_label.setFont(font)
         tc_color = QColor(str(tc))
         pal = self._editor.palette()
@@ -700,7 +715,8 @@ class TextBoxWidget(QFrame):
         editor_bg = "rgba(255, 255, 255, 0.92)" if self._editing else "transparent"
         css = (
             f"QTextEdit#TextBoxEditor {{ background: {editor_bg}; "
-            f"border: none; padding: 0px; margin: 0px; }}"
+            f"border: none; padding: 0px; margin: 0px; "
+            f"font-family: Meiryo, sans-serif; font-size: {disp_pt:g}pt; }}"
         )
         self._editor.setStyleSheet(css)
         self._editor.viewport().setStyleSheet(
@@ -710,7 +726,8 @@ class TextBoxWidget(QFrame):
         label_css = (
             "QLabel#TextBoxDisplayLabel { background: transparent; "
             "border: none; padding: 0px; margin: 0px; "
-            f"line-height: {disp_ls:g}pt; }}"
+            f"font-family: Meiryo, sans-serif; font-size: {disp_pt:g}pt; "
+            f"line-height: {disp_ls:g}pt; color: {tc}; }}"
         )
         self._display_label.setStyleSheet(label_css)
         self._apply_text_alignment()
