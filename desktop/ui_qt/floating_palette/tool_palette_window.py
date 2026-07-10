@@ -436,6 +436,8 @@ class ToolPaletteWindow(QWidget):
         self._fit_timer.setSingleShot(True)
         self._fit_timer.setInterval(0)
         self._fit_timer.timeout.connect(self._fit_to_screen)
+        self._center_on_show = False
+        self._center_screen = None
         self._apply_view_mode()
         self._apply_palm_rejection_ui()
         self._switch_input_mode(MODE_DRAW, emit=False)
@@ -617,6 +619,17 @@ class ToolPaletteWindow(QWidget):
         min_w = max(_PALETTE_MIN_WIDTH, min(self._content_width_hint(), max_w))
         self.setMinimumWidth(min_w)
 
+    def request_center_on_screen(self, screen=None) -> None:
+        """次回 _fit_to_screen 時に画面中央へ配置する（作業画面遷移用）。"""
+        self._center_on_show = True
+        self._center_screen = screen
+
+    def center_on_screen(self, screen=None) -> None:
+        """表示中なら即座に、非表示なら次回表示時に画面中央へ配置する。"""
+        self.request_center_on_screen(screen)
+        if self.isVisible():
+            self._fit_to_screen()
+
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
         self._fit_to_screen()
@@ -632,13 +645,19 @@ class ToolPaletteWindow(QWidget):
 
     def _fit_to_screen(self) -> None:
         self._apply_min_height_policy()
-        bounds = self._screen_bounds()
-        if bounds is None:
+        center_screen = self._center_screen
+        screen = center_screen or self.screen()
+        if screen is None:
+            from PySide6.QtWidgets import QApplication
+
+            screen = QApplication.primaryScreen()
+        if screen is None:
             return
-        screen = self.screen()
-        assert screen is not None
         avail = screen.availableGeometry()
-        max_w, max_h = bounds
+        max_w = max(self.minimumWidth(), avail.width() - 16)
+        max_h = max(self.minimumHeight(), avail.height() - 32)
+        max_w = max(max_w, self.minimumWidth())
+        max_h = max(max_h, self.minimumHeight())
         geo = self.geometry()
         self.setMaximumWidth(max_w)
         self.setMaximumHeight(max_h)
@@ -665,8 +684,14 @@ class ToolPaletteWindow(QWidget):
         w = max(min_w, min(max(geo.width(), hint_w), max_w))
         if geo.width() != w or geo.height() != h:
             self.resize(w, h)
-        x = min(max(geo.x(), avail.left()), max(avail.left(), avail.right() - w + 1))
-        y = min(max(geo.y(), avail.top()), max(avail.top(), avail.bottom() - h + 1))
+        if self._center_on_show:
+            self._center_on_show = False
+            self._center_screen = None
+            x = avail.left() + max(0, (avail.width() - w) // 2)
+            y = avail.top() + max(0, (avail.height() - h) // 2)
+        else:
+            x = min(max(geo.x(), avail.left()), max(avail.left(), avail.right() - w + 1))
+            y = min(max(geo.y(), avail.top()), max(avail.top(), avail.bottom() - h + 1))
         if geo.x() != x or geo.y() != y:
             self.move(x, y)
 

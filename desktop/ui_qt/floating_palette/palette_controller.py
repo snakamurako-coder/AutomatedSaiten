@@ -270,6 +270,10 @@ class PaletteController:
         if step_id not in self.ACTIVE_STEPS:
             self.detach()
             return
+        prefs = load_palette_prefs()
+        if not prefs.get("minimized"):
+            screen = self._main.screen() or QApplication.primaryScreen()
+            self.tool_window.center_on_screen(screen)
         self.ensure_palette_visible()
 
     def persist(self) -> None:
