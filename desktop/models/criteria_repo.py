@@ -118,6 +118,47 @@ def save_grading_criteria(
     return get_grading_criteria(test_id, field_id)
 
 
+def get_deemed_merged_sources(test_id: str, field_id: str) -> set[str]:
+    """みなし採点で正答に統合済みの旧解答（OCR 上の文字列）。"""
+    init_db()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT DISTINCT source_answer
+            FROM deemed_scoring
+            WHERE test_id = ? AND field_id = ?
+            """,
+            (test_id, field_id),
+        ).fetchall()
+    return {
+        str(r["source_answer"] or "").strip()
+        for r in rows
+        if str(r["source_answer"] or "").strip()
+    }
+
+
+def delete_grading_criteria_answers(
+    test_id: str,
+    field_id: str,
+    answer_texts: list[str],
+) -> None:
+    """指定解答の採点基準行を削除（みなし統合後の旧解答除去用）。"""
+    init_db()
+    answers = [str(a).strip() for a in answer_texts if str(a).strip()]
+    if not answers:
+        return
+    placeholders = ",".join("?" * len(answers))
+    with connect() as conn:
+        conn.execute(
+            f"""
+            DELETE FROM grading_criteria
+            WHERE test_id = ? AND field_id = ? AND answer_text IN ({placeholders})
+            """,
+            (test_id, field_id, *answers),
+        )
+        conn.commit()
+
+
 def merge_unique_with_criteria(
     test_id: str,
     field_id: str,
@@ -125,6 +166,7 @@ def merge_unique_with_criteria(
     """ユニーク解答一覧に保存済み基準をマージ。"""
     unique = get_unique_answers(test_id, field_id)
     saved = {r["answer_text"]: r for r in get_grading_criteria(test_id, field_id)}
+    deemed_sources = get_deemed_merged_sources(test_id, field_id)
     merged: list[dict[str, Any]] = []
     for item in unique:
         answer = item["answer_text"]
@@ -142,6 +184,8 @@ def merge_unique_with_criteria(
             }
         )
     for answer, rule in saved.items():
+        if answer in deemed_sources:
+            continue
         if not any(m["answer_text"] == answer for m in merged):
             merged.append(
                 {

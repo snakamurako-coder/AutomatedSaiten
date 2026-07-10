@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from typing import Any
 
-from models.criteria_repo import get_unique_answers
+from models.criteria_repo import delete_grading_criteria_answers, get_unique_answers
 from models.database import connect, init_db
 from models.test_repo import get_all_results, rewrite_field_texts
 
@@ -207,6 +207,7 @@ def apply_deemed_scoring_to_field(
         lambda answer: answer in source_set,
         canonical,
     )
+    delete_grading_criteria_answers(test_id, field_id, list(source_set))
 
     now = _now()
     with connect() as conn:

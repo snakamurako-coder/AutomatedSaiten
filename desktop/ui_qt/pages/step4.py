@@ -654,6 +654,8 @@ class Step4Page(QWidget):
             )
             self.deemed_canonical_edit.setText(res.get("canonical", ""))
             self._deemed_map(fid).clear()
+            for src in sources:
+                self._incorrect_map(fid).pop(src, None)
             self._aggregate()
             self._purge_deemed_from_outlier(sources)
             self._on_fetch_outliers(silent=True)
