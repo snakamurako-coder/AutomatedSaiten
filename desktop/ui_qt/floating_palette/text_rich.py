@@ -496,9 +496,40 @@ def html_has_rich_character_styles(html: str) -> bool:
         return False
     body = html_body_for_label(raw) if re.search(r"<body\b", raw, re.IGNORECASE) else raw
     stripped = strip_canvas_font_styles(body)
-    if re.search(r"<(span|b|i|u|strong|em|font)\b", stripped, re.IGNORECASE):
+    if len(_collect_html_colors(stripped)) > 1:
         return True
-    return len(_collect_html_colors(stripped)) > 1
+    if re.search(r"<(b|i|u|strong|em)\b", stripped, re.IGNORECASE):
+        return True
+    span_colors: list[str] = []
+    colored_span_count = 0
+    for match in re.finditer(r'<span[^>]*style="([^"]*)"', stripped, flags=re.IGNORECASE):
+        style = match.group(1)
+        if re.search(
+            r"(?:^|;)\s*(?:font-weight|font-style|text-decoration)\s*:",
+            style,
+            re.IGNORECASE,
+        ):
+            return True
+        colors = _collect_html_colors(style)
+        if colors:
+            colored_span_count += 1
+            span_colors.extend(colors)
+    if len(set(span_colors)) > 1:
+        return True
+    if colored_span_count > 1:
+        return True
+    if colored_span_count == 1:
+        body_plain = _strip_html_tags(stripped).replace("\xa0", " ").strip()
+        span_match = re.search(
+            r'<span[^>]*style="[^"]*color\s*:[^"]*"[^>]*>(.*?)</span>',
+            stripped,
+            flags=re.IGNORECASE | re.DOTALL,
+        )
+        if span_match:
+            span_plain = span_match.group(1).replace("\xa0", " ").strip()
+            if span_plain and span_plain != body_plain:
+                return True
+    return False
 
 
 def _apply_display_font_sizes_to_html(html: str, disp_st: dict[str, Any]) -> str:
@@ -512,6 +543,7 @@ def _apply_display_font_sizes_to_html(html: str, disp_st: dict[str, Any]) -> str
     text = strip_canvas_font_styles(str(html or "").strip())
     if not text:
         return ""
+    base_font = f"font-size:{fs:g}pt; line-height:{ls:g}pt; font-family:Meiryo,sans-serif"
 
     def fix_style_attr(match: re.Match[str]) -> str:
         quote, style = match.group(1), match.group(2)
@@ -527,19 +559,22 @@ def _apply_display_font_sizes_to_html(html: str, disp_st: dict[str, Any]) -> str
         attrs = match.group(1) or ""
         if re.search(r"\bstyle\s*=", attrs, re.IGNORECASE):
             return match.group(0)
-        p_style = (
-            f"font-size:{fs:g}pt; line-height:{ls:g}pt; "
-            "font-family:Meiryo,sans-serif"
-        )
-        return f'<p style="{p_style}"{attrs}>'
+        return f'<p style="{base_font}"{attrs}>'
 
     text = re.sub(r"<p\b([^>]*)>", fix_bare_p_tag, text, flags=re.IGNORECASE)
-    if not re.search(r"<p\b", text, re.IGNORECASE):
-        p_style = (
-            f"font-size:{fs:g}pt; line-height:{ls:g}pt; "
-            "font-family:Meiryo,sans-serif"
-        )
-        return f'<p style="{p_style}">{text}</p>'
+
+    def fix_bare_span_tag(match: re.Match[str]) -> str:
+        attrs = match.group(1) or ""
+        if re.search(r"\bstyle\s*=", attrs, re.IGNORECASE):
+            return match.group(0)
+        return f'<span style="{base_font}"{attrs}>'
+
+    text = re.sub(r"<span\b([^>]*)>", fix_bare_span_tag, text, flags=re.IGNORECASE)
+
+    if not re.search(r"font-size\s*:", text, re.IGNORECASE):
+        text = f'<p style="{base_font}">{text}</p>'
+    elif not re.search(r"<p\b", text, re.IGNORECASE):
+        text = f'<p style="{base_font}">{text}</p>'
     return text
 
 
@@ -571,12 +606,12 @@ def build_canvas_label_html(
     """QLabel 表示用 HTML。<p> に表示倍率付き font-size を直接付与する。"""
     st = style or {}
     disp_st = scaled_canvas_text_style(st, display_scale)
+    plain = str(box.get("text") or editor_plain or "")
     saved_html = box_text_html(box, st)
     if html_has_rich_character_styles(saved_html):
         body = html_body_for_label(html_for_canvas_display(saved_html))
         if html_has_visible_text(body):
             return _apply_display_font_sizes_to_html(body, disp_st)
-    plain = str(box.get("text") or editor_plain or "")
     if plain.strip():
         return html_body_for_label(plain_to_html(plain, disp_st))
     body = label_body_from_box_content(box, st, editor_plain=editor_plain)
