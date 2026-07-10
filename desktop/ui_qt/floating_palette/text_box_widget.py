@@ -36,6 +36,7 @@ from ui_qt.floating_palette.text_rich import (
     TEXT_FORMAT_HTML,
     box_text_html,
     html_body_for_label,
+    html_for_canvas_display,
     mark_box_html,
     normalize_text_align,
     qt_horizontal_alignment,
@@ -203,6 +204,20 @@ class TextBoxWidget(QFrame):
             data["style"] = resolve_text_style(data["style"])
         return data
 
+    def _native_pt_to_display(self, pt: float) -> float:
+        return max(6.0, float(pt) / self._scale)
+
+    def _display_pt_to_native(self, pt: float) -> float:
+        return float(pt) * self._scale
+
+    def _display_line_spacing_pt(self, native_pt: float | None = None) -> float:
+        native = (
+            float(native_pt)
+            if native_pt is not None
+            else self._line_spacing_pt()
+        )
+        return self._native_pt_to_display(native)
+
     def current_char_format_state(self) -> dict[str, Any]:
         st = self._style()
         cursor = self._editor.textCursor()
@@ -212,6 +227,8 @@ class TextBoxWidget(QFrame):
         pt = fmt.fontPointSize()
         if pt <= 0:
             pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
+        else:
+            pt = self._display_pt_to_native(pt)
         block_fmt = cursor.blockFormat()
         lh = float(block_fmt.lineHeight())
         lh_type = block_fmt.lineHeightType()
@@ -219,7 +236,7 @@ class TextBoxWidget(QFrame):
             lh > 0
             and lh_type == int(QTextBlockFormat.LineHeightTypes.FixedHeight.value)
         ):
-            line_spacing = int(round(lh))
+            line_spacing = int(round(self._display_pt_to_native(lh)))
         else:
             line_spacing = int(
                 round(
@@ -248,7 +265,12 @@ class TextBoxWidget(QFrame):
         if "color" in changes:
             fmt.setForeground(QColor(str(changes["color"])))
         if "fontSize" in changes:
-            fmt.setFontPointSize(max(6.0, float(changes["fontSize"])))
+            native_fs = max(6.0, float(changes["fontSize"]))
+            fmt.setFontPointSize(self._native_pt_to_display(native_fs))
+            if not cursor.hasSelection():
+                style = dict(self._box.get("style") or {})
+                style["fontSize"] = int(round(native_fs))
+                self._box["style"] = resolve_text_style(style)
         if "bold" in changes:
             fmt.setFontWeight(
                 QFont.Weight.Bold if changes["bold"] else QFont.Weight.Normal
@@ -302,6 +324,9 @@ class TextBoxWidget(QFrame):
         self._scale = max(0.01, float(scale))
         self._apply_style()
         self._apply_geometry()
+        if self._editing:
+            self._normalize_document_char_sizes_for_display()
+            self._apply_block_line_spacing()
 
     def start_editing(self, *, caret_at_end: bool = False, record_undo: bool = True) -> None:
         if not self._selected:
@@ -549,26 +574,45 @@ class TextBoxWidget(QFrame):
 
     def _content_font(self) -> QFont:
         st = self._style()
-        font = QFont()
-        base_pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
-        disp_pt = max(6, int(round(base_pt / self._scale)))
-        font.setPointSize(disp_pt)
+        font = QFont("Meiryo")
+        font.setPointSize(
+            int(round(self._native_pt_to_display(float(st.get("fontSize") or _DEFAULT_FONT_PT))))
+        )
         return font
 
     def _load_editor_content(self) -> None:
-        html = box_text_html(self._box, self._style())
+        html = html_for_canvas_display(box_text_html(self._box, self._style()))
         self._editor.blockSignals(True)
         try:
             self._editor.setHtml(html)
             self._setup_tight_document()
+            self._normalize_document_char_sizes_for_display()
         finally:
             self._editor.blockSignals(False)
         self._sync_editor_to_box()
         self._update_display_content()
 
+    def _normalize_document_char_sizes_for_display(self) -> None:
+        disp_pt = self._native_pt_to_display(float(self._style().get("fontSize") or _DEFAULT_FONT_PT))
+        fmt = QTextCharFormat()
+        fmt.setFontPointSize(disp_pt)
+        fmt.setFontFamily("Meiryo")
+        doc = self._editor.document()
+        self._editor.blockSignals(True)
+        try:
+            block = doc.firstBlock()
+            while block.isValid():
+                cursor = QTextCursor(block)
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.mergeCharFormat(fmt)
+                block = block.next()
+            self._editor.mergeCurrentCharFormat(fmt)
+        finally:
+            self._editor.blockSignals(False)
+
     def _sync_editor_to_box(self) -> None:
         plain = self._editor.toPlainText()
-        html = self._editor.toHtml()
+        html = html_for_canvas_display(self._editor.toHtml())
         mark_box_html(self._box, html, plain)
         first_char_color = self._first_char_color_hex()
         if first_char_color:
@@ -598,14 +642,16 @@ class TextBoxWidget(QFrame):
         return color.name(QColor.NameFormat.HexRgb)
 
     def _update_display_content(self) -> None:
-        html = box_text_html(self._box, self._style())
+        html = html_for_canvas_display(box_text_html(self._box, self._style()))
         self._display_label.setText(html_body_for_label(html) or self._editor.toPlainText())
 
     def _apply_default_char_format(self) -> None:
         st = self._style()
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
-        fmt.setFontPointSize(max(6.0, float(st.get("fontSize") or _DEFAULT_FONT_PT)))
+        fmt.setFontPointSize(
+            self._native_pt_to_display(float(st.get("fontSize") or _DEFAULT_FONT_PT))
+        )
         fmt.setFontFamily("Meiryo")
         self._editor.setCurrentCharFormat(fmt)
 
@@ -660,9 +706,11 @@ class TextBoxWidget(QFrame):
         self._editor.viewport().setStyleSheet(
             f"background: {editor_bg}; border: none;"
         )
+        disp_ls = self._display_line_spacing_pt()
         label_css = (
             "QLabel#TextBoxDisplayLabel { background: transparent; "
-            "border: none; padding: 0px; margin: 0px; }"
+            "border: none; padding: 0px; margin: 0px; "
+            f"line-height: {disp_ls:g}pt; }}"
         )
         self._display_label.setStyleSheet(label_css)
         self._apply_text_alignment()
@@ -716,7 +764,8 @@ class TextBoxWidget(QFrame):
         )
 
     def _apply_block_line_spacing(self, pt: float | None = None) -> None:
-        line_pt = max(6.0, float(pt if pt is not None else self._line_spacing_pt()))
+        native_pt = max(6.0, float(pt if pt is not None else self._line_spacing_pt()))
+        line_pt = self._native_pt_to_display(native_pt)
         block_fmt = QTextBlockFormat()
         block_fmt.setTopMargin(0)
         block_fmt.setBottomMargin(0)

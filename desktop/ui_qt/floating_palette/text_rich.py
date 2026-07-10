@@ -406,7 +406,8 @@ def clip_rich_html_lines(
     return "<br>".join(out)
 
 
-def _strip_palette_font_styles(html: str) -> str:
+def strip_canvas_font_styles(html: str) -> str:
+    """記述欄キャンバス表示用: inline の font-size / line-height を除去（QFont に任せる）。"""
     text = str(html or "")
     text = re.sub(r"font-size:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
     text = re.sub(r"line-height:\s*[^;\"']+;?", "", text, flags=re.IGNORECASE)
@@ -415,6 +416,15 @@ def _strip_palette_font_styles(html: str) -> str:
     text = re.sub(r"<font[^>]*>", "", text, flags=re.IGNORECASE)
     text = re.sub(r"</font>", "", text, flags=re.IGNORECASE)
     return text
+
+
+def html_for_canvas_display(html: str) -> str:
+    """ズーム付きキャンバス上の QLabel / QTextEdit 表示向け HTML。"""
+    return strip_canvas_font_styles(html)
+
+
+def _strip_palette_font_styles(html: str) -> str:
+    return strip_canvas_font_styles(html)
 
 
 def _apply_palette_font_to_inline_styles(html: str, *, detail: bool) -> str:
