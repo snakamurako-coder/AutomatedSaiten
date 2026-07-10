@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import copy
+import uuid
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
@@ -26,6 +27,7 @@ from services.uniform_feedback_placement import resolve_uniform_feedback_placeme
 from ui_qt import helpers as h
 from ui_qt.floating_palette.format_palette_panel import FormatPalettePanel
 from ui_qt.floating_palette.phrase_edit_preview_panel import PhraseEditPreviewPanel
+from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
 from ui_qt.floating_palette.phrase_template_prefs import (
     add_phrase_template,
     clone_phrase_content_with_new_group_id,
@@ -69,7 +71,10 @@ class UniformFeedbackDialog(QDialog):
         src_row = QHBoxLayout()
         self._src_existing = QRadioButton("登録済み定型文")
         self._src_new = QRadioButton("新規追加・編集")
-        self._src_existing.setChecked(True)
+        self._source_group = QButtonGroup(self)
+        self._source_group.addButton(self._src_existing)
+        self._source_group.addButton(self._src_new)
+        self._src_new.setChecked(True)
         src_row.addWidget(self._src_existing)
         src_row.addWidget(self._src_new)
         src_row.addStretch(1)
@@ -83,7 +88,10 @@ class UniformFeedbackDialog(QDialog):
         id_row = QHBoxLayout()
         self._id_same = QRadioButton("既存IDを使う")
         self._id_new = QRadioButton("新しいIDを発行")
-        self._id_same.setChecked(True)
+        self._id_group = QButtonGroup(self)
+        self._id_group.addButton(self._id_same)
+        self._id_group.addButton(self._id_new)
+        self._id_new.setChecked(True)
         id_row.addWidget(self._id_same)
         id_row.addWidget(self._id_new)
         id_row.addStretch(1)
@@ -147,7 +155,7 @@ class UniformFeedbackDialog(QDialog):
         actions.addWidget(close_btn)
         root.addLayout(actions)
 
-        self._src_existing.toggled.connect(self._sync_source_mode)
+        self._src_existing.toggled.connect(self._on_source_mode_changed)
         self._tpl_combo.currentIndexChanged.connect(self._on_template_changed)
         self._load_initial_state()
 
@@ -170,24 +178,59 @@ class UniformFeedbackDialog(QDialog):
             if self._placement_group.buttons():
                 self._placement_group.buttons()[4].setChecked(True)
 
-        if cfg:
-            pid = str(cfg.get("phraseTemplateId") or "")
-            tpl = self._find_template(pid)
-            if tpl is not None:
-                self._src_existing.setChecked(True)
-                self._tpl_combo.setCurrentIndex(max(0, self._tpl_combo.findData(pid)))
-                self._id_same.setChecked(
-                    str(cfg.get("phraseGroupId") or "") == str(tpl.get("phraseGroupId") or "")
-                )
+        self._src_existing.blockSignals(True)
+        self._src_new.blockSignals(True)
+        try:
+            if cfg:
+                pid = str(cfg.get("phraseTemplateId") or "")
+                tpl = self._find_template(pid)
+                if tpl is not None:
+                    self._src_existing.setChecked(True)
+                    self._tpl_combo.setCurrentIndex(max(0, self._tpl_combo.findData(pid)))
+                    if str(cfg.get("phraseGroupId") or "") == str(tpl.get("phraseGroupId") or ""):
+                        self._id_same.setChecked(True)
+                    else:
+                        self._id_new.setChecked(True)
+                    self._load_preview_template(copy.deepcopy(tpl))
+                else:
+                    self._src_new.setChecked(True)
+                    self._load_preview_template(template_dict_from_uniform_config(cfg))
             else:
                 self._src_new.setChecked(True)
-                tpl = template_dict_from_uniform_config(cfg)
-                self._active_template = tpl
-                self._preview.load_template(tpl)
-                self._format.load_style(tpl.get("style") or {})
-        if self._active_template is None:
-            self._on_template_changed(self._tpl_combo.currentIndex())
+                self._load_new_blank_template()
+        finally:
+            self._src_existing.blockSignals(False)
+            self._src_new.blockSignals(False)
         self._sync_source_mode()
+
+    @staticmethod
+    def _preview_style(style: dict[str, Any] | None) -> dict[str, Any]:
+        merged = resolve_text_style(dict(style or TEXT_STYLE_TEMPLATE_A))
+        merged["textAlignH"] = "center"
+        merged["textAlignV"] = "center"
+        return merged
+
+    def _blank_template(self) -> dict[str, Any]:
+        return {
+            "id": str(uuid.uuid4()),
+            "label": "",
+            "text": "",
+            "textHtml": "",
+            "textFormat": "plain",
+            "style": self._preview_style(TEXT_STYLE_TEMPLATE_A),
+            "width": 120.0,
+            "height": 36.0,
+        }
+
+    def _load_preview_template(self, tpl: dict[str, Any]) -> None:
+        loaded = copy.deepcopy(tpl)
+        loaded["style"] = self._preview_style(loaded.get("style"))
+        self._active_template = loaded
+        self._preview.load_template(loaded)
+        self._format.load_style(loaded.get("style") or {})
+
+    def _load_new_blank_template(self) -> None:
+        self._load_preview_template(self._blank_template())
 
     def _sync_source_mode(self) -> None:
         existing = self._src_existing.isChecked()
@@ -195,14 +238,23 @@ class UniformFeedbackDialog(QDialog):
         self._id_same.setEnabled(existing)
         self._id_new.setEnabled(existing)
 
+    def _on_source_mode_changed(self, existing_selected: bool) -> None:
+        self._sync_source_mode()
+        if existing_selected:
+            self._id_same.setChecked(True)
+            self._on_template_changed(self._tpl_combo.currentIndex())
+        else:
+            self._id_new.setChecked(True)
+            self._load_new_blank_template()
+
     def _on_template_changed(self, _index: int) -> None:
+        if not self._src_existing.isChecked():
+            return
         tpl_id = str(self._tpl_combo.currentData() or "")
         tpl = self._find_template(tpl_id)
         if tpl is None:
             return
-        self._active_template = copy.deepcopy(tpl)
-        self._preview.load_template(self._active_template)
-        self._format.load_style(self._active_template.get("style") or {})
+        self._load_preview_template(tpl)
 
     def _current_template(self) -> dict[str, Any] | None:
         if self._active_template is None:
@@ -216,7 +268,7 @@ class UniformFeedbackDialog(QDialog):
         if tpl is None:
             h.warn(self, "保存", "定型文が選択されていません。")
             return
-        if self._src_existing.isChecked() and not self._src_new.isChecked():
+        if self._src_existing.isChecked():
             saved = update_phrase_template(str(tpl.get("id") or ""), **tpl)
             if saved is None:
                 h.warn(self, "保存", "定型文の保存に失敗しました。")
@@ -233,7 +285,7 @@ class UniformFeedbackDialog(QDialog):
         self._tpl_combo.blockSignals(False)
         self._src_existing.setChecked(True)
         self._tpl_combo.setCurrentIndex(max(0, self._tpl_combo.findData(str(saved.get("id") or ""))))
-        self._active_template = saved
+        self._load_preview_template(saved)
         h.info(self, "保存", "新規定型文として登録しました。")
 
     def _selected_placement(self) -> tuple[str, str]:
