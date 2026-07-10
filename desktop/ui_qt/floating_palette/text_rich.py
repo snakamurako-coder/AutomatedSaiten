@@ -441,8 +441,7 @@ def scaled_canvas_text_style(
     return st
 
 
-def _paragraph_style_attr(st: dict[str, Any]) -> str:
-    tc = str(st.get("textColor") or DEFAULT_TEXT_COLOR)
+def _paragraph_style_attr(st: dict[str, Any], *, include_color: bool = True) -> str:
     fs = float(st.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14)
     ls = float(
         st.get("lineSpacing")
@@ -452,12 +451,14 @@ def _paragraph_style_attr(st: dict[str, Any]) -> str:
     p_styles = [
         "margin-top:0",
         "margin-bottom:0",
-        f"color:{tc}",
         f"font-size:{fs:g}pt",
         f"line-height:{ls:g}pt",
         f"text-align:{css_text_align(st)}",
         "font-family:Meiryo,sans-serif",
     ]
+    if include_color:
+        tc = str(st.get("textColor") or DEFAULT_TEXT_COLOR)
+        p_styles.insert(2, f"color:{tc}")
     if str(st.get("fontWeight") or "") == "bold":
         p_styles.append("font-weight:bold")
     if str(st.get("fontStyle") or "") == "italic":
@@ -467,12 +468,94 @@ def _paragraph_style_attr(st: dict[str, Any]) -> str:
     return "; ".join(p_styles)
 
 
-def _restyle_paragraphs_html(inner: str, disp_st: dict[str, Any]) -> str:
+def _upsert_css_property(style: str, prop: str, value: str) -> str:
+    text = re.sub(rf"{re.escape(prop)}:\s*[^;\"']+;?", "", style, flags=re.IGNORECASE)
+    text = re.sub(r"\s+", " ", text).strip().strip(";")
+    inserted = f"{prop}:{value}"
+    return f"{inserted}; {text}" if text else inserted
+
+
+def _collect_html_colors(fragment: str) -> set[str]:
+    colors: set[str] = set()
+    for match in re.finditer(r"color:\s*(#[0-9a-fA-F]{3,8})\b", fragment, flags=re.IGNORECASE):
+        colors.add(match.group(1).lower())
+    for match in re.finditer(
+        r"color:\s*rgb\(\s*(\d+)\s*,\s*(\d+)\s*,\s*(\d+)\s*\)",
+        fragment,
+        flags=re.IGNORECASE,
+    ):
+        r, g, b = (int(match.group(i)) for i in range(1, 4))
+        colors.add(f"#{r:02x}{g:02x}{b:02x}")
+    return colors
+
+
+def html_has_rich_character_styles(html: str) -> bool:
+    """文字ごとの色・装飾があるリッチ HTML か（plain_to_html で潰さない判定）。"""
+    raw = str(html or "").strip()
+    if not raw:
+        return False
+    body = html_body_for_label(raw) if re.search(r"<body\b", raw, re.IGNORECASE) else raw
+    stripped = strip_canvas_font_styles(body)
+    if re.search(r"<(span|b|i|u|strong|em|font)\b", stripped, re.IGNORECASE):
+        return True
+    return len(_collect_html_colors(stripped)) > 1
+
+
+def _apply_display_font_sizes_to_html(html: str, disp_st: dict[str, Any]) -> str:
+    """既存の文字色・装飾を保ちつつ font-size / line-height だけ表示倍率で上書き。"""
+    fs = float(disp_st.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14)
+    ls = float(
+        disp_st.get("lineSpacing")
+        or DEFAULT_TEXT_STYLE.get("lineSpacing")
+        or 20
+    )
+    text = strip_canvas_font_styles(str(html or "").strip())
+    if not text:
+        return ""
+
+    def fix_style_attr(match: re.Match[str]) -> str:
+        quote, style = match.group(1), match.group(2)
+        style = _upsert_css_property(style, "font-size", f"{fs:g}pt")
+        style = _upsert_css_property(style, "line-height", f"{ls:g}pt")
+        if not re.search(r"font-family\s*:", style, re.IGNORECASE):
+            style = _upsert_css_property(style, "font-family", "Meiryo,sans-serif")
+        return f"style={quote}{style}{quote}"
+
+    text = re.sub(r'style=(["\'])([^"\']*)\1', fix_style_attr, text, flags=re.IGNORECASE)
+
+    def fix_bare_p_tag(match: re.Match[str]) -> str:
+        attrs = match.group(1) or ""
+        if re.search(r"\bstyle\s*=", attrs, re.IGNORECASE):
+            return match.group(0)
+        p_style = (
+            f"font-size:{fs:g}pt; line-height:{ls:g}pt; "
+            "font-family:Meiryo,sans-serif"
+        )
+        return f'<p style="{p_style}"{attrs}>'
+
+    text = re.sub(r"<p\b([^>]*)>", fix_bare_p_tag, text, flags=re.IGNORECASE)
+    if not re.search(r"<p\b", text, re.IGNORECASE):
+        p_style = (
+            f"font-size:{fs:g}pt; line-height:{ls:g}pt; "
+            "font-family:Meiryo,sans-serif"
+        )
+        return f'<p style="{p_style}">{text}</p>'
+    return text
+
+
+def _restyle_paragraphs_html(
+    inner: str,
+    disp_st: dict[str, Any],
+    *,
+    include_color: bool = True,
+) -> str:
     """複数 <p> に表示用スタイルを付与する。"""
     text = strip_canvas_font_styles(str(inner or "").strip())
     if not text:
         return ""
-    p_style = _paragraph_style_attr(disp_st)
+    if not include_color:
+        return _apply_display_font_sizes_to_html(text, disp_st)
+    p_style = _paragraph_style_attr(disp_st, include_color=True)
     if re.search(r"<p\b", text, re.I):
         return re.sub(r"<p[^>]*>", f'<p style="{p_style}">', text, flags=re.I)
     return f'<p style="{p_style}">{text}</p>'
@@ -488,13 +571,18 @@ def build_canvas_label_html(
     """QLabel 表示用 HTML。<p> に表示倍率付き font-size を直接付与する。"""
     st = style or {}
     disp_st = scaled_canvas_text_style(st, display_scale)
+    saved_html = box_text_html(box, st)
+    if html_has_rich_character_styles(saved_html):
+        body = html_body_for_label(html_for_canvas_display(saved_html))
+        if html_has_visible_text(body):
+            return _apply_display_font_sizes_to_html(body, disp_st)
     plain = str(box.get("text") or editor_plain or "")
     if plain.strip():
         return html_body_for_label(plain_to_html(plain, disp_st))
     body = label_body_from_box_content(box, st, editor_plain=editor_plain)
     if not body:
         return ""
-    return _restyle_paragraphs_html(body, disp_st)
+    return _restyle_paragraphs_html(body, disp_st, include_color=True)
 
 
 def build_canvas_editor_html(

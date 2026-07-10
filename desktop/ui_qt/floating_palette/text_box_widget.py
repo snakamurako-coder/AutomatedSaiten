@@ -39,6 +39,7 @@ from ui_qt.floating_palette.text_rich import (
     build_canvas_label_html,
     html_body_for_label,
     html_for_canvas_display,
+    html_has_rich_character_styles,
     html_has_visible_text,
     label_body_from_box_content,
     mark_box_html,
@@ -599,20 +600,23 @@ class TextBoxWidget(QFrame):
         try:
             self._editor.setHtml(html)
             self._setup_tight_document()
-            self._sync_editor_char_format_from_style()
+            self._sync_editor_font_size_from_style()
         finally:
             self._editor.blockSignals(False)
         disp_font = self._content_font()
         self._editor.document().setDefaultFont(disp_font)
         self._update_display_content()
 
-    def _sync_editor_char_format_from_style(self) -> None:
+    def _has_rich_character_styles(self) -> bool:
+        return html_has_rich_character_styles(box_text_html(self._box, self._style()))
+
+    def _sync_editor_font_size_from_style(self) -> None:
+        """文字色は維持し、表示倍率付きのフォントサイズだけ全ブロックへ反映。"""
         st = scaled_canvas_text_style(self._style(), self._scale)
         disp_pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
         fmt = QTextCharFormat()
         fmt.setFontPointSize(disp_pt)
         fmt.setFontFamily("Meiryo")
-        fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         doc = self._editor.document()
         self._editor.blockSignals(True)
         try:
@@ -674,9 +678,10 @@ class TextBoxWidget(QFrame):
     def _apply_default_char_format(self) -> None:
         st = scaled_canvas_text_style(self._style(), self._scale)
         fmt = QTextCharFormat()
-        fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         fmt.setFontPointSize(float(st.get("fontSize") or _DEFAULT_FONT_PT))
         fmt.setFontFamily("Meiryo")
+        if not self._has_rich_character_styles():
+            fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         self._editor.mergeCurrentCharFormat(fmt)
 
     def _emit_char_format_state(self) -> None:
@@ -827,9 +832,9 @@ class TextBoxWidget(QFrame):
         self._apply_block_line_spacing()
 
     def _on_text_changed(self) -> None:
-        if self._editing:
-            self._sync_editor_char_format_from_style()
         self._sync_editor_to_box()
+        if self._editing:
+            self._sync_editor_font_size_from_style()
         self._update_display_content()
         self._apply_vertical_text_inset()
         self.changed.emit()
