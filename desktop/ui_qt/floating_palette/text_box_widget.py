@@ -37,6 +37,8 @@ from ui_qt.floating_palette.text_rich import (
     box_text_html,
     html_body_for_label,
     html_for_canvas_display,
+    html_has_visible_text,
+    label_body_from_box_content,
     mark_box_html,
     normalize_text_align,
     qt_horizontal_alignment,
@@ -594,10 +596,12 @@ class TextBoxWidget(QFrame):
         self._update_display_content()
 
     def _normalize_document_char_sizes_for_display(self) -> None:
-        disp_pt = self._native_pt_to_display(float(self._style().get("fontSize") or _DEFAULT_FONT_PT))
+        st = self._style()
+        disp_pt = self._native_pt_to_display(float(st.get("fontSize") or _DEFAULT_FONT_PT))
         fmt = QTextCharFormat()
         fmt.setFontPointSize(disp_pt)
         fmt.setFontFamily("Meiryo")
+        fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         doc = self._editor.document()
         self._editor.blockSignals(True)
         try:
@@ -614,6 +618,11 @@ class TextBoxWidget(QFrame):
     def _sync_editor_to_box(self) -> None:
         plain = self._editor.toPlainText()
         html = html_for_canvas_display(self._editor.toHtml())
+        if plain.strip() and not html_has_visible_text(html_body_for_label(html)):
+            regen = dict(self._box)
+            regen["text"] = plain
+            sync_box_html_from_style(regen)
+            html = html_for_canvas_display(str(regen.get("textHtml") or ""))
         mark_box_html(self._box, html, plain)
         first_char_color = self._first_char_color_hex()
         if first_char_color:
@@ -643,16 +652,21 @@ class TextBoxWidget(QFrame):
         return color.name(QColor.NameFormat.HexRgb)
 
     def _update_display_content(self) -> None:
-        html = html_for_canvas_display(box_text_html(self._box, self._style()))
-        body = html_body_for_label(html) or self._editor.toPlainText()
-        if str(body or "").strip():
+        st = self._style()
+        body = label_body_from_box_content(
+            self._box,
+            st,
+            editor_plain=self._editor.toPlainText(),
+        )
+        if body:
             self._display_label.setText(
                 wrap_label_body_for_display(
                     body,
                     font_pt=self._native_pt_to_display(
-                        float(self._style().get("fontSize") or _DEFAULT_FONT_PT)
+                        float(st.get("fontSize") or _DEFAULT_FONT_PT)
                     ),
                     line_pt=self._display_line_spacing_pt(),
+                    text_color=str(st.get("textColor") or DEFAULT_TEXT_COLOR),
                 )
             )
         else:

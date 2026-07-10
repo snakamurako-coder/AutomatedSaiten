@@ -428,15 +428,39 @@ def wrap_label_body_for_display(
     *,
     font_pt: float,
     line_pt: float,
+    text_color: str = DEFAULT_TEXT_COLOR,
 ) -> str:
     """QLabel RichText 表示用: 除去済み body に表示倍率付きラッパーを付与（保存はしない）。"""
     body = str(body_html or "").strip()
     if not body:
         return ""
+    color = str(text_color or DEFAULT_TEXT_COLOR)
     return (
         f'<div style="font-size:{font_pt:g}pt; line-height:{line_pt:g}pt; '
-        f'font-family:Meiryo,sans-serif;">{body}</div>'
+        f"font-family:Meiryo,sans-serif; color:{color};\">{body}</div>"
     )
+
+
+def html_has_visible_text(fragment: str) -> bool:
+    plain = _strip_html_tags(str(fragment or "")).replace("\xa0", " ").strip()
+    return bool(plain)
+
+
+def label_body_from_box_content(
+    box: dict[str, Any],
+    style: dict[str, Any] | None,
+    *,
+    editor_plain: str = "",
+) -> str:
+    """QLabel 表示用 body。HTML に可視文字がなければ plain text へフォールバック。"""
+    html = html_for_canvas_display(box_text_html(box, style))
+    body = html_body_for_label(html)
+    if html_has_visible_text(body):
+        return body
+    plain = str(box.get("text") or editor_plain or "").strip()
+    if plain:
+        return html_lib.escape(plain).replace("\n", "<br>")
+    return ""
 
 
 def _strip_palette_font_styles(html: str) -> str:

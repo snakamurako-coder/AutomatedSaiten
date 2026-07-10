@@ -20,6 +20,7 @@ from ui_qt.floating_palette.phrase_template_prefs import (
     apply_phrase_template_to_box,
 )
 from ui_qt.floating_palette.text_box_widget import TextBoxWidget
+from ui_qt.floating_palette.text_rich import sync_box_html_from_style
 from ui_qt.stylus_overlay import is_pen_mouse_event, is_stylus_tablet_event
 
 _MIN_NATIVE_W = 40.0
@@ -394,6 +395,7 @@ class TextBoxLayer(QWidget):
             nx, ny, width=nw, height=nh, style=load_text_box_default_style()
         )
         box["text"] = chunk
+        sync_box_html_from_style(box)
         self._undo_begin()
         self._sync_annotations_from_widgets()
         self._annotations.append(copy.deepcopy(box))
