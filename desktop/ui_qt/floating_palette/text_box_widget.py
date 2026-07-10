@@ -176,7 +176,12 @@ class TextBoxWidget(QFrame):
         self._display_label.setContentsMargins(0, 0, 0, 0)
         self._display_label.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._display_label.setStyleSheet(
-            "background: transparent; border: none; padding: 0px; margin: 0px;"
+            "QLabel#TextBoxDisplayLabel {"
+            " background-color: transparent;"
+            " border: none;"
+            " padding: 0px;"
+            " margin: 0px;"
+            " }"
         )
 
         self._text_stack = QStackedWidget()
@@ -609,13 +614,17 @@ class TextBoxWidget(QFrame):
         fmt.setFontFamily("Meiryo")
         fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         doc = self._editor.document()
-        block = doc.firstBlock()
-        while block.isValid():
-            cursor = QTextCursor(block)
-            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-            cursor.mergeCharFormat(fmt)
-            block = block.next()
-        self._editor.mergeCurrentCharFormat(fmt)
+        self._editor.blockSignals(True)
+        try:
+            block = doc.firstBlock()
+            while block.isValid():
+                cursor = QTextCursor(block)
+                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+                cursor.mergeCharFormat(fmt)
+                block = block.next()
+            self._editor.mergeCurrentCharFormat(fmt)
+        finally:
+            self._editor.blockSignals(False)
 
     def _sync_editor_to_box(self) -> None:
         plain = self._editor.toPlainText()
@@ -668,7 +677,7 @@ class TextBoxWidget(QFrame):
         fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         fmt.setFontPointSize(float(st.get("fontSize") or _DEFAULT_FONT_PT))
         fmt.setFontFamily("Meiryo")
-        self._editor.setCurrentCharFormat(fmt)
+        self._editor.mergeCurrentCharFormat(fmt)
 
     def _emit_char_format_state(self) -> None:
         if self._syncing_format_ui or not self._editing:
@@ -713,20 +722,31 @@ class TextBoxWidget(QFrame):
         else:
             pal.setColor(QPalette.ColorRole.Base, QColor(0, 0, 0, 0))
         self._editor.setPalette(pal)
-        editor_bg = "rgba(255, 255, 255, 0.92)" if self._editing else "transparent"
-        css = (
-            f"QTextEdit#TextBoxEditor {{ background: {editor_bg}; "
-            "border: none; padding: 0px; margin: 0px; }}"
+        editor_bg = (
+            "rgba(255, 255, 255, 0.92)" if self._editing else "rgba(0, 0, 0, 0)"
         )
-        self._editor.setStyleSheet(css)
+        self._editor.setStyleSheet(
+            "QTextEdit#TextBoxEditor {"
+            f" background-color: {editor_bg};"
+            " border: none;"
+            " padding: 0px;"
+            " margin: 0px;"
+            " }"
+        )
         self._editor.viewport().setStyleSheet(
-            f"background: {editor_bg}; border: none;"
+            "QWidget {"
+            f" background-color: {editor_bg};"
+            " border: none;"
+            " }"
         )
-        label_css = (
-            "QLabel#TextBoxDisplayLabel { background: transparent; "
-            "border: none; padding: 0px; margin: 0px; }"
+        self._display_label.setStyleSheet(
+            "QLabel#TextBoxDisplayLabel {"
+            " background-color: transparent;"
+            " border: none;"
+            " padding: 0px;"
+            " margin: 0px;"
+            " }"
         )
-        self._display_label.setStyleSheet(label_css)
         self._apply_text_alignment()
         if not self._editing:
             self._update_display_content()
@@ -807,6 +827,8 @@ class TextBoxWidget(QFrame):
         self._apply_block_line_spacing()
 
     def _on_text_changed(self) -> None:
+        if self._editing:
+            self._sync_editor_char_format_from_style()
         self._sync_editor_to_box()
         self._update_display_content()
         self._apply_vertical_text_inset()

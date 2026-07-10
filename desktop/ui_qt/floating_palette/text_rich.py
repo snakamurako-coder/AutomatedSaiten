@@ -467,6 +467,17 @@ def _paragraph_style_attr(st: dict[str, Any]) -> str:
     return "; ".join(p_styles)
 
 
+def _restyle_paragraphs_html(inner: str, disp_st: dict[str, Any]) -> str:
+    """複数 <p> に表示用スタイルを付与する。"""
+    text = strip_canvas_font_styles(str(inner or "").strip())
+    if not text:
+        return ""
+    p_style = _paragraph_style_attr(disp_st)
+    if re.search(r"<p\b", text, re.I):
+        return re.sub(r"<p[^>]*>", f'<p style="{p_style}">', text, flags=re.I)
+    return f'<p style="{p_style}">{text}</p>'
+
+
 def build_canvas_label_html(
     box: dict[str, Any],
     style: dict[str, Any] | None,
@@ -477,16 +488,13 @@ def build_canvas_label_html(
     """QLabel 表示用 HTML。<p> に表示倍率付き font-size を直接付与する。"""
     st = style or {}
     disp_st = scaled_canvas_text_style(st, display_scale)
+    plain = str(box.get("text") or editor_plain or "")
+    if plain.strip():
+        return html_body_for_label(plain_to_html(plain, disp_st))
     body = label_body_from_box_content(box, st, editor_plain=editor_plain)
     if not body:
         return ""
-    plain = str(box.get("text") or editor_plain or "").strip()
-    inner = strip_canvas_font_styles(body)
-    if plain and not re.search(r"<(span|b|i|u|strong|em|font)\b", inner, re.I):
-        return html_body_for_label(plain_to_html(plain, disp_st))
-    inner_clean = re.sub(r"^<p[^>]*>", "", inner.strip(), count=1, flags=re.I)
-    inner_clean = re.sub(r"</p>\s*$", "", inner_clean, count=1, flags=re.I)
-    return f'<p style="{_paragraph_style_attr(disp_st)}">{inner_clean}</p>'
+    return _restyle_paragraphs_html(body, disp_st)
 
 
 def build_canvas_editor_html(
