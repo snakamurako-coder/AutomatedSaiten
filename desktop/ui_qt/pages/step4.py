@@ -6,6 +6,7 @@ import copy
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -277,6 +278,8 @@ class Step4Page(QWidget):
             focus_score_widget(self.criteria_table, row, col)
         elif col == 6:
             self._open_uniform_feedback_dialog(row)
+        elif col == 7:
+            self._open_uniform_feedback_batch_update(row)
         elif col == 8:
             start_cell_edit(self.criteria_table, row, col)
         elif col == 9:
@@ -478,8 +481,6 @@ class Step4Page(QWidget):
         fid = self._selected_field_id() or ""
         canonical = self._canonical()
         t = self.criteria_table
-        from PySide6.QtGui import QColor
-
         t.blockSignals(True)
         for i, row in enumerate(self._criteria_rows):
             ans = row.get("answer_text", "")
@@ -676,6 +677,19 @@ class Step4Page(QWidget):
             return
         self._aggregate()
 
+    def _open_uniform_feedback_batch_update(self, row_index: int) -> None:
+        if row_index < 0 or row_index >= len(self._criteria_rows):
+            return
+        uniform_cfg = self._criteria_rows[row_index].get("uniform_feedback") or {}
+        if not isinstance(uniform_cfg, dict):
+            return
+        gid = str(uniform_cfg.get("phraseGroupId") or "").strip()
+        if not gid:
+            return
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None and hasattr(ctrl, "open_phrase_batch_update_dialog"):
+            ctrl.open_phrase_batch_update_dialog(gid)
+
     def _open_uniform_feedback_dialog(self, row_index: int) -> None:
         if row_index < 0 or row_index >= len(self._criteria_rows):
             return
@@ -752,6 +766,9 @@ class Step4Page(QWidget):
                 uniform_gid = str(uniform_cfg.get("phraseGroupId") or "") or "—"
             uniform_item = make_readonly_item(uniform_text)
             uniform_gid_item = make_readonly_item(uniform_gid, center=True)
+            if uniform_gid and uniform_gid != "—":
+                uniform_gid_item.setForeground(QColor("#2563eb"))
+                uniform_gid_item.setToolTip("クリックで定型文一括更新")
 
             judgment = self._default_judgment(row)
             score_val = self._default_score(row, max_score)

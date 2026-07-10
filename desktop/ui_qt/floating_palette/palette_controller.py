@@ -834,6 +834,10 @@ class PaletteController:
         self.tool_window.format_panel.sync_char_format(state)
 
     def _on_phrase_batch_update_requested(self, group_id: str) -> None:
+        self.open_phrase_batch_update_dialog(group_id)
+
+    def open_phrase_batch_update_dialog(self, group_id: str) -> None:
+        """定型文詳細のグループ ID クリックと同じ一括更新ダイアログを開く。"""
         gid = str(group_id or "").strip()
         if not gid or not self._page:
             return

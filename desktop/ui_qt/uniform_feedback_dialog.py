@@ -124,6 +124,7 @@ class UniformFeedbackDialog(QDialog):
         placement_box = QGroupBox("配置（九分割）")
         placement_lay = QVBoxLayout(placement_box)
         self._placement_group = QButtonGroup(self)
+        self._placement_group.setExclusive(True)
         grid = QGridLayout()
         labels = [
             ("left", "top", "左上"),
@@ -138,7 +139,9 @@ class UniformFeedbackDialog(QDialog):
         ]
         for i, (hpos, vpos, label) in enumerate(labels):
             btn = QPushButton(label)
+            btn.setObjectName("PhrasePlacementBtn")
             btn.setCheckable(True)
+            btn.setAutoExclusive(True)
             btn.setProperty("placement_h", hpos)
             btn.setProperty("placement_v", vpos)
             self._placement_group.addButton(btn, i)
