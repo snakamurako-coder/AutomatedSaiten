@@ -423,21 +423,91 @@ def html_for_canvas_display(html: str) -> str:
     return strip_canvas_font_styles(html)
 
 
-def wrap_label_body_for_display(
-    body_html: str,
+def scaled_canvas_text_style(
+    style: dict[str, Any] | None,
+    display_scale: float,
+) -> dict[str, Any]:
+    """キャンバス表示向け style（fontSize / lineSpacing を display_scale で補正）。"""
+    st = dict(style or {})
+    scale = max(0.01, float(display_scale))
+    base_fs = float(st.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14)
+    base_ls = float(
+        st.get("lineSpacing")
+        or DEFAULT_TEXT_STYLE.get("lineSpacing")
+        or 20
+    )
+    st["fontSize"] = base_fs / scale
+    st["lineSpacing"] = base_ls / scale
+    return st
+
+
+def _paragraph_style_attr(st: dict[str, Any]) -> str:
+    tc = str(st.get("textColor") or DEFAULT_TEXT_COLOR)
+    fs = float(st.get("fontSize") or DEFAULT_TEXT_STYLE.get("fontSize") or 14)
+    ls = float(
+        st.get("lineSpacing")
+        or DEFAULT_TEXT_STYLE.get("lineSpacing")
+        or 20
+    )
+    p_styles = [
+        "margin-top:0",
+        "margin-bottom:0",
+        f"color:{tc}",
+        f"font-size:{fs:g}pt",
+        f"line-height:{ls:g}pt",
+        f"text-align:{css_text_align(st)}",
+        "font-family:Meiryo,sans-serif",
+    ]
+    if str(st.get("fontWeight") or "") == "bold":
+        p_styles.append("font-weight:bold")
+    if str(st.get("fontStyle") or "") == "italic":
+        p_styles.append("font-style:italic")
+    if str(st.get("textDecoration") or "") == "underline":
+        p_styles.append("text-decoration:underline")
+    return "; ".join(p_styles)
+
+
+def build_canvas_label_html(
+    box: dict[str, Any],
+    style: dict[str, Any] | None,
     *,
-    font_pt: float,
-    line_pt: float,
-    text_color: str = DEFAULT_TEXT_COLOR,
+    display_scale: float,
+    editor_plain: str = "",
 ) -> str:
-    """QLabel RichText 表示用: 除去済み body に表示倍率付きラッパーを付与（保存はしない）。"""
-    body = str(body_html or "").strip()
+    """QLabel 表示用 HTML。<p> に表示倍率付き font-size を直接付与する。"""
+    st = style or {}
+    disp_st = scaled_canvas_text_style(st, display_scale)
+    body = label_body_from_box_content(box, st, editor_plain=editor_plain)
     if not body:
         return ""
-    color = str(text_color or DEFAULT_TEXT_COLOR)
+    plain = str(box.get("text") or editor_plain or "").strip()
+    inner = strip_canvas_font_styles(body)
+    if plain and not re.search(r"<(span|b|i|u|strong|em|font)\b", inner, re.I):
+        return html_body_for_label(plain_to_html(plain, disp_st))
+    inner_clean = re.sub(r"^<p[^>]*>", "", inner.strip(), count=1, flags=re.I)
+    inner_clean = re.sub(r"</p>\s*$", "", inner_clean, count=1, flags=re.I)
+    return f'<p style="{_paragraph_style_attr(disp_st)}">{inner_clean}</p>'
+
+
+def build_canvas_editor_html(
+    box: dict[str, Any],
+    style: dict[str, Any] | None,
+    *,
+    display_scale: float,
+    editor_plain: str = "",
+) -> str:
+    """QTextEdit 読み込み用のフル HTML 文書。"""
+    label = build_canvas_label_html(
+        box,
+        style,
+        display_scale=display_scale,
+        editor_plain=editor_plain,
+    )
+    if not label:
+        return '<html><head></head><body style="margin:0; padding:0;"></body></html>'
     return (
-        f'<div style="font-size:{font_pt:g}pt; line-height:{line_pt:g}pt; '
-        f"font-family:Meiryo,sans-serif; color:{color};\">{body}</div>"
+        '<html><head></head><body style="margin:0; padding:0;">'
+        f"{label}</body></html>"
     )
 
 

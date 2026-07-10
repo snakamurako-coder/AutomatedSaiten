@@ -35,6 +35,8 @@ from models.text_annotation_repo import (
 from ui_qt.floating_palette.text_rich import (
     TEXT_FORMAT_HTML,
     box_text_html,
+    build_canvas_editor_html,
+    build_canvas_label_html,
     html_body_for_label,
     html_for_canvas_display,
     html_has_visible_text,
@@ -43,8 +45,8 @@ from ui_qt.floating_palette.text_rich import (
     normalize_text_align,
     qt_horizontal_alignment,
     qt_label_alignment,
+    scaled_canvas_text_style,
     sync_box_html_from_style,
-    wrap_label_body_for_display,
 )
 
 _DEFAULT_FONT_PT = int(DEFAULT_TEXT_STYLE.get("fontSize") or 14)
@@ -327,9 +329,7 @@ class TextBoxWidget(QFrame):
         self._scale = max(0.01, float(scale))
         self._apply_style()
         self._apply_geometry()
-        if self._editing:
-            self._normalize_document_char_sizes_for_display()
-            self._apply_block_line_spacing()
+        self._load_editor_content()
 
     def start_editing(self, *, caret_at_end: bool = False, record_undo: bool = True) -> None:
         if not self._selected:
@@ -584,36 +584,38 @@ class TextBoxWidget(QFrame):
         return font
 
     def _load_editor_content(self) -> None:
-        html = html_for_canvas_display(box_text_html(self._box, self._style()))
+        html = build_canvas_editor_html(
+            self._box,
+            self._style(),
+            display_scale=self._scale,
+            editor_plain=self._editor.toPlainText(),
+        )
         self._editor.blockSignals(True)
         try:
             self._editor.setHtml(html)
             self._setup_tight_document()
-            self._normalize_document_char_sizes_for_display()
+            self._sync_editor_char_format_from_style()
         finally:
             self._editor.blockSignals(False)
-        self._editor.document().setDefaultFont(self._content_font())
+        disp_font = self._content_font()
+        self._editor.document().setDefaultFont(disp_font)
         self._update_display_content()
 
-    def _normalize_document_char_sizes_for_display(self) -> None:
-        st = self._style()
-        disp_pt = self._native_pt_to_display(float(st.get("fontSize") or _DEFAULT_FONT_PT))
+    def _sync_editor_char_format_from_style(self) -> None:
+        st = scaled_canvas_text_style(self._style(), self._scale)
+        disp_pt = float(st.get("fontSize") or _DEFAULT_FONT_PT)
         fmt = QTextCharFormat()
         fmt.setFontPointSize(disp_pt)
         fmt.setFontFamily("Meiryo")
         fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
         doc = self._editor.document()
-        self._editor.blockSignals(True)
-        try:
-            block = doc.firstBlock()
-            while block.isValid():
-                cursor = QTextCursor(block)
-                cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
-                cursor.mergeCharFormat(fmt)
-                block = block.next()
-            self._editor.mergeCurrentCharFormat(fmt)
-        finally:
-            self._editor.blockSignals(False)
+        block = doc.firstBlock()
+        while block.isValid():
+            cursor = QTextCursor(block)
+            cursor.select(QTextCursor.SelectionType.BlockUnderCursor)
+            cursor.mergeCharFormat(fmt)
+            block = block.next()
+        self._editor.mergeCurrentCharFormat(fmt)
 
     def _sync_editor_to_box(self) -> None:
         plain = self._editor.toPlainText()
@@ -652,33 +654,19 @@ class TextBoxWidget(QFrame):
         return color.name(QColor.NameFormat.HexRgb)
 
     def _update_display_content(self) -> None:
-        st = self._style()
-        body = label_body_from_box_content(
+        html = build_canvas_label_html(
             self._box,
-            st,
+            self._style(),
+            display_scale=self._scale,
             editor_plain=self._editor.toPlainText(),
         )
-        if body:
-            self._display_label.setText(
-                wrap_label_body_for_display(
-                    body,
-                    font_pt=self._native_pt_to_display(
-                        float(st.get("fontSize") or _DEFAULT_FONT_PT)
-                    ),
-                    line_pt=self._display_line_spacing_pt(),
-                    text_color=str(st.get("textColor") or DEFAULT_TEXT_COLOR),
-                )
-            )
-        else:
-            self._display_label.setText("")
+        self._display_label.setText(html)
 
     def _apply_default_char_format(self) -> None:
-        st = self._style()
+        st = scaled_canvas_text_style(self._style(), self._scale)
         fmt = QTextCharFormat()
         fmt.setForeground(QColor(str(st.get("textColor") or DEFAULT_TEXT_COLOR)))
-        fmt.setFontPointSize(
-            self._native_pt_to_display(float(st.get("fontSize") or _DEFAULT_FONT_PT))
-        )
+        fmt.setFontPointSize(float(st.get("fontSize") or _DEFAULT_FONT_PT))
         fmt.setFontFamily("Meiryo")
         self._editor.setCurrentCharFormat(fmt)
 
@@ -714,7 +702,6 @@ class TextBoxWidget(QFrame):
             f"QFrame {{ background: {bg}; border: {border_css}; border-radius: 0px; }}"
         )
         font = self._content_font()
-        disp_pt = font.pointSizeF()
         self._editor.setFont(font)
         self._editor.document().setDefaultFont(font)
         self._display_label.setFont(font)
@@ -729,19 +716,15 @@ class TextBoxWidget(QFrame):
         editor_bg = "rgba(255, 255, 255, 0.92)" if self._editing else "transparent"
         css = (
             f"QTextEdit#TextBoxEditor {{ background: {editor_bg}; "
-            f"border: none; padding: 0px; margin: 0px; "
-            f"font-family: Meiryo, sans-serif; font-size: {disp_pt:g}pt; }}"
+            "border: none; padding: 0px; margin: 0px; }}"
         )
         self._editor.setStyleSheet(css)
         self._editor.viewport().setStyleSheet(
             f"background: {editor_bg}; border: none;"
         )
-        disp_ls = self._display_line_spacing_pt()
         label_css = (
             "QLabel#TextBoxDisplayLabel { background: transparent; "
-            "border: none; padding: 0px; margin: 0px; "
-            f"font-family: Meiryo, sans-serif; font-size: {disp_pt:g}pt; "
-            f"line-height: {disp_ls:g}pt; color: {tc}; }}"
+            "border: none; padding: 0px; margin: 0px; }"
         )
         self._display_label.setStyleSheet(label_css)
         self._apply_text_alignment()
