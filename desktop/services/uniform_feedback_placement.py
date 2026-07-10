@@ -9,45 +9,31 @@ def _clamp(v: float, lo: float, hi: float) -> float:
     return min(hi, max(lo, v))
 
 
-def _anchor_point(
+def _rect_for_placement(
     field_w: float,
     field_h: float,
-    placement_h: str,
-    placement_v: str,
-) -> tuple[float, float]:
-    x = {
-        "left": field_w / 6.0,
-        "center": field_w / 2.0,
-        "right": field_w * 5.0 / 6.0,
-    }.get(str(placement_h or "").lower(), field_w / 2.0)
-    y = {
-        "top": field_h / 6.0,
-        "center": field_h / 2.0,
-        "bottom": field_h * 5.0 / 6.0,
-    }.get(str(placement_v or "").lower(), field_h / 2.0)
-    return x, y
-
-
-def _rect_from_anchor(
-    anchor_x: float,
-    anchor_y: float,
     box_w: float,
     box_h: float,
-    align_h: str,
-    align_v: str,
+    placement_h: str,
+    placement_v: str,
 ) -> tuple[float, float, float, float]:
-    if align_h == "right":
-        x = anchor_x - box_w
-    elif align_h == "center":
-        x = anchor_x - box_w / 2.0
+    """記述欄の端にテキストボックスの辺をぴったり揃えて配置する。"""
+    ph = str(placement_h or "center").lower()
+    pv = str(placement_v or "center").lower()
+    if ph == "left":
+        x = 0.0
+    elif ph == "right":
+        x = field_w - box_w
     else:
-        x = anchor_x
-    if align_v == "bottom":
-        y = anchor_y - box_h
-    elif align_v == "center":
-        y = anchor_y - box_h / 2.0
+        x = (field_w - box_w) / 2.0
+
+    if pv == "top":
+        y = 0.0
+    elif pv == "bottom":
+        y = field_h - box_h
     else:
-        y = anchor_y
+        y = (field_h - box_h) / 2.0
+
     return x, y, box_w, box_h
 
 
@@ -71,15 +57,19 @@ def resolve_uniform_feedback_placement(
     if align_v not in {"top", "center", "bottom"}:
         align_v = "center"
 
-    ax, ay = _anchor_point(fw, fh, align_h, align_v)
-    sx, sy, sw, sh = _rect_from_anchor(ax, ay, bw, bh, align_h, align_v)
+    sx, sy, sw, sh = _rect_for_placement(fw, fh, bw, bh, align_h, align_v)
 
     cw = min(sw, fw)
     ch = min(sh, fh)
-    cx = _clamp(sx, 0.0, fw - cw)
-    cy = _clamp(sy, 0.0, fh - ch)
+    cx = _clamp(sx, 0.0, max(0.0, fw - cw))
+    cy = _clamp(sy, 0.0, max(0.0, fh - ch))
 
-    needs = abs(cx - sx) > 0.01 or abs(cy - sy) > 0.01 or abs(cw - sw) > 0.01 or abs(ch - sh) > 0.01
+    needs = (
+        abs(cx - sx) > 0.01
+        or abs(cy - sy) > 0.01
+        or abs(cw - sw) > 0.01
+        or abs(ch - sh) > 0.01
+    )
     overflow: list[str] = []
     if sx < 0:
         overflow.append("左")
@@ -97,4 +87,3 @@ def resolve_uniform_feedback_placement(
         "overflowDirections": overflow,
         "align": {"textAlignH": align_h, "textAlignV": align_v},
     }
-
