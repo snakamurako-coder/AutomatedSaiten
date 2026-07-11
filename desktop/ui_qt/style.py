@@ -509,6 +509,25 @@ QPushButton#PhrasePlacementBtn:checked {{
     border-color: {COLORS["accent"]};
     color: {COLORS["accent"]};
 }}
+QPushButton#UniformPlacementBtn {{
+    background: {COLORS["bg"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 3px;
+    padding: 0px 2px;
+    font-size: 9px;
+    min-height: 20px;
+    max-height: 20px;
+    min-width: 72px;
+    max-width: 120px;
+}}
+QPushButton#UniformPlacementBtn:hover {{
+    border-color: {COLORS["border_strong"]};
+}}
+QPushButton#UniformPlacementBtn:checked {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+}}
 QLabel#PhraseDetailBody {{
     font-size: 11px;
     line-height: 15px;
@@ -543,12 +562,48 @@ QPushButton#PaletteIconBtn:checked {{
     border-color: {COLORS["accent"]};
     color: {COLORS["accent"]};
 }}
+QPushButton#ToolSegmentBtnAlignTall {{
+    background: {COLORS["surface"]};
+    border: 1px solid {COLORS["border"]};
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    color: {COLORS["text"]};
+    min-height: 36px;
+    max-height: 36px;
+}}
+QPushButton#ToolSegmentBtnAlignTall:hover {{
+    background: #f1f5f9;
+    border-color: {COLORS["border_strong"]};
+    color: {COLORS["text"]};
+}}
+QPushButton#ToolSegmentBtnAlignTall:checked {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+    font-weight: 600;
+}}
+QPushButton#ToolSegmentBtnAlignTall:disabled,
+QPushButton#ToolSegmentBtnAlignTall:checked:disabled,
+QPushButton#ToolSegmentBtnAlignTall[locked="true"] {{
+    background: {COLORS["sidebar"]};
+    border-color: {COLORS["border"]};
+    color: {COLORS["text"]};
+}}
+QPushButton#ToolSegmentBtnAlignTall[locked="true"]:checked,
+QPushButton#ToolSegmentBtnAlignTall:checked:disabled {{
+    background: {COLORS["accent_soft"]};
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent"]};
+    font-weight: 600;
+}}
 QPushButton#ToolSegmentBtn {{
     background: {COLORS["bg"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 5px;
     padding: 1px 5px;
     font-size: 11px;
+    color: {COLORS["text"]};
     min-height: 0;
     max-height: 22px;
 }}
@@ -564,6 +619,12 @@ QPushButton#ToolSegmentBtn:checked {{
     border-color: {COLORS["accent"]};
     color: {COLORS["accent"]};
     font-weight: 600;
+}}
+QPushButton#ToolSegmentBtn:disabled,
+QPushButton#ToolSegmentBtn:checked:disabled {{
+    color: {COLORS["text_secondary"]};
+    background: {COLORS["sidebar"]};
+    border-color: {COLORS["border"]};
 }}
 QPushButton#PaletteActionBtn {{
     background: {COLORS["surface"]};

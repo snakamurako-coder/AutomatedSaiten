@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QRadioButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
@@ -108,6 +109,7 @@ class UniformFeedbackDialog(QDialog):
         self._format.set_detailed_controls_visible(True)
         self._format.set_match_placement_visible(True)
         self._format.set_match_placement_checked(True)
+        self._format.set_align_buttons_tall(True)
         self._format.style_changed.connect(self._preview.apply_style_dict)
         self._format.char_format_changed.connect(self._preview.apply_char_format)
         self._format.edit_requested.connect(self._preview.start_text_editing)
@@ -131,6 +133,8 @@ class UniformFeedbackDialog(QDialog):
         self._placement_group = QButtonGroup(self)
         self._placement_group.setExclusive(True)
         grid = QGridLayout()
+        grid.setHorizontalSpacing(4)
+        grid.setVerticalSpacing(4)
         labels = [
             ("left", "top", "左上"),
             ("center", "top", "上中央"),
@@ -144,14 +148,21 @@ class UniformFeedbackDialog(QDialog):
         ]
         for i, (hpos, vpos, label) in enumerate(labels):
             btn = QPushButton(label)
-            btn.setObjectName("PhrasePlacementBtn")
+            btn.setObjectName("UniformPlacementBtn")
             btn.setCheckable(True)
             btn.setProperty("placement_h", hpos)
             btn.setProperty("placement_v", vpos)
+            # PhrasePlacementBtn(40px高・全幅) の約半分
+            btn.setFixedSize(120, 20)
+            btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
             self._placement_group.addButton(btn, i)
             r, c = divmod(i, 3)
             grid.addWidget(btn, r, c)
-        placement_lay.addLayout(grid)
+        grid_wrap = QHBoxLayout()
+        grid_wrap.addStretch(1)
+        grid_wrap.addLayout(grid)
+        grid_wrap.addStretch(1)
+        placement_lay.addLayout(grid_wrap)
         root.addWidget(placement_box)
 
         actions = QHBoxLayout()

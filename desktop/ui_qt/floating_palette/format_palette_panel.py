@@ -55,12 +55,17 @@ class FormatPalettePanel(QWidget):
     match_placement_toggled = Signal(bool)
 
     _SEGMENT_BTN_PAD = 10
+    _SEGMENT_BTN_PAD_TALL = 20
+    _ALIGN_BTN_HEIGHT_TALL = 36
     _ACTION_BTN_PAD = 8
     _DETAIL_VERTICAL_INTERVAL = 4
+    _DETAIL_ALIGN_INTERVAL_TALL = 10
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        self._align_locked = False
+        self._align_tall = False
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(2)
@@ -191,13 +196,13 @@ class FormatPalettePanel(QWidget):
 
         align_body = QHBoxLayout()
         align_body.setContentsMargins(0, 0, 0, 0)
-        align_body.setSpacing(8)
-        align_cols = QVBoxLayout()
-        align_cols.setContentsMargins(0, 0, 0, 0)
-        align_cols.setSpacing(self._DETAIL_VERTICAL_INTERVAL)
-        align_cols.addLayout(h_align_row)
-        align_cols.addLayout(v_align_row)
-        align_body.addLayout(align_cols, 1)
+        align_body.setSpacing(12)
+        self._align_cols = QVBoxLayout()
+        self._align_cols.setContentsMargins(0, 0, 0, 0)
+        self._align_cols.setSpacing(self._DETAIL_VERTICAL_INTERVAL)
+        self._align_cols.addLayout(h_align_row)
+        self._align_cols.addLayout(v_align_row)
+        align_body.addLayout(self._align_cols, 1)
         self._match_placement_cb = QCheckBox("配置と揃える")
         self._match_placement_cb.setChecked(True)
         self._match_placement_cb.setToolTip(
@@ -275,10 +280,14 @@ class FormatPalettePanel(QWidget):
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         base_h = 160 if self._template_edit_mode else 190
+        if self._align_tall:
+            base_h += 48
         return QSize(self.content_min_width(), base_h)
 
     def sizeHint(self) -> QSize:  # noqa: N802
         base_h = 200 if self._template_edit_mode else 230
+        if self._align_tall:
+            base_h += 48
         return QSize(self.content_min_width(), base_h)
 
     def content_min_width(self) -> int:
@@ -390,6 +399,56 @@ class FormatPalettePanel(QWidget):
         if visible:
             self._sync_align_buttons_enabled()
 
+    def set_align_buttons_tall(self, enabled: bool) -> None:
+        """一律フィードバック向け: 横・縦揃えボタンを読みやすく大きくする。"""
+        self._align_tall = bool(enabled)
+        root = self.layout()
+        if root is not None:
+            root.setSpacing(6 if self._align_tall else 2)
+        if getattr(self, "_align_cols", None) is not None:
+            self._align_cols.setSpacing(
+                self._DETAIL_ALIGN_INTERVAL_TALL
+                if self._align_tall
+                else self._DETAIL_VERTICAL_INTERVAL
+            )
+        if getattr(self, "_align_frame", None) is not None:
+            align_lay = self._align_frame.layout()
+            if align_lay is not None:
+                align_lay.setSpacing(
+                    self._DETAIL_ALIGN_INTERVAL_TALL
+                    if self._align_tall
+                    else self._DETAIL_VERTICAL_INTERVAL
+                )
+        labels_h = {"left": "左", "center": "中", "right": "右"}
+        labels_v = {"top": "上", "center": "中", "bottom": "下"}
+        for key, btn in self._align_h_btns.items():
+            self._apply_align_btn_size(btn, labels_h[key], tall=self._align_tall)
+        for key, btn in self._align_v_btns.items():
+            self._apply_align_btn_size(btn, labels_v[key], tall=self._align_tall)
+        self._sync_align_buttons_enabled()
+        self.updateGeometry()
+        self.layout_hint_changed.emit()
+
+    def _apply_align_btn_size(self, btn: QPushButton, label: str, *, tall: bool) -> None:
+        fm = QFontMetrics(btn.font())
+        if tall:
+            pad = self._SEGMENT_BTN_PAD_TALL
+            height = self._ALIGN_BTN_HEIGHT_TALL
+            width = max(36, fm.horizontalAdvance(label) + pad)
+            btn.setObjectName("ToolSegmentBtnAlignTall")
+        else:
+            height = fm.height() + 4
+            width = self._segment_btn_width(label, btn.font())
+            btn.setObjectName("ToolSegmentBtn")
+        btn.setFixedWidth(width)
+        btn.setFixedHeight(height)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        btn.setMinimumSize(width, height)
+        # objectName / property 変更をスタイルへ反映
+        btn.style().unpolish(btn)
+        btn.style().polish(btn)
+        btn.update()
+
     def is_match_placement_checked(self) -> bool:
         cb = getattr(self, "_match_placement_cb", None)
         if not _qt_widget_alive(cb):
@@ -417,15 +476,33 @@ class FormatPalettePanel(QWidget):
         self.match_placement_toggled.emit(bool(checked))
 
     def _sync_align_buttons_enabled(self) -> None:
-        # 配置と揃える ON のときは九分割側が正なのでボタンは表示のみ
-        locked = (
+        # disabled にすると文字色が潰れるため、ロックフラグで操作だけ止める
+        self._align_locked = (
             self.is_match_placement_checked()
+            and _qt_widget_alive(getattr(self, "_match_placement_cb", None))
             and self._match_placement_cb.isVisible()
         )
-        for btn in self._align_h_btns.values():
-            btn.setEnabled(not locked)
-        for btn in self._align_v_btns.values():
-            btn.setEnabled(not locked)
+        tip = (
+            "「配置と揃える」がオンのため、記述欄内画像配置側で変更してください"
+            if self._align_locked
+            else ""
+        )
+        for btn in (*self._align_h_btns.values(), *self._align_v_btns.values()):
+            btn.setEnabled(True)
+            btn.setProperty("locked", "true" if self._align_locked else "false")
+            if tip:
+                btn.setToolTip(tip)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            btn.update()
+        # 通常時のツールチップを復元
+        if not self._align_locked:
+            tips_h = {"left": "左寄せ", "center": "中央", "right": "右寄せ"}
+            tips_v = {"top": "上寄せ", "center": "中央", "bottom": "下寄せ"}
+            for key, btn in self._align_h_btns.items():
+                btn.setToolTip(tips_h[key])
+            for key, btn in self._align_v_btns.items():
+                btn.setToolTip(tips_v[key])
 
     def set_template_edit_mode(self, enabled: bool) -> None:
         self._template_edit_mode = bool(enabled)
@@ -523,14 +600,16 @@ class FormatPalettePanel(QWidget):
         self.char_format_changed.emit({key: True})
 
     def _set_align_h(self, key: str) -> None:
-        if self._loading:
+        if self._loading or self._align_locked:
+            self._sync_align_ui()
             return
         self._style["textAlignH"] = key
         self._sync_align_ui()
         self._emit_style()
 
     def _set_align_v(self, key: str) -> None:
-        if self._loading:
+        if self._loading or self._align_locked:
+            self._sync_align_ui()
             return
         self._style["textAlignV"] = key
         self._sync_align_ui()
