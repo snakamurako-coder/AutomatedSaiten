@@ -565,12 +565,12 @@ QPushButton#PaletteIconBtn:checked {{
 QPushButton#ToolSegmentBtnAlignTall {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border"]};
-    border-radius: 6px;
-    padding: 6px 10px;
-    font-size: 12px;
+    border-radius: 5px;
+    padding: 1px 6px;
+    font-size: 11px;
     color: {COLORS["text"]};
-    min-height: 36px;
-    max-height: 36px;
+    min-height: 18px;
+    max-height: 18px;
 }}
 QPushButton#ToolSegmentBtnAlignTall:hover {{
     background: #f1f5f9;
