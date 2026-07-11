@@ -106,10 +106,13 @@ class UniformFeedbackDialog(QDialog):
         self._format = FormatPalettePanel(self)
         self._format.set_template_edit_mode(True)
         self._format.set_detailed_controls_visible(True)
+        self._format.set_match_placement_visible(True)
+        self._format.set_match_placement_checked(True)
         self._format.style_changed.connect(self._preview.apply_style_dict)
         self._format.char_format_changed.connect(self._preview.apply_char_format)
         self._format.edit_requested.connect(self._preview.start_text_editing)
         self._format.edit_done_requested.connect(self._preview.finish_text_editing)
+        self._format.match_placement_toggled.connect(self._on_match_placement_toggled)
         self._preview.char_format_state_changed.connect(self._format.sync_char_format)
         self._preview.set_focus_guard_widgets(())
         edit_lay.addWidget(self._preview, 0)
@@ -123,7 +126,7 @@ class UniformFeedbackDialog(QDialog):
         edit_lay.addLayout(save_row)
         root.addWidget(edit_box, 1)
 
-        placement_box = QGroupBox("配置（九分割）")
+        placement_box = QGroupBox("記述欄内画像配置")
         placement_lay = QVBoxLayout(placement_box)
         self._placement_group = QButtonGroup(self)
         self._placement_group.setExclusive(True)
@@ -161,6 +164,7 @@ class UniformFeedbackDialog(QDialog):
 
         self._src_existing.toggled.connect(self._on_source_mode_changed)
         self._tpl_combo.currentIndexChanged.connect(self._on_template_changed)
+        self._placement_group.buttonClicked.connect(self._on_placement_changed)
         self._load_initial_state()
 
     def _find_template(self, tpl_id: str) -> dict[str, Any] | None:
@@ -206,12 +210,14 @@ class UniformFeedbackDialog(QDialog):
             self._src_existing.blockSignals(False)
             self._src_new.blockSignals(False)
         self._sync_source_mode()
+        self._sync_align_from_placement()
 
-    @staticmethod
-    def _preview_style(style: dict[str, Any] | None) -> dict[str, Any]:
+    def _preview_style(self, style: dict[str, Any] | None) -> dict[str, Any]:
         merged = resolve_text_style(dict(style or TEXT_STYLE_TEMPLATE_A))
-        merged["textAlignH"] = "center"
-        merged["textAlignV"] = "center"
+        if self._format.is_match_placement_checked():
+            placement_h, placement_v = self._selected_placement()
+            merged["textAlignH"] = placement_h
+            merged["textAlignV"] = placement_v
         return merged
 
     def _blank_template(self) -> dict[str, Any]:
@@ -232,6 +238,21 @@ class UniformFeedbackDialog(QDialog):
         self._active_template = loaded
         self._preview.load_template(loaded)
         self._format.load_style(loaded.get("style") or {})
+        if self._format.is_match_placement_checked():
+            self._sync_align_from_placement()
+
+    def _sync_align_from_placement(self) -> None:
+        if not self._format.is_match_placement_checked():
+            return
+        placement_h, placement_v = self._selected_placement()
+        self._format.apply_text_align(placement_h, placement_v)
+
+    def _on_placement_changed(self, _btn: QPushButton | None = None) -> None:
+        self._sync_align_from_placement()
+
+    def _on_match_placement_toggled(self, checked: bool) -> None:
+        if checked:
+            self._sync_align_from_placement()
 
     def _load_new_blank_template(self) -> None:
         self._load_preview_template(self._blank_template())

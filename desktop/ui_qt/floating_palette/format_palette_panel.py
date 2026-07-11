@@ -8,6 +8,7 @@ from PySide6.QtCore import QSize, Qt, Signal
 from PySide6.QtGui import QFont, QFontMetrics
 from PySide6.QtWidgets import (
     QButtonGroup,
+    QCheckBox,
     QFrame,
     QHBoxLayout,
     QLabel,
@@ -51,6 +52,7 @@ class FormatPalettePanel(QWidget):
     delete_requested = Signal()
     speech_toggled = Signal(bool)
     layout_hint_changed = Signal()
+    match_placement_toggled = Signal(bool)
 
     _SEGMENT_BTN_PAD = 10
     _ACTION_BTN_PAD = 8
@@ -186,8 +188,27 @@ class FormatPalettePanel(QWidget):
             detail_lay.addWidget(deco_btn)
         detail_lay.addStretch()
         align_lay.addWidget(self._detail_format_frame)
-        align_lay.addLayout(h_align_row)
-        align_lay.addLayout(v_align_row)
+
+        align_body = QHBoxLayout()
+        align_body.setContentsMargins(0, 0, 0, 0)
+        align_body.setSpacing(8)
+        align_cols = QVBoxLayout()
+        align_cols.setContentsMargins(0, 0, 0, 0)
+        align_cols.setSpacing(self._DETAIL_VERTICAL_INTERVAL)
+        align_cols.addLayout(h_align_row)
+        align_cols.addLayout(v_align_row)
+        align_body.addLayout(align_cols, 1)
+        self._match_placement_cb = QCheckBox("配置と揃える")
+        self._match_placement_cb.setChecked(True)
+        self._match_placement_cb.setToolTip(
+            "「記述欄内画像配置」の九分割に合わせて、文字の横・縦位置を同期します"
+        )
+        self._match_placement_cb.toggled.connect(self._on_match_placement_toggled)
+        self._match_placement_cb.hide()
+        align_body.addWidget(
+            self._match_placement_cb, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        align_lay.addLayout(align_body)
         self._detail_format_frame.hide()
         root.addWidget(align_frame)
 
@@ -361,6 +382,50 @@ class FormatPalettePanel(QWidget):
         if not _qt_widget_alive(self._detail_format_frame):
             return
         self._detail_format_frame.setVisible(bool(visible))
+
+    def set_match_placement_visible(self, visible: bool) -> None:
+        if not _qt_widget_alive(getattr(self, "_match_placement_cb", None)):
+            return
+        self._match_placement_cb.setVisible(bool(visible))
+        if visible:
+            self._sync_align_buttons_enabled()
+
+    def is_match_placement_checked(self) -> bool:
+        cb = getattr(self, "_match_placement_cb", None)
+        if not _qt_widget_alive(cb):
+            return False
+        return bool(cb.isChecked())
+
+    def set_match_placement_checked(self, checked: bool) -> None:
+        cb = getattr(self, "_match_placement_cb", None)
+        if not _qt_widget_alive(cb):
+            return
+        cb.setChecked(bool(checked))
+
+    def apply_text_align(self, align_h: str, align_v: str) -> None:
+        """横・縦揃えを外部（配置九分割など）から反映する。"""
+        h_key, v_key = normalize_text_align(
+            {"textAlignH": align_h, "textAlignV": align_v}
+        )
+        self._style["textAlignH"] = h_key
+        self._style["textAlignV"] = v_key
+        self._sync_align_ui()
+        self._emit_style()
+
+    def _on_match_placement_toggled(self, checked: bool) -> None:
+        self._sync_align_buttons_enabled()
+        self.match_placement_toggled.emit(bool(checked))
+
+    def _sync_align_buttons_enabled(self) -> None:
+        # 配置と揃える ON のときは九分割側が正なのでボタンは表示のみ
+        locked = (
+            self.is_match_placement_checked()
+            and self._match_placement_cb.isVisible()
+        )
+        for btn in self._align_h_btns.values():
+            btn.setEnabled(not locked)
+        for btn in self._align_v_btns.values():
+            btn.setEnabled(not locked)
 
     def set_template_edit_mode(self, enabled: bool) -> None:
         self._template_edit_mode = bool(enabled)
