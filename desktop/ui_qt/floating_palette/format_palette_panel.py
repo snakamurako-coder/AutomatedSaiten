@@ -203,7 +203,7 @@ class FormatPalettePanel(QWidget):
         self._align_cols.addLayout(h_align_row)
         self._align_cols.addLayout(v_align_row)
         align_body.addLayout(self._align_cols, 1)
-        self._match_placement_cb = QCheckBox("配置と揃える")
+        self._match_placement_cb = QCheckBox("記述欄画像内配置と揃える")
         self._match_placement_cb.setChecked(True)
         self._match_placement_cb.setToolTip(
             "「記述欄内画像配置」の九分割に合わせて、文字の横・縦位置を同期します"
@@ -419,8 +419,17 @@ class FormatPalettePanel(QWidget):
                     if self._align_tall
                     else self._DETAIL_VERTICAL_INTERVAL
                 )
-                # 縦ボタン下端が見切れないよう、わずかに下余白を確保
-                align_lay.setContentsMargins(0, 0, 0, 4 if self._align_tall else 0)
+                # 縦ボタン下辺（枠線）が見切れないよう下余白を確保
+                align_lay.setContentsMargins(0, 0, 0, 10 if self._align_tall else 0)
+        # Maximum だと親が潰したときに下辺だけ欠けるため Preferred にする
+        if self._align_tall:
+            self.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            )
+            if getattr(self, "_align_frame", None) is not None:
+                self._align_frame.setSizePolicy(
+                    QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+                )
         labels_h = {"left": "左", "center": "中", "right": "右"}
         labels_v = {"top": "上", "center": "中", "bottom": "下"}
         for key, btn in self._align_h_btns.items():
@@ -435,7 +444,8 @@ class FormatPalettePanel(QWidget):
         fm = QFontMetrics(btn.font())
         if tall:
             pad = self._SEGMENT_BTN_PAD_TALL
-            height = self._ALIGN_BTN_HEIGHT_TALL
+            # 枠線分を含めて下辺が見切れない高さ
+            height = self._ALIGN_BTN_HEIGHT_TALL + 2
             width = max(36, fm.horizontalAdvance(label) + pad)
             btn.setObjectName("ToolSegmentBtnAlignTall")
         else:
@@ -444,8 +454,9 @@ class FormatPalettePanel(QWidget):
             btn.setObjectName("ToolSegmentBtn")
         btn.setFixedWidth(width)
         btn.setFixedHeight(height)
-        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         btn.setMinimumSize(width, height)
+        btn.setMaximumHeight(height)
+        btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         # objectName / property 変更をスタイルへ反映
         btn.style().unpolish(btn)
         btn.style().polish(btn)
@@ -485,7 +496,7 @@ class FormatPalettePanel(QWidget):
             and self._match_placement_cb.isVisible()
         )
         tip = (
-            "「配置と揃える」がオンのため、記述欄内画像配置側で変更してください"
+            "「記述欄画像内配置と揃える」がオンのため、記述欄内画像配置側で変更してください"
             if self._align_locked
             else ""
         )
@@ -508,10 +519,13 @@ class FormatPalettePanel(QWidget):
 
     def set_template_edit_mode(self, enabled: bool) -> None:
         self._template_edit_mode = bool(enabled)
-        self.setSizePolicy(
-            QSizePolicy.Policy.Preferred,
-            QSizePolicy.Policy.Maximum if enabled else QSizePolicy.Policy.Preferred,
+        # align_tall 時は下辺クリップ回避のため Preferred を維持
+        v_policy = (
+            QSizePolicy.Policy.Preferred
+            if self._align_tall or not enabled
+            else QSizePolicy.Policy.Maximum
         )
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, v_policy)
         self.updateGeometry()
         if not _qt_widget_alive(self._speech_btn):
             return

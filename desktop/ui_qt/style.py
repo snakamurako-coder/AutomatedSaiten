@@ -566,11 +566,10 @@ QPushButton#ToolSegmentBtnAlignTall {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 5px;
-    padding: 1px 6px;
+    padding: 2px 6px;
     font-size: 11px;
     color: {COLORS["text"]};
-    min-height: 20px;
-    max-height: 20px;
+    min-height: 22px;
 }}
 QPushButton#ToolSegmentBtnAlignTall:hover {{
     background: #f1f5f9;
