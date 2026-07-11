@@ -56,7 +56,7 @@ class FormatPalettePanel(QWidget):
 
     _SEGMENT_BTN_PAD = 10
     _SEGMENT_BTN_PAD_TALL = 20
-    _ALIGN_BTN_HEIGHT_TALL = 18
+    _ALIGN_BTN_HEIGHT_TALL = 20
     _ACTION_BTN_PAD = 8
     _DETAIL_VERTICAL_INTERVAL = 4
     _DETAIL_ALIGN_INTERVAL_TALL = 10
@@ -419,6 +419,8 @@ class FormatPalettePanel(QWidget):
                     if self._align_tall
                     else self._DETAIL_VERTICAL_INTERVAL
                 )
+                # 縦ボタン下端が見切れないよう、わずかに下余白を確保
+                align_lay.setContentsMargins(0, 0, 0, 4 if self._align_tall else 0)
         labels_h = {"left": "左", "center": "中", "right": "右"}
         labels_v = {"top": "上", "center": "中", "bottom": "下"}
         for key, btn in self._align_h_btns.items():
