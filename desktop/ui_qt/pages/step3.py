@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import load_config, test_warped
+from config import load_config, test_results_excel_path, test_warped
 from models.test_repo import (
     build_pending_rows_tsv,
     build_results_tsv,
@@ -177,14 +177,18 @@ class Step3Page(QWidget):
         tsv_btns.addWidget(h.button("TSV再生成", self._refresh_tsv))
         tsv_btns.addWidget(h.button("Excel エクスポート", self._on_export_excel))
         tsv_btns.addWidget(h.button("Excel インポート", self._on_import_excel))
+        tsv_btns.addWidget(
+            h.open_folder_button(self._on_open_excel_folder, text="出力フォルダを開く")
+        )
         tsv_btns.addStretch()
         tsv_lay.addLayout(tsv_btns)
         tsv_lay.addWidget(
             h.caption_label(
-                "Excel エクスポート／インポートで「ファイル別の処理状況」の一覧を保存・復元できます。"
-                "インポート後は一覧を自動更新します。"
+                "Excel エクスポートの既定保存先は、⑩個票フォルダと同じテスト配下"
+                "（採点結果.xlsx）です。インポート後は一覧を自動更新します。"
             )
         )
+        self._last_excel_path: str | None = None
         self.tsv_view = QPlainTextEdit()
         self.tsv_view.setReadOnly(True)
         self.tsv_view.setPlaceholderText("「TSV再生成」で DB の採点結果を表示します。")
@@ -670,16 +674,31 @@ class Step3Page(QWidget):
     def _on_export_excel(self) -> None:
         if not self.app.require_active_test():
             return
+        test_id = self.app.active_test_id
+        default_path = str(test_results_excel_path(test_id))
         path, _ = QFileDialog.getSaveFileName(
-            self, "採点結果を Excel にエクスポート", "", "Excel (*.xlsx)"
+            self,
+            "採点結果を Excel にエクスポート",
+            default_path,
+            "Excel (*.xlsx)",
         )
         if not path:
             return
         try:
-            export_results_to_excel(self.app.active_test_id, path)
+            export_results_to_excel(test_id, path)
+            self._last_excel_path = path
             h.info(self, "エクスポート完了", f"保存しました:\n{path}")
         except Exception as e:
             h.error(self, "エラー", str(e))
+
+    def _on_open_excel_folder(self) -> None:
+        if self._last_excel_path:
+            h.open_in_file_manager(self._last_excel_path, parent=self)
+            return
+        if not self.app.require_active_test():
+            return
+        # 個票フォルダの親（テスト配下）＝ Excel 既定保存先と同じ階層
+        h.open_in_file_manager(test_results_excel_path(self.app.active_test_id), parent=self)
 
     def _on_import_excel(self) -> None:
         if not self.app.require_active_test():

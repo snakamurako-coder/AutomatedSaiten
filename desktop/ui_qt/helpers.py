@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import threading
+from pathlib import Path
 from typing import Any, Callable
 
 import numpy as np
@@ -12,7 +13,6 @@ from PySide6.QtWidgets import QLabel, QPushButton, QWidget
 
 from ui_qt.app_notify import notify_error, notify_info, notify_warn
 from ui_qt.style import set_role, set_variant
-
 
 class _AsyncBridge(QObject):
     """Python threading から UI スレッドへ結果を渡すブリッジ。"""
@@ -128,4 +128,56 @@ def button(text: str, on_click: Callable[[], None] | None = None, variant: str |
         set_variant(btn, variant)
     if on_click:
         btn.clicked.connect(on_click)
+    return btn
+
+
+def open_in_file_manager(path: str | Path, *, parent: QWidget | None = None) -> bool:
+    """ファイルまたはフォルダを OS のファイルマネージャで開く。
+
+    ファイルの場合は親フォルダを開く（Windows では可能なら当該ファイルを選択）。
+    フォルダが無ければ作成してから開く。
+    """
+    from PySide6.QtCore import QUrl
+    from PySide6.QtGui import QDesktopServices
+
+    target = Path(path)
+    try:
+        if target.suffix and not target.exists() and target.parent:
+            folder = target.parent
+            select = None
+        elif target.is_file():
+            folder = target.parent
+            select = target
+        else:
+            folder = target
+            select = None
+        folder.mkdir(parents=True, exist_ok=True)
+        folder = folder.resolve()
+
+        import sys
+
+        if sys.platform == "win32" and select is not None and select.exists():
+            import subprocess
+
+            subprocess.Popen(["explorer", f"/select,{select}"])
+            return True
+
+        ok = QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
+        if not ok and parent is not None:
+            error(parent, "フォルダを開けません", f"次の場所を開けませんでした:\n{folder}")
+        return bool(ok)
+    except Exception as e:
+        if parent is not None:
+            error(parent, "フォルダを開けません", str(e))
+        return False
+
+
+def open_folder_button(
+    on_click: Callable[[], None],
+    *,
+    text: str = "出力フォルダを開く",
+) -> QPushButton:
+    """データ出力 UI の横に置く確認用ボタン。"""
+    btn = button(text, on_click)
+    btn.setToolTip("出力先フォルダをエクスプローラーで開いて確認します")
     return btn

@@ -77,15 +77,22 @@ class Step0Page(QWidget):
                 "生徒IDマーク欄（年/組/番・0〜9）付き。編集して印刷し、スキャン後に ③ で読み込みます。"
             )
         )
-        template_lay.addWidget(
+        tpl_btns = QHBoxLayout()
+        tpl_btns.addWidget(
             h.button(
                 "A4横・A4縦ひな形を Excel 出力",
                 self._on_export_answer_templates,
                 variant="primary",
             )
         )
+        tpl_btns.addWidget(
+            h.open_folder_button(self._on_open_template_folder, text="出力フォルダを開く")
+        )
+        tpl_btns.addStretch()
+        template_lay.addLayout(tpl_btns)
         root.addWidget(template_box)
         root.addStretch()
+        self._last_template_path: str | None = None
 
     def refresh(self) -> None:
         self._tests = list_tests()
@@ -125,6 +132,7 @@ class Step0Page(QWidget):
             return
         try:
             saved = export_answer_sheet_templates(path)
+            self._last_template_path = saved
             h.info(
                 self,
                 "出力完了",
@@ -134,6 +142,12 @@ class Step0Page(QWidget):
             )
         except Exception as e:
             h.error(self, "出力失敗", str(e))
+
+    def _on_open_template_folder(self) -> None:
+        if self._last_template_path:
+            h.open_in_file_manager(self._last_template_path, parent=self)
+            return
+        h.warn(self, "出力フォルダ", "先に「Excel 出力」でファイルを保存してください。")
 
     def _on_select(self) -> None:
         row = self.test_list.currentRow()

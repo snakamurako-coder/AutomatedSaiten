@@ -35,6 +35,7 @@ from models.output_repo import (
     save_output_slots,
 )
 from models.test_repo import get_test_info
+from config import test_feedback
 from services.feedback_exporter import (
     is_pdf_export_format,
     rasterize_feedback_preview,
@@ -301,12 +302,17 @@ class Step10Page(QWidget):
         ctrl = QHBoxLayout()
         self.batch_btn = h.button("全員分の個票を生成", self._on_batch, variant="primary")
         ctrl.addWidget(self.batch_btn)
+        self.open_output_btn = h.open_folder_button(
+            self._on_open_output_folder, text="個票フォルダを開く"
+        )
+        ctrl.addWidget(self.open_output_btn)
         self.batch_progress = QProgressBar()
         self.batch_progress.setRange(0, 100)
         ctrl.addWidget(self.batch_progress, 1)
         lay.addLayout(ctrl)
         self.batch_status = h.caption_label("")
         lay.addWidget(self.batch_status)
+        self._last_output_dir: str | None = None
         return box
 
     # ---------- 再読込 ----------
@@ -617,6 +623,9 @@ class Step10Page(QWidget):
             "png": "PNG（1枚ずつ）",
         }
         fmt_label = fmt_labels.get(fmt, fmt.upper())
+        out_dir = str(result.get("outputDir") or "")
+        if out_dir:
+            self._last_output_dir = out_dir
         if result.get("combined"):
             msg = (
                 f"形式: {fmt_label} / {result.get('pageCount', result['saved'])} ページ / "
@@ -631,3 +640,11 @@ class Step10Page(QWidget):
             )
         self.batch_status.setText(msg.replace("\n", " — "))
         h.info(self, "一括生成完了", msg)
+
+    def _on_open_output_folder(self) -> None:
+        if self._last_output_dir:
+            h.open_in_file_manager(self._last_output_dir, parent=self)
+            return
+        if not self.app.require_active_test():
+            return
+        h.open_in_file_manager(test_feedback(self.app.active_test_id), parent=self)

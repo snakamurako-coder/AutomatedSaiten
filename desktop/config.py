@@ -80,3 +80,8 @@ def test_model(test_id: str) -> Path:
 
 def test_feedback(test_id: str) -> Path:
     return test_dir(test_id) / FEEDBACK_FOLDER_NAME
+
+
+def test_results_excel_path(test_id: str) -> Path:
+    """OCR／採点結果 Excel の既定パス（⑩個票フォルダのすぐ上＝同じテスト配下）。"""
+    return test_dir(test_id) / "採点結果.xlsx"
