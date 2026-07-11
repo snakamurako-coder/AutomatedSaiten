@@ -566,11 +566,10 @@ QPushButton#ToolSegmentBtnAlignTall {{
     background: {COLORS["surface"]};
     border: 1px solid {COLORS["border"]};
     border-radius: 5px;
-    padding: 2px 6px;
+    /* 高さは Python 側の sizeHint / fixedSize に任せ、max-height で枠線を切らない */
+    padding: 4px 8px;
     font-size: 11px;
     color: {COLORS["text"]};
-    min-height: 22px;
-    max-height: 22px;
 }}
 QPushButton#ToolSegmentBtnAlignTall:hover {{
     background: #f1f5f9;
@@ -583,15 +582,12 @@ QPushButton#ToolSegmentBtnAlignTall:checked {{
     color: {COLORS["accent"]};
     font-weight: 600;
 }}
-QPushButton#ToolSegmentBtnAlignTall:disabled,
-QPushButton#ToolSegmentBtnAlignTall:checked:disabled,
 QPushButton#ToolSegmentBtnAlignTall[locked="true"] {{
     background: {COLORS["sidebar"]};
     border-color: {COLORS["border"]};
     color: {COLORS["text"]};
 }}
-QPushButton#ToolSegmentBtnAlignTall[locked="true"]:checked,
-QPushButton#ToolSegmentBtnAlignTall:checked:disabled {{
+QPushButton#ToolSegmentBtnAlignTall[locked="true"]:checked {{
     background: {COLORS["accent_soft"]};
     border-color: {COLORS["accent"]};
     color: {COLORS["accent"]};

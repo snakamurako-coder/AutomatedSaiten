@@ -55,11 +55,10 @@ class FormatPalettePanel(QWidget):
     match_placement_toggled = Signal(bool)
 
     _SEGMENT_BTN_PAD = 10
-    _SEGMENT_BTN_PAD_TALL = 20
-    _ALIGN_BTN_HEIGHT_TALL = 22
+    _SEGMENT_BTN_PAD_TALL = 16
     _ACTION_BTN_PAD = 8
     _DETAIL_VERTICAL_INTERVAL = 4
-    _DETAIL_ALIGN_INTERVAL_TALL = 10
+    _DETAIL_ALIGN_INTERVAL_TALL = 8
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -135,11 +134,11 @@ class FormatPalettePanel(QWidget):
 
         self._align_h_row_host = QWidget()
         self._align_h_row_host.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
         )
         h_align_row = QHBoxLayout(self._align_h_row_host)
         h_align_row.setSpacing(4)
-        h_align_row.setContentsMargins(0, 0, 0, 0)
+        h_align_row.setContentsMargins(0, 1, 0, 1)
         h_align_lbl = QLabel("横")
         h_align_lbl.setObjectName("FormatPaletteLabel")
         h_align_lbl.setFixedWidth(48)
@@ -160,11 +159,11 @@ class FormatPalettePanel(QWidget):
 
         self._align_v_row_host = QWidget()
         self._align_v_row_host.setSizePolicy(
-            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
         )
         v_align_row = QHBoxLayout(self._align_v_row_host)
         v_align_row.setSpacing(4)
-        v_align_row.setContentsMargins(0, 0, 0, 0)
+        v_align_row.setContentsMargins(0, 1, 0, 1)
         v_align_lbl = QLabel("縦")
         v_align_lbl.setObjectName("FormatPaletteLabel")
         v_align_lbl.setFixedWidth(48)
@@ -417,7 +416,7 @@ class FormatPalettePanel(QWidget):
             self._sync_align_buttons_enabled()
 
     def set_align_buttons_tall(self, enabled: bool) -> None:
-        """一律フィードバック向け: 横・縦揃えボタンを読みやすくする。"""
+        """一律フィードバック向け: 揃えボタンを読みやすくする（枠線が見切れないサイズ）。"""
         self._align_tall = bool(enabled)
         root = self.layout()
         if root is not None:
@@ -433,7 +432,7 @@ class FormatPalettePanel(QWidget):
             align_lay = self._align_frame.layout()
             if align_lay is not None:
                 align_lay.setSpacing(spacing)
-                align_lay.setContentsMargins(0, 0, 0, 6 if self._align_tall else 0)
+                align_lay.setContentsMargins(0, 0, 0, 4 if self._align_tall else 0)
 
         labels_h = {"left": "左", "center": "中", "right": "右"}
         labels_v = {"top": "上", "center": "中", "bottom": "下"}
@@ -442,37 +441,17 @@ class FormatPalettePanel(QWidget):
         for key, btn in self._align_v_btns.items():
             self._apply_align_btn_size(btn, labels_v[key], tall=self._align_tall)
 
-        # 親が縦を潰しても行が重ならないよう、行ホストに高さを固定する
-        row_h = self._ALIGN_BTN_HEIGHT_TALL if self._align_tall else 0
+        # 行ホストの固定高は使わない（ボタン枠線より低くして底辺が欠ける原因だった）
         for host in (
             getattr(self, "_align_h_row_host", None),
             getattr(self, "_align_v_row_host", None),
+            getattr(self, "_align_cols_host", None),
+            getattr(self, "_align_frame", None),
         ):
             if host is None:
                 continue
-            if self._align_tall:
-                host.setFixedHeight(row_h)
-            else:
-                host.setMinimumHeight(0)
-                host.setMaximumHeight(16777215)
-        if getattr(self, "_align_cols_host", None) is not None:
-            if self._align_tall:
-                self._align_cols_host.setMinimumHeight(row_h * 2 + spacing)
-            else:
-                self._align_cols_host.setMinimumHeight(0)
-        if getattr(self, "_align_frame", None) is not None:
-            if self._align_tall:
-                detail_h = (
-                    self._detail_format_frame.sizeHint().height() + spacing
-                    if self._detail_format_frame.isVisible()
-                    else 0
-                )
-                self._align_frame.setMinimumHeight(detail_h + row_h * 2 + spacing + 6)
-                self._align_frame.setSizePolicy(
-                    QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
-                )
-            else:
-                self._align_frame.setMinimumHeight(0)
+            host.setMinimumHeight(0)
+            host.setMaximumHeight(16777215)
 
         self.setSizePolicy(
             QSizePolicy.Policy.Preferred,
@@ -493,9 +472,9 @@ class FormatPalettePanel(QWidget):
     def _apply_align_btn_size(self, btn: QPushButton, label: str, *, tall: bool) -> None:
         fm = QFontMetrics(btn.font())
         if tall:
-            pad = self._SEGMENT_BTN_PAD_TALL
-            height = self._ALIGN_BTN_HEIGHT_TALL
-            width = max(36, fm.horizontalAdvance(label) + pad)
+            # 文字高さ + 上下 padding(4*2) + 枠線(1*2) が収まる高さ
+            height = max(28, fm.height() + 12)
+            width = max(40, fm.horizontalAdvance(label) + self._SEGMENT_BTN_PAD_TALL)
             btn.setObjectName("ToolSegmentBtnAlignTall")
         else:
             height = fm.height() + 4
