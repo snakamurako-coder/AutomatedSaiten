@@ -118,7 +118,10 @@ class UniformFeedbackDialog(QDialog):
         self._preview.char_format_state_changed.connect(self._format.sync_char_format)
         self._preview.set_focus_guard_widgets(())
         edit_lay.addWidget(self._preview, 0)
-        edit_lay.addWidget(self._format)
+        edit_lay.addWidget(self._format, 0)
+        self._format.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
 
         save_row = QHBoxLayout()
         self._save_phrase_btn = QPushButton("この内容を定型文として保存")

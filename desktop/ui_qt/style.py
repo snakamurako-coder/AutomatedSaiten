@@ -570,6 +570,7 @@ QPushButton#ToolSegmentBtnAlignTall {{
     font-size: 11px;
     color: {COLORS["text"]};
     min-height: 22px;
+    max-height: 22px;
 }}
 QPushButton#ToolSegmentBtnAlignTall:hover {{
     background: #f1f5f9;

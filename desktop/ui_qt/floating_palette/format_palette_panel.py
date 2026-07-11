@@ -56,7 +56,7 @@ class FormatPalettePanel(QWidget):
 
     _SEGMENT_BTN_PAD = 10
     _SEGMENT_BTN_PAD_TALL = 20
-    _ALIGN_BTN_HEIGHT_TALL = 20
+    _ALIGN_BTN_HEIGHT_TALL = 22
     _ACTION_BTN_PAD = 8
     _DETAIL_VERTICAL_INTERVAL = 4
     _DETAIL_ALIGN_INTERVAL_TALL = 10
@@ -126,10 +126,18 @@ class FormatPalettePanel(QWidget):
         align_frame = QFrame()
         self._align_frame = align_frame
         align_frame.setFrameShape(QFrame.Shape.NoFrame)
+        align_frame.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
         align_lay = QVBoxLayout(align_frame)
         align_lay.setContentsMargins(0, 0, 0, 0)
         align_lay.setSpacing(self._DETAIL_VERTICAL_INTERVAL)
-        h_align_row = QHBoxLayout()
+
+        self._align_h_row_host = QWidget()
+        self._align_h_row_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        h_align_row = QHBoxLayout(self._align_h_row_host)
         h_align_row.setSpacing(4)
         h_align_row.setContentsMargins(0, 0, 0, 0)
         h_align_lbl = QLabel("横")
@@ -149,7 +157,12 @@ class FormatPalettePanel(QWidget):
             h_align_row.addWidget(btn)
             self._align_h_btns[key] = btn
         h_align_row.addStretch()
-        v_align_row = QHBoxLayout()
+
+        self._align_v_row_host = QWidget()
+        self._align_v_row_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Fixed
+        )
+        v_align_row = QHBoxLayout(self._align_v_row_host)
         v_align_row.setSpacing(4)
         v_align_row.setContentsMargins(0, 0, 0, 0)
         v_align_lbl = QLabel("縦")
@@ -197,12 +210,16 @@ class FormatPalettePanel(QWidget):
         align_body = QHBoxLayout()
         align_body.setContentsMargins(0, 0, 0, 0)
         align_body.setSpacing(12)
-        self._align_cols = QVBoxLayout()
+        self._align_cols_host = QWidget()
+        self._align_cols_host.setSizePolicy(
+            QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+        )
+        self._align_cols = QVBoxLayout(self._align_cols_host)
         self._align_cols.setContentsMargins(0, 0, 0, 0)
         self._align_cols.setSpacing(self._DETAIL_VERTICAL_INTERVAL)
-        self._align_cols.addLayout(h_align_row)
-        self._align_cols.addLayout(v_align_row)
-        align_body.addLayout(self._align_cols, 1)
+        self._align_cols.addWidget(self._align_h_row_host)
+        self._align_cols.addWidget(self._align_v_row_host)
+        align_body.addWidget(self._align_cols_host, 1)
         self._match_placement_cb = QCheckBox("記述欄画像内配置と揃える")
         self._match_placement_cb.setChecked(True)
         self._match_placement_cb.setToolTip(
@@ -400,42 +417,75 @@ class FormatPalettePanel(QWidget):
             self._sync_align_buttons_enabled()
 
     def set_align_buttons_tall(self, enabled: bool) -> None:
-        """一律フィードバック向け: 横・縦揃えボタンを読みやすく大きくする。"""
+        """一律フィードバック向け: 横・縦揃えボタンを読みやすくする。"""
         self._align_tall = bool(enabled)
         root = self.layout()
         if root is not None:
             root.setSpacing(6 if self._align_tall else 2)
+        spacing = (
+            self._DETAIL_ALIGN_INTERVAL_TALL
+            if self._align_tall
+            else self._DETAIL_VERTICAL_INTERVAL
+        )
         if getattr(self, "_align_cols", None) is not None:
-            self._align_cols.setSpacing(
-                self._DETAIL_ALIGN_INTERVAL_TALL
-                if self._align_tall
-                else self._DETAIL_VERTICAL_INTERVAL
-            )
+            self._align_cols.setSpacing(spacing)
         if getattr(self, "_align_frame", None) is not None:
             align_lay = self._align_frame.layout()
             if align_lay is not None:
-                align_lay.setSpacing(
-                    self._DETAIL_ALIGN_INTERVAL_TALL
-                    if self._align_tall
-                    else self._DETAIL_VERTICAL_INTERVAL
-                )
-                # 縦ボタン下辺（枠線）が見切れないよう下余白を確保
-                align_lay.setContentsMargins(0, 0, 0, 10 if self._align_tall else 0)
-        # Maximum だと親が潰したときに下辺だけ欠けるため Preferred にする
-        if self._align_tall:
-            self.setSizePolicy(
-                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
-            )
-            if getattr(self, "_align_frame", None) is not None:
-                self._align_frame.setSizePolicy(
-                    QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
-                )
+                align_lay.setSpacing(spacing)
+                align_lay.setContentsMargins(0, 0, 0, 6 if self._align_tall else 0)
+
         labels_h = {"left": "左", "center": "中", "right": "右"}
         labels_v = {"top": "上", "center": "中", "bottom": "下"}
         for key, btn in self._align_h_btns.items():
             self._apply_align_btn_size(btn, labels_h[key], tall=self._align_tall)
         for key, btn in self._align_v_btns.items():
             self._apply_align_btn_size(btn, labels_v[key], tall=self._align_tall)
+
+        # 親が縦を潰しても行が重ならないよう、行ホストに高さを固定する
+        row_h = self._ALIGN_BTN_HEIGHT_TALL if self._align_tall else 0
+        for host in (
+            getattr(self, "_align_h_row_host", None),
+            getattr(self, "_align_v_row_host", None),
+        ):
+            if host is None:
+                continue
+            if self._align_tall:
+                host.setFixedHeight(row_h)
+            else:
+                host.setMinimumHeight(0)
+                host.setMaximumHeight(16777215)
+        if getattr(self, "_align_cols_host", None) is not None:
+            if self._align_tall:
+                self._align_cols_host.setMinimumHeight(row_h * 2 + spacing)
+            else:
+                self._align_cols_host.setMinimumHeight(0)
+        if getattr(self, "_align_frame", None) is not None:
+            if self._align_tall:
+                detail_h = (
+                    self._detail_format_frame.sizeHint().height() + spacing
+                    if self._detail_format_frame.isVisible()
+                    else 0
+                )
+                self._align_frame.setMinimumHeight(detail_h + row_h * 2 + spacing + 6)
+                self._align_frame.setSizePolicy(
+                    QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum
+                )
+            else:
+                self._align_frame.setMinimumHeight(0)
+
+        self.setSizePolicy(
+            QSizePolicy.Policy.Preferred,
+            (
+                QSizePolicy.Policy.Minimum
+                if self._align_tall
+                else (
+                    QSizePolicy.Policy.Maximum
+                    if self._template_edit_mode
+                    else QSizePolicy.Policy.Preferred
+                )
+            ),
+        )
         self._sync_align_buttons_enabled()
         self.updateGeometry()
         self.layout_hint_changed.emit()
@@ -444,20 +494,15 @@ class FormatPalettePanel(QWidget):
         fm = QFontMetrics(btn.font())
         if tall:
             pad = self._SEGMENT_BTN_PAD_TALL
-            # 枠線分を含めて下辺が見切れない高さ
-            height = self._ALIGN_BTN_HEIGHT_TALL + 2
+            height = self._ALIGN_BTN_HEIGHT_TALL
             width = max(36, fm.horizontalAdvance(label) + pad)
             btn.setObjectName("ToolSegmentBtnAlignTall")
         else:
             height = fm.height() + 4
             width = self._segment_btn_width(label, btn.font())
             btn.setObjectName("ToolSegmentBtn")
-        btn.setFixedWidth(width)
-        btn.setFixedHeight(height)
-        btn.setMinimumSize(width, height)
-        btn.setMaximumHeight(height)
+        btn.setFixedSize(width, height)
         btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-        # objectName / property 変更をスタイルへ反映
         btn.style().unpolish(btn)
         btn.style().polish(btn)
         btn.update()
@@ -519,11 +564,15 @@ class FormatPalettePanel(QWidget):
 
     def set_template_edit_mode(self, enabled: bool) -> None:
         self._template_edit_mode = bool(enabled)
-        # align_tall 時は下辺クリップ回避のため Preferred を維持
+        # align_tall 時は下辺クリップ・行重なり回避のため Minimum を維持
         v_policy = (
-            QSizePolicy.Policy.Preferred
-            if self._align_tall or not enabled
-            else QSizePolicy.Policy.Maximum
+            QSizePolicy.Policy.Minimum
+            if self._align_tall
+            else (
+                QSizePolicy.Policy.Maximum
+                if enabled
+                else QSizePolicy.Policy.Preferred
+            )
         )
         self.setSizePolicy(QSizePolicy.Policy.Preferred, v_policy)
         self.updateGeometry()
