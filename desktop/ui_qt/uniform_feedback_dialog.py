@@ -101,6 +101,8 @@ class UniformFeedbackDialog(QDialog):
         edit_box = QGroupBox("内容編集")
         edit_lay = QVBoxLayout(edit_box)
         self._preview = PhraseEditPreviewPanel(self)
+        # ダイアログは親ウィンドウ追従リサイズがないため、編集時の高さ切替を行わない
+        self._preview.set_expand_on_edit(False)
         self._format = FormatPalettePanel(self)
         self._format.set_template_edit_mode(True)
         self._format.set_detailed_controls_visible(True)
@@ -110,7 +112,7 @@ class UniformFeedbackDialog(QDialog):
         self._format.edit_done_requested.connect(self._preview.finish_text_editing)
         self._preview.char_format_state_changed.connect(self._format.sync_char_format)
         self._preview.set_focus_guard_widgets(())
-        edit_lay.addWidget(self._preview, 1)
+        edit_lay.addWidget(self._preview, 0)
         edit_lay.addWidget(self._format)
 
         save_row = QHBoxLayout()

@@ -41,6 +41,9 @@ class PhraseEditPreviewPanel(QWidget):
         self._phrase_id: str | None = None
         self._syncing = False
         self._text_editing = False
+        # True: 編集開始でキャンバス高 120→220（描画ツール定型文向け）
+        # False: 常に編集時高さを維持（ダイアログなど縦スペース固定向け）
+        self._expand_on_edit = True
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -64,12 +67,23 @@ class PhraseEditPreviewPanel(QWidget):
         self._text_box: TextBoxWidget | None = None
         self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
 
+    def set_expand_on_edit(self, enabled: bool) -> None:
+        """編集開始時にキャンバス高さを切り替えるか。False なら常に編集用の高さを維持。"""
+        self._expand_on_edit = bool(enabled)
+        self._update_canvas_height()
+        self.updateGeometry()
+        self.layout_changed.emit()
+
+    def _canvas_target_height(self) -> int:
+        if self._expand_on_edit and not self._text_editing:
+            return _PREVIEW_MIN_H
+        return _PREVIEW_EDIT_MIN_H
+
     def minimumSizeHint(self) -> QSize:  # noqa: N802
-        return QSize(220, _PREVIEW_MIN_H + 36)
+        return QSize(220, self._canvas_target_height() + 36)
 
     def sizeHint(self) -> QSize:  # noqa: N802
-        h = _PREVIEW_EDIT_MIN_H if self._text_editing else _PREVIEW_MIN_H
-        return QSize(260, h + 36)
+        return QSize(260, self._canvas_target_height() + 36)
 
     def _hint_text(self) -> str:
         if self._text_editing:
@@ -155,9 +169,33 @@ class PhraseEditPreviewPanel(QWidget):
         self.layout_changed.emit()
 
     def _update_canvas_height(self) -> None:
-        target = _PREVIEW_EDIT_MIN_H if self._text_editing else _PREVIEW_MIN_H
+        target = self._canvas_target_height()
+        changed = False
         if self._canvas.minimumHeight() != target:
             self._canvas.setMinimumHeight(target)
+            changed = True
+        # ダイアログ等: 高さを固定し、親レイアウトに押し潰されないようにする
+        if not self._expand_on_edit:
+            if self._canvas.maximumHeight() != target:
+                self._canvas.setMaximumHeight(target)
+                changed = True
+            self._canvas.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed
+            )
+            self.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
+            )
+        else:
+            if self._canvas.maximumHeight() != _PREVIEW_CANVAS_MAX_H:
+                self._canvas.setMaximumHeight(_PREVIEW_CANVAS_MAX_H)
+                changed = True
+            self._canvas.setSizePolicy(
+                QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred
+            )
+            self.setSizePolicy(
+                QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred
+            )
+        if changed:
             self.layout_changed.emit()
 
     def _layout_box(self) -> None:
