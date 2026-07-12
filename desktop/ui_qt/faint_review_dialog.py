@@ -18,7 +18,6 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QScrollArea,
-    QSlider,
     QVBoxLayout,
     QWidget,
 )
@@ -31,7 +30,7 @@ from config import (
 from services.faint_ink import enhance_bgr
 from services.image_loader import imread_bgr, imwrite_bgr
 from services.image_warp import warped_file_name
-from ui_qt.crop_widgets import ZoomControls
+from ui_qt.crop_widgets import SliderSpinControls, ZoomControls
 from ui_qt.helpers import bgr_to_qpixmap
 from ui_qt.style import COLORS
 
@@ -156,26 +155,39 @@ class FaintReviewDialog(QDialog):
         preset_row.addWidget(del_btn)
         root.addLayout(preset_row)
 
-        controls = QHBoxLayout()
-        controls.addWidget(QLabel("地色除去"))
-        self._bg_whiten = QSlider(Qt.Horizontal)
-        self._bg_whiten.setRange(0, 100)
-        self._bg_whiten.setValue(0)
+        controls = QVBoxLayout()
+        controls.setSpacing(4)
+        self._bg_whiten = SliderSpinControls(
+            label="地色除去",
+            min_val=0,
+            max_val=100,
+            value=0,
+            label_width=72,
+            spin_width=64,
+        )
         self._bg_whiten.setToolTip("用紙の地色を白に寄せる強度（0=なし）")
-        self._bg_whiten.valueChanged.connect(self._refresh_preview)
-        controls.addWidget(self._bg_whiten, 1)
-        controls.addWidget(QLabel("コントラスト"))
-        self._contrast = QSlider(Qt.Horizontal)
-        self._contrast.setRange(100, 220)
-        self._contrast.setValue(135)
-        self._contrast.valueChanged.connect(self._refresh_preview)
-        controls.addWidget(self._contrast, 1)
-        controls.addWidget(QLabel("CLAHE"))
-        self._clahe = QSlider(Qt.Horizontal)
-        self._clahe.setRange(0, 80)
-        self._clahe.setValue(25)
-        self._clahe.valueChanged.connect(self._refresh_preview)
-        controls.addWidget(self._clahe, 1)
+        self._bg_whiten.valueChanged.connect(lambda _v: self._refresh_preview())
+        controls.addWidget(self._bg_whiten)
+        self._contrast = SliderSpinControls(
+            label="コントラスト",
+            min_val=100,
+            max_val=220,
+            value=135,
+            label_width=72,
+            spin_width=64,
+        )
+        self._contrast.valueChanged.connect(lambda _v: self._refresh_preview())
+        controls.addWidget(self._contrast)
+        self._clahe = SliderSpinControls(
+            label="CLAHE",
+            min_val=0,
+            max_val=80,
+            value=25,
+            label_width=72,
+            spin_width=64,
+        )
+        self._clahe.valueChanged.connect(lambda _v: self._refresh_preview())
+        controls.addWidget(self._clahe)
         root.addLayout(controls)
 
         btns = QHBoxLayout()
@@ -233,9 +245,9 @@ class FaintReviewDialog(QDialog):
     def _set_sliders(self, *, contrast: int, clahe: int, bg_whiten: int) -> None:
         for w in (self._contrast, self._clahe, self._bg_whiten):
             w.blockSignals(True)
-        self._contrast.setValue(int(contrast))
-        self._clahe.setValue(int(clahe))
-        self._bg_whiten.setValue(int(bg_whiten))
+        self._contrast.set_value(int(contrast))
+        self._clahe.set_value(int(clahe))
+        self._bg_whiten.set_value(int(bg_whiten))
         for w in (self._contrast, self._clahe, self._bg_whiten):
             w.blockSignals(False)
         self._refresh_preview()
