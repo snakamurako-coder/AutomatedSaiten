@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QDropEvent
+from PySide6.QtGui import QColor, QFont, QDropEvent, QDragEnterEvent, QDragMoveEvent
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -34,62 +34,97 @@ from ui_qt.style import COLORS
 
 
 class _ReorderListWidget(QListWidget):
-    """InternalMove で「上に重ねると消える」を避け、必ず上下へ挿入する。"""
+    """並べ替え専用。MoveAction の二重削除を避け、ID 順の入れ替えだけ通知する。"""
 
-    orderChanged = Signal()
+    idsReordered = Signal(list)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._drag_row = -1
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
         self.setDropIndicatorShown(True)
-        self.setDefaultDropAction(Qt.MoveAction)
-        self.setDragDropMode(QAbstractItemView.InternalMove)
+        # MoveAction だと drop 後にソース行がもう一度消されることがある
+        self.setDefaultDropAction(Qt.CopyAction)
+        self.setDragDropMode(QAbstractItemView.DragDrop)
         self.setSelectionMode(QAbstractItemView.SingleSelection)
+
+    def startDrag(self, supported_actions) -> None:  # noqa: N802
+        self._drag_row = self.currentRow()
+        super().startDrag(supported_actions)
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        if event.source() is self:
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            return
+        event.ignore()
+
+    def dragMoveEvent(self, event: QDragMoveEvent) -> None:  # noqa: N802
+        if event.source() is self:
+            event.setDropAction(Qt.CopyAction)
+            event.accept()
+            return
+        event.ignore()
 
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
         if event.source() is not self:
             event.ignore()
             return
-        source_item = self.currentItem()
-        if source_item is None:
+
+        n = self.count()
+        if n <= 1:
             event.ignore()
             return
-        source_row = self.row(source_item)
-        if source_row < 0:
+
+        ids = [
+            str(self.item(i).data(Qt.UserRole) or "").strip()
+            for i in range(n)
+            if self.item(i) is not None
+        ]
+        ids = [x for x in ids if x]
+        if len(ids) != n:
+            event.ignore()
+            return
+
+        source_row = self._drag_row
+        if source_row < 0 or source_row >= n:
+            source_row = self.currentRow()
+        if source_row < 0 or source_row >= n:
             event.ignore()
             return
 
         pos = event.position().toPoint()
         target_item = self.itemAt(pos)
         if target_item is None:
-            dest_row = self.count()
+            insert_at = n
         else:
             target_row = self.row(target_item)
             rect = self.visualItemRect(target_item)
-            # 上半分 → その行の前、下半分 → その行の後
             if pos.y() < rect.center().y():
-                dest_row = target_row
+                insert_at = target_row
             else:
-                dest_row = target_row + 1
+                insert_at = target_row + 1
 
-        # takeItem 後のインデックス補正
-        if source_row < dest_row:
-            dest_row -= 1
-        dest_row = max(0, min(dest_row, self.count() - 1))
+        insert_at = max(0, min(insert_at, n))
+        # 取り出し前の insert_at から、pop 後の挿入位置へ
+        pid = ids.pop(source_row)
+        if source_row < insert_at:
+            insert_at -= 1
+        insert_at = max(0, min(insert_at, len(ids)))
+        ids.insert(insert_at, pid)
 
-        if dest_row == source_row:
+        if ids == [
+            str(self.item(i).data(Qt.UserRole) or "").strip() for i in range(n)
+        ]:
+            event.setDropAction(Qt.CopyAction)
             event.accept()
             return
 
-        item = self.takeItem(source_row)
-        if item is None:
-            event.ignore()
-            return
-        self.insertItem(dest_row, item)
-        self.setCurrentItem(item)
+        event.setDropAction(Qt.CopyAction)
         event.accept()
-        self.orderChanged.emit()
+        self._drag_row = -1
+        self.idsReordered.emit(ids)
 
 
 class PhraseSortDialog(QDialog):
@@ -141,7 +176,7 @@ class PhraseSortDialog(QDialog):
         self._list = _ReorderListWidget()
         self._list.setObjectName("PhraseSortList")
         self._list.setSpacing(4)
-        self._list.orderChanged.connect(self._on_list_reordered)
+        self._list.idsReordered.connect(self._on_ids_reordered)
         self._list.setStyleSheet(
             f"""
             QListWidget#PhraseSortList {{
@@ -188,36 +223,35 @@ class PhraseSortDialog(QDialog):
                 break
         self._mode.blockSignals(False)
 
-    def _on_list_reordered(self) -> None:
-        # 現在の並びを基準にユーザー指定へ（一覧は再構築しない）
+    def _on_ids_reordered(self, ids: list[str]) -> None:
         self._switch_combo_to_custom()
+        self._fill_list_from_ids(ids)
 
     def _ordered_templates(self) -> list[dict[str, Any]]:
-        mode = self._current_mode()
-        if mode == PHRASE_SORT_CUSTOM:
-            # リスト上の現在順があればそれを優先（ドラッグ直後など）
-            live_ids = self._ids_from_list()
-            if live_ids and self._list.count() == len(self._templates):
-                ordered: list[dict[str, Any]] = []
-                seen: set[str] = set()
-                for pid in live_ids:
-                    tpl = self._by_id.get(pid)
-                    if tpl is not None and pid not in seen:
-                        ordered.append(tpl)
-                        seen.add(pid)
-                for tpl in self._templates:
-                    pid = str(tpl.get("id") or "")
-                    if pid and pid not in seen:
-                        ordered.append(tpl)
-                        seen.add(pid)
-                if ordered:
-                    return ordered
-        return sort_phrase_templates(self._templates, mode=mode)
+        return sort_phrase_templates(self._templates, mode=self._current_mode())
 
     def _rebuild_list(self) -> None:
+        self._fill_list_from_ids(
+            [str(t.get("id") or "") for t in self._ordered_templates()]
+        )
+
+    def _fill_list_from_ids(self, ids: list[str]) -> None:
         self._list.clear()
-        for tpl in self._ordered_templates():
+        seen: set[str] = set()
+        for pid in ids:
+            if not pid or pid in seen:
+                continue
+            tpl = self._by_id.get(pid)
+            if tpl is None:
+                continue
+            seen.add(pid)
             self._list.addItem(self._make_item(tpl))
+        # 欠落があっても全件残す（削除機能はない）
+        for tpl in self._templates:
+            pid = str(tpl.get("id") or "")
+            if pid and pid not in seen:
+                seen.add(pid)
+                self._list.addItem(self._make_item(tpl))
 
     def _make_item(self, tpl: dict[str, Any]) -> QListWidgetItem:
         pid = str(tpl.get("id") or "")
@@ -225,7 +259,6 @@ class PhraseSortDialog(QDialog):
         item = QListWidgetItem(f"⋮⋮  {label}")
         item.setData(Qt.UserRole, pid)
         item.setToolTip(phrase_preview_text(tpl) or label)
-        # ItemIsDropEnabled を付けない（上に落とすと置換・消滅しやすいため）
         item.setFlags(
             Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled
         )
