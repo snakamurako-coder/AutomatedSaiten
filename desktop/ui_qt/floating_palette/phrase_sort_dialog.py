@@ -4,8 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QSize, Qt, Signal
-from PySide6.QtGui import QColor, QFont, QDropEvent, QDragEnterEvent, QDragMoveEvent
+from PySide6.QtCore import QPoint, QSize, Qt, Signal
+from PySide6.QtGui import (
+    QColor,
+    QDragEnterEvent,
+    QDragLeaveEvent,
+    QDragMoveEvent,
+    QDropEvent,
+    QFont,
+    QPainter,
+    QPen,
+)
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QComboBox,
@@ -34,16 +43,17 @@ from ui_qt.style import COLORS
 
 
 class _ReorderListWidget(QListWidget):
-    """並べ替え専用。MoveAction の二重削除を避け、ID 順の入れ替えだけ通知する。"""
+    """並べ替え専用。挿入位置を線で示し、ID 順の入れ替えだけ通知する。"""
 
     idsReordered = Signal(list)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._drag_row = -1
+        self._insert_at: int | None = None  # 0..count（ドロップ前の挿入インデックス）
         self.setDragEnabled(True)
         self.setAcceptDrops(True)
-        self.setDropIndicatorShown(True)
+        self.setDropIndicatorShown(False)  # 自前の挿入線を使う
         # MoveAction だと drop 後にソース行がもう一度消されることがある
         self.setDefaultDropAction(Qt.CopyAction)
         self.setDragDropMode(QAbstractItemView.DragDrop)
@@ -51,12 +61,14 @@ class _ReorderListWidget(QListWidget):
 
     def startDrag(self, supported_actions) -> None:  # noqa: N802
         self._drag_row = self.currentRow()
+        self._insert_at = None
         super().startDrag(supported_actions)
 
     def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
         if event.source() is self:
             event.setDropAction(Qt.CopyAction)
             event.accept()
+            self._update_insert_marker(event.position().toPoint())
             return
         event.ignore()
 
@@ -64,16 +76,102 @@ class _ReorderListWidget(QListWidget):
         if event.source() is self:
             event.setDropAction(Qt.CopyAction)
             event.accept()
+            self._update_insert_marker(event.position().toPoint())
             return
         event.ignore()
 
+    def dragLeaveEvent(self, event: QDragLeaveEvent) -> None:  # noqa: N802
+        self._clear_insert_marker()
+        super().dragLeaveEvent(event)
+
+    def _insert_index_at(self, pos: QPoint) -> int:
+        """ドロップ前座標系での挿入位置（0 = 先頭前 … count = 末尾後）。"""
+        n = self.count()
+        if n <= 0:
+            return 0
+        target_item = self.itemAt(pos)
+        if target_item is None:
+            # 末尾より下、または隙間 — 最後のアイテムとの位置で判定
+            last = self.item(n - 1)
+            if last is None:
+                return n
+            last_rect = self.visualItemRect(last)
+            if pos.y() < last_rect.top():
+                # 先頭より上
+                first = self.item(0)
+                if first is not None and pos.y() < self.visualItemRect(first).center().y():
+                    return 0
+            return n
+        target_row = self.row(target_item)
+        rect = self.visualItemRect(target_item)
+        if pos.y() < rect.center().y():
+            return target_row
+        return target_row + 1
+
+    def _update_insert_marker(self, pos: QPoint) -> None:
+        insert_at = self._insert_index_at(pos)
+        if insert_at == self._insert_at:
+            return
+        self._insert_at = insert_at
+        self.viewport().update()
+
+    def _clear_insert_marker(self) -> None:
+        if self._insert_at is None:
+            return
+        self._insert_at = None
+        self.viewport().update()
+
+    def _insert_line_y(self) -> int | None:
+        """ビューポート座標での挿入線 Y。"""
+        if self._insert_at is None:
+            return None
+        n = self.count()
+        insert_at = self._insert_at
+        margin = 2
+        if n <= 0:
+            return margin
+        if insert_at <= 0:
+            rect = self.visualItemRect(self.item(0))
+            return max(1, rect.top() - 1)
+        if insert_at >= n:
+            rect = self.visualItemRect(self.item(n - 1))
+            return rect.bottom() + 1
+        # 直前アイテム下端と次アイテム上端の中間
+        above = self.visualItemRect(self.item(insert_at - 1))
+        below = self.visualItemRect(self.item(insert_at))
+        return (above.bottom() + below.top()) // 2
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        y = self._insert_line_y()
+        if y is None:
+            return
+        painter = QPainter(self.viewport())
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        color = QColor(COLORS["accent"])
+        pen = QPen(color, 3)
+        pen.setCapStyle(Qt.RoundCap)
+        painter.setPen(pen)
+        left = 8
+        right = self.viewport().width() - 8
+        painter.drawLine(left, y, right, y)
+        # 両端の小さな丸で「カーソル」感を出す
+        painter.setBrush(color)
+        painter.setPen(Qt.NoPen)
+        r = 4
+        painter.drawEllipse(QPoint(left, y), r, r)
+        painter.drawEllipse(QPoint(right, y), r, r)
+        painter.end()
+
     def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
         if event.source() is not self:
+            self._clear_insert_marker()
             event.ignore()
             return
 
         n = self.count()
         if n <= 1:
+            self._clear_insert_marker()
             event.ignore()
             return
 
@@ -84,6 +182,7 @@ class _ReorderListWidget(QListWidget):
         ]
         ids = [x for x in ids if x]
         if len(ids) != n:
+            self._clear_insert_marker()
             event.ignore()
             return
 
@@ -91,40 +190,29 @@ class _ReorderListWidget(QListWidget):
         if source_row < 0 or source_row >= n:
             source_row = self.currentRow()
         if source_row < 0 or source_row >= n:
+            self._clear_insert_marker()
             event.ignore()
             return
 
         pos = event.position().toPoint()
-        target_item = self.itemAt(pos)
-        if target_item is None:
-            insert_at = n
-        else:
-            target_row = self.row(target_item)
-            rect = self.visualItemRect(target_item)
-            if pos.y() < rect.center().y():
-                insert_at = target_row
-            else:
-                insert_at = target_row + 1
+        insert_at = (
+            self._insert_at if self._insert_at is not None else self._insert_index_at(pos)
+        )
+        insert_at = max(0, min(int(insert_at), n))
 
-        insert_at = max(0, min(insert_at, n))
-        # 取り出し前の insert_at から、pop 後の挿入位置へ
+        before = list(ids)
         pid = ids.pop(source_row)
         if source_row < insert_at:
             insert_at -= 1
         insert_at = max(0, min(insert_at, len(ids)))
         ids.insert(insert_at, pid)
 
-        if ids == [
-            str(self.item(i).data(Qt.UserRole) or "").strip() for i in range(n)
-        ]:
-            event.setDropAction(Qt.CopyAction)
-            event.accept()
-            return
-
+        self._clear_insert_marker()
         event.setDropAction(Qt.CopyAction)
         event.accept()
         self._drag_row = -1
-        self.idsReordered.emit(ids)
+        if ids != before:
+            self.idsReordered.emit(ids)
 
 
 class PhraseSortDialog(QDialog):
@@ -169,7 +257,9 @@ class PhraseSortDialog(QDialog):
         mode_row.addWidget(self._mode, 1)
         root.addLayout(mode_row)
 
-        self._drag_hint = QLabel("⋮⋮ をつかんで上下にドラッグして並べ替え")
+        self._drag_hint = QLabel(
+            "⋮⋮ をドラッグすると、青い線が挿入位置（配置予定の場所）を示します"
+        )
         self._drag_hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         root.addWidget(self._drag_hint)
 
