@@ -162,9 +162,15 @@ def enhance_bgr(
     contrast: float = 1.35,
     brightness: float = 0.0,
     clahe_clip: float = 2.5,
+    bg_whiten: float = 0.0,
 ) -> np.ndarray:
-    """薄い字向けの簡易強調（コントラスト＋CLAHE）。"""
+    """薄い字向けの簡易強調（地色除去＋コントラスト＋CLAHE）。
+
+    bg_whiten: 0〜1。背景輝度（概ね P92）を白に寄せる強度。
+    """
     out = image_bgr
+    if float(bg_whiten) > 0.01:
+        out = _whiten_background(out, float(bg_whiten))
     if abs(contrast - 1.0) > 1e-3 or abs(brightness) > 1e-3:
         out = cv2.convertScaleAbs(out, alpha=float(contrast), beta=float(brightness))
     if clahe_clip > 0.05:
@@ -174,3 +180,21 @@ def enhance_bgr(
         l2 = clahe.apply(l)
         out = cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2BGR)
     return out
+
+
+def _whiten_background(image_bgr: np.ndarray, strength: float) -> np.ndarray:
+    """背景推定輝度を白へ正規化し、strength で原画像とブレンドする。"""
+    strength = max(0.0, min(1.0, float(strength)))
+    if strength <= 0.01:
+        return image_bgr
+    lab = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    lf = l.astype(np.float32)
+    bg = float(np.percentile(lf, 92))
+    bg = max(bg, 8.0)
+    # 背景を 255 付近へスケール（暗い字の相対差は残す）
+    scale = 255.0 / bg
+    whitened = np.clip(lf * scale, 0.0, 255.0)
+    blended = lf * (1.0 - strength) + whitened * strength
+    l2 = np.clip(blended, 0.0, 255.0).astype(np.uint8)
+    return cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2BGR)

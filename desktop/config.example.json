@@ -12,6 +12,7 @@
   "faint_min_sigma": 12.0,
   "faint_min_p95_p5": 35.0,
   "faint_min_bg_delta": 18.0,
+  "enhance_presets": [],
   "floating_palette": {
     "x": 0,
     "y": 0,

@@ -10,9 +10,12 @@ import numpy as np
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QColor, QPainter, QPen
 from PySide6.QtWidgets import (
+    QComboBox,
     QDialog,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSlider,
@@ -20,6 +23,11 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from config import (
+    delete_enhance_preset,
+    list_enhance_presets,
+    save_enhance_preset,
+)
 from services.faint_ink import enhance_bgr
 from services.image_loader import imread_bgr, imwrite_bgr
 from services.image_warp import warped_file_name
@@ -94,7 +102,7 @@ class FaintReviewDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("薄い字の目視・強調")
-        self.resize(920, 680)
+        self.resize(960, 720)
         self._test_id = test_id
         self._queue = list(queue)
         self._fields = list(fields)
@@ -105,6 +113,7 @@ class FaintReviewDialog(QDialog):
         self._pending_ocr: list[dict[str, Any]] = []
         self._highlight_id = ""
         self._did_flush_ocr = False
+        self._presets: list[dict[str, Any]] = []
         self.finished.connect(self._flush_pending_ocr)
 
         root = QVBoxLayout(self)
@@ -129,7 +138,32 @@ class FaintReviewDialog(QDialog):
         )
         root.addWidget(self._zoom)
 
+        preset_row = QHBoxLayout()
+        preset_row.addWidget(QLabel("プリセット"))
+        self._preset_combo = QComboBox()
+        self._preset_combo.setMinimumWidth(160)
+        preset_row.addWidget(self._preset_combo, 1)
+        apply_btn = QPushButton("適用")
+        apply_btn.clicked.connect(self._apply_selected_preset)
+        preset_row.addWidget(apply_btn)
+        save_btn = QPushButton("現在値を登録…")
+        save_btn.setToolTip("現在のスライダー値を新しいプリセットとして保存")
+        save_btn.clicked.connect(self._save_current_as_preset)
+        preset_row.addWidget(save_btn)
+        del_btn = QPushButton("削除")
+        del_btn.setToolTip("選択中のユーザープリセットを削除（内蔵は削除不可）")
+        del_btn.clicked.connect(self._delete_selected_preset)
+        preset_row.addWidget(del_btn)
+        root.addLayout(preset_row)
+
         controls = QHBoxLayout()
+        controls.addWidget(QLabel("地色除去"))
+        self._bg_whiten = QSlider(Qt.Horizontal)
+        self._bg_whiten.setRange(0, 100)
+        self._bg_whiten.setValue(0)
+        self._bg_whiten.setToolTip("用紙の地色を白に寄せる強度（0=なし）")
+        self._bg_whiten.valueChanged.connect(self._refresh_preview)
+        controls.addWidget(self._bg_whiten, 1)
         controls.addWidget(QLabel("コントラスト"))
         self._contrast = QSlider(Qt.Horizontal)
         self._contrast.setRange(100, 220)
@@ -142,9 +176,6 @@ class FaintReviewDialog(QDialog):
         self._clahe.setValue(25)
         self._clahe.valueChanged.connect(self._refresh_preview)
         controls.addWidget(self._clahe, 1)
-        preset = QPushButton("薄い字プリセット")
-        preset.clicked.connect(self._apply_preset)
-        controls.addWidget(preset)
         root.addLayout(controls)
 
         btns = QHBoxLayout()
@@ -172,16 +203,110 @@ class FaintReviewDialog(QDialog):
         btns.addWidget(close_btn)
         root.addLayout(btns)
 
+        self._reload_presets(select_name="薄い字")
+        self._apply_selected_preset()
         self._load_current()
 
-    def _apply_preset(self) -> None:
-        self._contrast.blockSignals(True)
-        self._clahe.blockSignals(True)
-        self._contrast.setValue(145)
-        self._clahe.setValue(30)
-        self._contrast.blockSignals(False)
-        self._clahe.blockSignals(False)
+    def _reload_presets(self, select_name: str | None = None) -> None:
+        current = select_name or self._preset_combo.currentText()
+        self._presets = list_enhance_presets()
+        self._preset_combo.blockSignals(True)
+        self._preset_combo.clear()
+        for p in self._presets:
+            label = p["name"]
+            if p.get("builtin"):
+                label = f"{label}（内蔵）"
+            self._preset_combo.addItem(label, p["name"])
+        self._preset_combo.blockSignals(False)
+        if current:
+            for i in range(self._preset_combo.count()):
+                if self._preset_combo.itemData(i) == current:
+                    self._preset_combo.setCurrentIndex(i)
+                    break
+
+    def _find_preset(self, name: str) -> dict[str, Any] | None:
+        for p in self._presets:
+            if p.get("name") == name:
+                return p
+        return None
+
+    def _set_sliders(self, *, contrast: int, clahe: int, bg_whiten: int) -> None:
+        for w in (self._contrast, self._clahe, self._bg_whiten):
+            w.blockSignals(True)
+        self._contrast.setValue(int(contrast))
+        self._clahe.setValue(int(clahe))
+        self._bg_whiten.setValue(int(bg_whiten))
+        for w in (self._contrast, self._clahe, self._bg_whiten):
+            w.blockSignals(False)
         self._refresh_preview()
+
+    def _apply_selected_preset(self) -> None:
+        name = self._preset_combo.currentData()
+        if not name:
+            return
+        p = self._find_preset(str(name))
+        if not p:
+            return
+        self._set_sliders(
+            contrast=int(p["contrast"]),
+            clahe=int(p["clahe"]),
+            bg_whiten=int(p["bg_whiten"]),
+        )
+
+    def _save_current_as_preset(self) -> None:
+        suggested = str(self._preset_combo.currentData() or "") or "マイプリセット"
+        if self._find_preset(suggested) and self._find_preset(suggested).get("builtin"):
+            suggested = "マイプリセット"
+        name, ok = QInputDialog.getText(
+            self,
+            "プリセット登録",
+            "プリセット名:",
+            text=suggested,
+        )
+        if not ok:
+            return
+        name = str(name or "").strip()
+        if not name:
+            QMessageBox.warning(self, "登録不可", "名前を入力してください。")
+            return
+        try:
+            self._presets = save_enhance_preset(
+                name,
+                contrast=self._contrast.value(),
+                clahe=self._clahe.value(),
+                bg_whiten=self._bg_whiten.value(),
+            )
+        except ValueError as e:
+            QMessageBox.warning(self, "登録不可", str(e))
+            return
+        self._reload_presets(select_name=name)
+        QMessageBox.information(self, "登録完了", f"「{name}」を保存しました。")
+
+    def _delete_selected_preset(self) -> None:
+        name = self._preset_combo.currentData()
+        if not name:
+            return
+        p = self._find_preset(str(name))
+        if not p:
+            return
+        if p.get("builtin"):
+            QMessageBox.information(self, "削除不可", "内蔵プリセットは削除できません。")
+            return
+        ans = QMessageBox.question(
+            self,
+            "プリセット削除",
+            f"「{name}」を削除しますか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ans != QMessageBox.Yes:
+            return
+        try:
+            self._presets = delete_enhance_preset(str(name))
+        except ValueError as e:
+            QMessageBox.warning(self, "削除不可", str(e))
+            return
+        self._reload_presets(select_name="薄い字")
 
     def _current(self) -> dict[str, Any] | None:
         if not self._queue or self._index < 0 or self._index >= len(self._queue):
@@ -260,8 +385,13 @@ class FaintReviewDialog(QDialog):
             return
         contrast = self._contrast.value() / 100.0
         clahe = self._clahe.value() / 10.0
+        bg = self._bg_whiten.value() / 100.0
         self._preview_bgr = enhance_bgr(
-            self._src_bgr, contrast=contrast, brightness=0.0, clahe_clip=clahe
+            self._src_bgr,
+            contrast=contrast,
+            brightness=0.0,
+            clahe_clip=clahe,
+            bg_whiten=bg,
         )
         self._canvas.set_image(
             self._preview_bgr,
