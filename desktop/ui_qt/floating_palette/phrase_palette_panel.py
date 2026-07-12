@@ -24,6 +24,7 @@ from ui_qt.floating_palette.palette_prefs import VIEW_DETAILED, VIEW_SIMPLE
 from ui_qt.floating_palette.phrase_template_prefs import (
     PHRASE_SIMPLE_TEXT_WIDTH,
     delete_phrase_template,
+    load_phrase_templates,
     phrase_detail_body_text,
     phrase_display_label,
     phrase_has_content,
@@ -31,8 +32,9 @@ from ui_qt.floating_palette.phrase_template_prefs import (
     phrase_palette_detail_html,
     phrase_preview_text,
     phrase_simple_button_label,
-    phrase_templates_mru,
+    sort_phrase_templates,
 )
+from ui_qt.floating_palette.phrase_sort_dialog import PhraseSortDialog
 from ui_qt.floating_palette.text_rich import (
     palette_border_css,
     palette_fill_background,
@@ -143,9 +145,15 @@ class PhrasePalettePanel(QWidget):
             "選択中のテキストボックスを書式込みで定型文として登録"
         )
         self._copy_btn.clicked.connect(self.copy_from_textbox_requested.emit)
-        self._sync_copy_btn_width()
         self._copy_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         action_row.addWidget(self._copy_btn)
+        self._sort_btn = QPushButton("並び替え")
+        self._sort_btn.setObjectName("PhraseCopyBtn")
+        self._sort_btn.setToolTip("定型文の表示順ルールを設定")
+        self._sort_btn.clicked.connect(self._open_sort_dialog)
+        self._sort_btn.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        action_row.addWidget(self._sort_btn)
+        self._sync_action_btn_widths()
         action_row.addStretch()
         root.addWidget(self._copy_wrap, 0)
 
@@ -155,25 +163,30 @@ class PhrasePalettePanel(QWidget):
         self._detail_rows: dict[str, QFrame] = {}
         self.reload_templates()
 
+    def _sync_action_btn_widths(self) -> None:
+        for btn in (self._copy_btn, getattr(self, "_sort_btn", None)):
+            if btn is None:
+                continue
+            font = QFont(btn.font())
+            font.setPixelSize(11)
+            btn.setFont(font)
+            opt = QStyleOptionButton()
+            opt.initFrom(btn)
+            opt.text = btn.text()
+            contents_w = btn.style().sizeFromContents(
+                QStyle.ContentsType.CT_PushButton,
+                opt,
+                QSize(0, 0),
+                btn,
+            ).width()
+            btn.setFixedWidth(max(contents_w + 4, btn.sizeHint().width() + 4))
+
     def _sync_copy_btn_width(self) -> None:
-        btn = self._copy_btn
-        font = QFont(btn.font())
-        font.setPixelSize(11)
-        btn.setFont(font)
-        opt = QStyleOptionButton()
-        opt.initFrom(btn)
-        opt.text = btn.text()
-        contents_w = btn.style().sizeFromContents(
-            QStyle.ContentsType.CT_PushButton,
-            opt,
-            QSize(0, 0),
-            btn,
-        ).width()
-        btn.setFixedWidth(max(contents_w + 4, btn.sizeHint().width() + 4))
+        self._sync_action_btn_widths()
 
     def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
         super().showEvent(event)
-        self._sync_copy_btn_width()
+        self._sync_action_btn_widths()
 
     def minimumSizeHint(self) -> QSize:  # noqa: N802
         return QSize(self.content_min_width(), self.content_height_hint())
@@ -194,8 +207,8 @@ class PhrasePalettePanel(QWidget):
             blocks.append(self._simple_list_height())
         elif self._scroll.isVisible():
             blocks.append(self._detailed_viewport_height())
-        if self._copy_btn.isVisible():
-            blocks.append(self._copy_btn.sizeHint().height())
+        if self._copy_wrap.isVisible():
+            blocks.append(self._copy_wrap.sizeHint().height())
         total = margins.top() + margins.bottom() + sum(blocks)
         if len(blocks) > 1:
             total += spacing * (len(blocks) - 1)
@@ -230,8 +243,8 @@ class PhrasePalettePanel(QWidget):
         return max(_DETAIL_CARD_MIN_HEIGHT, min(full, max_h))
 
     def content_min_width(self) -> int:
-        self._sync_copy_btn_width()
-        copy_w = self._copy_btn.width()
+        self._sync_action_btn_widths()
+        copy_w = self._copy_btn.width() + 4 + self._sort_btn.width()
         action_w = _detail_action_btn_width(self.font())
         if self._compact_edit:
             return max(220, copy_w)
@@ -266,7 +279,7 @@ class PhrasePalettePanel(QWidget):
     def set_view_mode(self, mode: str) -> None:
         self._view_mode = mode if mode in (VIEW_SIMPLE, VIEW_DETAILED) else VIEW_SIMPLE
         self._apply_view_mode()
-        self._sync_copy_btn_width()
+        self._sync_action_btn_widths()
         self.reload_templates()
         self.layout_hint_changed.emit()
 
@@ -298,7 +311,7 @@ class PhrasePalettePanel(QWidget):
         self.layout_hint_changed.emit()
 
     def reload_templates(self) -> None:
-        templates = self._templates_for_display(phrase_templates_mru())
+        templates = self._templates_for_display(sort_phrase_templates())
         self._rebuild_buttons(templates)
         if self._pending_id and self._pending_id not in self._phrase_btns:
             self.set_pending_phrase(None)
@@ -339,10 +352,16 @@ class PhrasePalettePanel(QWidget):
         return templates
 
     def _template_for_id(self, phrase_id: str) -> dict[str, Any] | None:
-        for tpl in phrase_templates_mru():
+        for tpl in sort_phrase_templates():
             if str(tpl.get("id")) == phrase_id:
                 return tpl
         return None
+
+    def _open_sort_dialog(self) -> None:
+        dlg = PhraseSortDialog(self, templates=load_phrase_templates())
+        if dlg.exec() == PhraseSortDialog.Accepted:
+            self.reload_templates()
+            self.layout_hint_changed.emit()
 
     def _clear_layout_widgets(self, layout: QVBoxLayout) -> None:
         while layout.count():

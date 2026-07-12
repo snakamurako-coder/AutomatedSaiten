@@ -235,10 +235,145 @@ def touch_recent_phrase(phrase_id: str) -> None:
     recent = [x for x in load_recent_phrase_ids() if x != pid]
     recent.insert(0, pid)
     save_recent_phrase_ids(recent[:50])
+    counts = load_phrase_use_counts()
+    counts[pid] = int(counts.get(pid) or 0) + 1
+    save_phrase_use_counts(counts)
 
 
-def phrase_templates_mru() -> list[dict[str, Any]]:
-    templates = load_phrase_templates()
+PHRASE_SORT_RECENT = "recent"
+PHRASE_SORT_FREQUENCY = "frequency"
+PHRASE_SORT_ALPHA = "alpha"
+PHRASE_SORT_LENGTH = "length"
+PHRASE_SORT_CUSTOM = "custom"
+
+PHRASE_SORT_MODES: tuple[tuple[str, str], ...] = (
+    (PHRASE_SORT_RECENT, "最近使った順"),
+    (PHRASE_SORT_FREQUENCY, "使用頻度"),
+    (PHRASE_SORT_ALPHA, "五十音順（アルファベット順）"),
+    (PHRASE_SORT_LENGTH, "文字数順"),
+    (PHRASE_SORT_CUSTOM, "ユーザー指定"),
+)
+
+
+def load_phrase_sort_mode() -> str:
+    raw = _phrase_templates_config().get("sort_mode")
+    mode = str(raw or PHRASE_SORT_RECENT).strip()
+    valid = {m for m, _ in PHRASE_SORT_MODES}
+    return mode if mode in valid else PHRASE_SORT_RECENT
+
+
+def save_phrase_sort_mode(mode: str) -> None:
+    valid = {m for m, _ in PHRASE_SORT_MODES}
+    m = str(mode or "").strip()
+    if m not in valid:
+        m = PHRASE_SORT_RECENT
+    merged = _phrase_templates_config()
+    merged["sort_mode"] = m
+    _save_phrase_templates_config(merged)
+
+
+def load_phrase_custom_order() -> list[str]:
+    raw = _phrase_templates_config().get("custom_order")
+    if not isinstance(raw, list):
+        return []
+    return [str(x) for x in raw if str(x).strip()]
+
+
+def save_phrase_custom_order(ids: list[str]) -> None:
+    merged = _phrase_templates_config()
+    merged["custom_order"] = [str(x) for x in ids if str(x).strip()]
+    _save_phrase_templates_config(merged)
+
+
+def load_phrase_use_counts() -> dict[str, int]:
+    raw = _phrase_templates_config().get("use_counts")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for k, v in raw.items():
+        pid = str(k or "").strip()
+        if not pid:
+            continue
+        try:
+            out[pid] = max(0, int(v))
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def save_phrase_use_counts(counts: dict[str, int]) -> None:
+    merged = _phrase_templates_config()
+    merged["use_counts"] = {
+        str(k): max(0, int(v)) for k, v in (counts or {}).items() if str(k).strip()
+    }
+    _save_phrase_templates_config(merged)
+
+
+def _phrase_sort_plain(tpl: dict[str, Any]) -> str:
+    return str(tpl.get("text") or tpl.get("label") or "").replace("\n", "").strip()
+
+
+def sort_phrase_templates(
+    templates: list[dict[str, Any]] | None = None,
+    *,
+    mode: str | None = None,
+) -> list[dict[str, Any]]:
+    """現在の並び替えルール（または指定 mode）で定型文を並べる。"""
+    items = list(templates if templates is not None else load_phrase_templates())
+    by_id = {str(t["id"]): t for t in items}
+    sort_mode = mode if mode is not None else load_phrase_sort_mode()
+
+    if sort_mode == PHRASE_SORT_RECENT:
+        return phrase_templates_mru() if templates is None else _order_by_recent(items)
+
+    if sort_mode == PHRASE_SORT_FREQUENCY:
+        counts = load_phrase_use_counts()
+        recent = load_recent_phrase_ids()
+        recent_rank = {pid: i for i, pid in enumerate(recent)}
+
+        def freq_key(tpl: dict[str, Any]) -> tuple:
+            pid = str(tpl["id"])
+            return (
+                -int(counts.get(pid) or 0),
+                recent_rank.get(pid, 10_000),
+                _phrase_sort_plain(tpl),
+            )
+
+        return sorted(items, key=freq_key)
+
+    if sort_mode == PHRASE_SORT_ALPHA:
+        return sorted(
+            items,
+            key=lambda t: (_phrase_sort_plain(t).casefold(), str(t.get("id") or "")),
+        )
+
+    if sort_mode == PHRASE_SORT_LENGTH:
+        return sorted(
+            items,
+            key=lambda t: (
+                len(_phrase_sort_plain(t)),
+                _phrase_sort_plain(t).casefold(),
+                str(t.get("id") or ""),
+            ),
+        )
+
+    # custom
+    ordered: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    for pid in load_phrase_custom_order():
+        tpl = by_id.get(pid)
+        if tpl is not None and pid not in seen:
+            ordered.append(tpl)
+            seen.add(pid)
+    for tpl in items:
+        pid = str(tpl["id"])
+        if pid not in seen:
+            ordered.append(tpl)
+            seen.add(pid)
+    return ordered
+
+
+def _order_by_recent(templates: list[dict[str, Any]]) -> list[dict[str, Any]]:
     by_id = {str(t["id"]): t for t in templates}
     ordered: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -253,6 +388,10 @@ def phrase_templates_mru() -> list[dict[str, Any]]:
             ordered.append(tpl)
             seen.add(pid)
     return ordered
+
+
+def phrase_templates_mru() -> list[dict[str, Any]]:
+    return _order_by_recent(load_phrase_templates())
 
 
 def phrase_has_content(tpl: dict[str, Any]) -> bool:
@@ -595,3 +734,8 @@ def delete_phrase_template(phrase_id: str) -> None:
         _register_used_phrase_group_id(removed_gid)
     save_phrase_templates(kept)
     save_recent_phrase_ids([x for x in load_recent_phrase_ids() if x != pid])
+    save_phrase_custom_order([x for x in load_phrase_custom_order() if x != pid])
+    counts = load_phrase_use_counts()
+    if pid in counts:
+        counts.pop(pid, None)
+        save_phrase_use_counts(counts)
