@@ -32,6 +32,7 @@ from models.test_repo import (
     build_pending_rows_tsv,
     build_results_tsv,
     clear_step3_failed_entry,
+    clear_step3_faint_entry,
     export_results_to_excel,
     get_answer_fields,
     get_test_info,
@@ -44,10 +45,12 @@ from models.test_repo import (
 from services.batch_processor import (
     STAGE_LABELS,
     run_batch_ocr,
+    run_faint_precheck,
     run_ocr_for_manual_warp_entries,
 )
 from services.work_queue import build_file_inventory
 from ui_qt import helpers as h
+from ui_qt.faint_review_dialog import FaintReviewDialog
 from ui_qt.helpers import ProgressBridge
 from ui_qt.layout_helpers import CollapsibleSection, main_table_frame, make_expanding
 from ui_qt.style import COLORS
@@ -93,7 +96,7 @@ class Step3Page(QWidget):
             h.muted_label(
                 "「フォルダを再認識」で一覧を表示し、チェックしたファイルだけ処理します。"
                 "①で「IDマーク欄あり」のとき、補正後に生徒IDを OMR で読み取ります（読めない桁は ?）。"
-                "自動補正に失敗した場合は「手動補正」または「連続手動補正」を利用してください。"
+                "必要なら「薄い字を検査」で要確認を洗い出し、「目視・強調」から補正して OCR できます。"
             )
         )
 
@@ -103,6 +106,7 @@ class Step3Page(QWidget):
         folder_row.addWidget(self.inbox_edit, 1)
         folder_row.addWidget(h.button("参照…", self._pick_inbox))
         folder_row.addWidget(h.button("フォルダを再認識", self._scan_folder, variant="primary"))
+        folder_row.addWidget(h.button("薄い字を検査", self._on_faint_precheck))
         root.addLayout(folder_row)
 
         self.queue_stats = h.muted_label("一覧未表示 — 「フォルダを再認識」を押してください。")
@@ -131,6 +135,7 @@ class Step3Page(QWidget):
             ("全解除", "none"),
             ("＋未処理", "unprocessed"),
             ("＋補正済", "warped"),
+            ("＋要確認", "faint"),
             ("＋反映済", "processed"),
             ("＋失敗", "failed"),
         ]:
@@ -265,7 +270,8 @@ class Step3Page(QWidget):
         st = inv["stats"]
         self.queue_stats.setText(
             f"合計 {st['total']} 件 — 未処理 {st['unprocessed']} / 補正済 {st['warped']} / "
-            f"反映済 {st['processed']} / 失敗 {st['failed']} / フォルダ内 {st['inInbox']} 件"
+            f"要確認 {st.get('faint', 0)} / 反映済 {st['processed']} / 失敗 {st['failed']} / "
+            f"フォルダ内 {st['inInbox']} 件"
         )
         self._inventory_rows = inv["rows"]
         self._rebuild_table(self._inventory_rows)
@@ -318,7 +324,10 @@ class Step3Page(QWidget):
         if fail:
             fail_item = QTableWidgetItem(self._truncate(fail, 48))
             fail_item.setToolTip(fail)
-            fail_item.setForeground(QColor(COLORS["danger"]))
+            fail_color = (
+                QColor("#d97706") if status == "要確認（薄い）" else QColor(COLORS["danger"])
+            )
+            fail_item.setForeground(fail_color)
             self.table.setItem(row_idx, _COL_FAIL, fail_item)
         else:
             self._set_cell(row_idx, _COL_FAIL, "")
@@ -334,24 +343,48 @@ class Step3Page(QWidget):
             self.table.setItem(row_idx, col, item)
 
         self._set_cell(row_idx, _COL_FIELD_START + len(self._fields), data.get("db") or "—")
-        self._set_manual_warp_button(row_idx, data)
+        self._set_action_buttons(row_idx, data)
 
     def _col_action(self) -> int:
         return _COL_FIELD_START + len(self._fields) + 1
 
-    def _set_manual_warp_button(self, row_idx: int, data: dict[str, Any]) -> None:
+    def _set_action_buttons(self, row_idx: int, data: dict[str, Any]) -> None:
         col = self._col_action()
+        status = data.get("status") or ""
         q = data.get("queueItem")
-        if not q or not q.get("path"):
+        has_path = bool(q and q.get("path"))
+        is_faint = status == "要確認（薄い）"
+        if not has_path and not is_faint:
+            self.table.removeCellWidget(row_idx, col)
             self._set_cell(row_idx, col, "—")
             return
-        btn = QPushButton("手動補正")
-        btn.setStyleSheet(
-            f"color: {COLORS['accent']}; text-decoration: underline; border: none; background: transparent;"
+
+        host = QWidget()
+        lay = QHBoxLayout(host)
+        lay.setContentsMargins(2, 0, 2, 0)
+        lay.setSpacing(6)
+        link_style = (
+            f"color: {COLORS['accent']}; text-decoration: underline; "
+            "border: none; background: transparent;"
         )
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.clicked.connect(partial(self._open_manual_warp_for_row, row_idx))
-        self.table.setCellWidget(row_idx, col, btn)
+        warn_style = (
+            "color: #d97706; text-decoration: underline; "
+            "border: none; background: transparent;"
+        )
+        if is_faint:
+            review_btn = QPushButton("目視・強調")
+            review_btn.setStyleSheet(warn_style)
+            review_btn.setCursor(Qt.PointingHandCursor)
+            review_btn.clicked.connect(partial(self._open_faint_review_for_row, row_idx))
+            lay.addWidget(review_btn)
+        if has_path:
+            btn = QPushButton("手動補正")
+            btn.setStyleSheet(link_style)
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(partial(self._open_manual_warp_for_row, row_idx))
+            lay.addWidget(btn)
+        lay.addStretch()
+        self.table.setCellWidget(row_idx, col, host)
 
     def _set_cell(
         self, row: int, col: int, text: str, color: QColor | None = None
@@ -367,6 +400,8 @@ class Step3Page(QWidget):
             return QColor(COLORS["success"])
         if status == "失敗":
             return QColor(COLORS["danger"])
+        if status == "要確認（薄い）":
+            return QColor("#d97706")
         if status in ("処理中", "原画像読込", "枠検出・補正", "OCRテキスト化"):
             return QColor(COLORS["accent"])
         if status == "補正済":
@@ -406,6 +441,7 @@ class Step3Page(QWidget):
             hit = (
                 (mode == "unprocessed" and status == "未処理")
                 or (mode == "warped" and status == "補正済")
+                or (mode == "faint" and status == "要確認（薄い）")
                 or (mode == "processed" and status == "反映済")
                 or (mode == "failed" and status == "失敗")
             )
@@ -417,6 +453,7 @@ class Step3Page(QWidget):
             labels = {
                 "unprocessed": "未処理",
                 "warped": "補正済",
+                "faint": "要確認（薄い）",
                 "processed": "反映済",
                 "failed": "失敗",
             }
@@ -601,6 +638,7 @@ class Step3Page(QWidget):
         for log in result.get("itemLogs", []):
             if log.get("status") == "done" and test_id:
                 clear_step3_failed_entry(test_id, log["fileName"])
+                clear_step3_faint_entry(test_id, log["fileName"])
 
         self._scan_folder()
 
@@ -624,7 +662,7 @@ class Step3Page(QWidget):
         ans = QMessageBox.question(
             self,
             "③をリセット",
-            "採点結果（OCRテキスト）・補正画像・失敗記録をすべて消去し、\n"
+            "採点結果（OCRテキスト）・補正画像・失敗／薄い字の記録をすべて消去し、\n"
             "「元画像」フォルダの原本を解答フォルダへ戻します。\n\n"
             "この操作は取り消せません。続行しますか？",
             QMessageBox.Yes | QMessageBox.No,
@@ -754,6 +792,151 @@ class Step3Page(QWidget):
         cfg = load_config()
         orientation = cfg.get("default_orientation", "landscape")
         return orientation, 128
+
+    def _on_faint_precheck(self) -> None:
+        if not self.app.require_active_test():
+            return
+        if not self._scanned:
+            h.warn(self, "一覧未表示", "先に「フォルダを再認識」でファイル一覧を表示してください。")
+            return
+        test_id = self.app.active_test_id
+        if not get_answer_fields(test_id):
+            h.error(
+                self,
+                "記述欄未設定",
+                "先に ① 回答欄設定で模範解答と記述欄を登録してください。",
+            )
+            return
+        items: list[dict[str, Any]] = []
+        for rd in self._inventory_rows:
+            if rd.get("status") == "反映済":
+                continue
+            q = rd.get("queueItem")
+            if not q:
+                continue
+            item = dict(q)
+            if rd.get("warpedPath"):
+                item["warpedPath"] = rd["warpedPath"]
+            items.append(item)
+        if not items:
+            h.warn(self, "対象なし", "検査できる未反映のファイルがありません。")
+            return
+
+        total = len(items)
+        self.run_btn.setEnabled(False)
+        self.progress.setValue(0)
+        self.progress_label.setText(f"0/{total}")
+        self.status_label.setText(f"薄い字を検査中（{total} 件）…")
+        self.log.appendPlainText(f"--- 薄い字検査開始（{total} 件）---")
+
+        bridge = ProgressBridge(self)
+        bridge.updated.connect(self._update_progress)
+
+        def task():
+            def on_progress(current: int, t: int, name: str) -> None:
+                bridge.updated.emit(current, t, name)
+
+            return run_faint_precheck(test_id, items, on_progress=on_progress)
+
+        h.run_in_thread(self, task, self._on_faint_precheck_done)
+
+    def _on_faint_precheck_done(self, result: dict[str, Any] | None, err: Exception | None) -> None:
+        self.run_btn.setEnabled(True)
+        if err:
+            h.error(self, "薄い字検査エラー", str(err))
+            self.log.appendPlainText(f"薄い字検査エラー: {err}")
+            self.status_label.setText(f"検査中断: {err}")
+            return
+        assert result is not None
+        if result.get("disabled"):
+            h.warn(
+                self,
+                "検査オフ",
+                "詳細設定の「判断基準」で薄い字検査がオフになっています。",
+            )
+            self.status_label.setText("薄い字検査はオフです")
+            return
+        err_count = len(result.get("errors") or [])
+        faint_n = int(result.get("faint") or 0)
+        ok_n = int(result.get("ok") or 0)
+        checked = int(result.get("checked") or 0)
+        summary = (
+            f"薄い字検査完了: 検査 {checked} / 要確認 {faint_n} / 問題なし {ok_n} / エラー {err_count}"
+        )
+        self.log.appendPlainText(summary)
+        for e in result.get("errors") or []:
+            self.log.appendPlainText(f"  × {e.get('fileName')}: {e.get('error')}")
+        self._scan_folder()
+        self.status_label.setText(summary)
+        if faint_n:
+            h.info(
+                self,
+                "薄い字検査",
+                f"要確認 {faint_n} 件を検出しました。\n"
+                "一覧の「目視・強調」から確認・強調後 OCR できます。\n"
+                "チェックすれば通常 OCR も可能です。",
+            )
+        else:
+            h.info(self, "薄い字検査", f"要確認はありませんでした（問題なし {ok_n} 件）。")
+
+    def _faint_review_queue(self, start_row: int | None = None) -> list[dict[str, Any]]:
+        rows = [
+            rd
+            for rd in self._inventory_rows
+            if rd.get("status") == "要確認（薄い）"
+        ]
+        if start_row is None or start_row < 0 or start_row >= len(self._inventory_rows):
+            return rows
+        start_name = normalize_file_name(self._inventory_rows[start_row].get("fileName") or "")
+        ordered: list[dict[str, Any]] = []
+        rest: list[dict[str, Any]] = []
+        seen = False
+        for rd in rows:
+            if normalize_file_name(rd.get("fileName") or "") == start_name:
+                seen = True
+            if seen:
+                ordered.append(rd)
+            else:
+                rest.append(rd)
+        return ordered + rest
+
+    def _open_faint_review_for_row(self, row_idx: int) -> None:
+        if not self.app.require_active_test():
+            return
+        raw_queue = self._faint_review_queue(row_idx)
+        if not raw_queue:
+            h.warn(self, "対象なし", "要確認（薄い）の行がありません。")
+            return
+        queue: list[dict[str, Any]] = []
+        for rd in raw_queue:
+            q = rd.get("queueItem") or {}
+            faint = rd.get("faint") or {}
+            queue.append(
+                {
+                    "fileName": str(rd.get("fileName") or ""),
+                    "reason": str(rd.get("fail") or faint.get("reason") or ""),
+                    "fieldId": str(faint.get("fieldId") or ""),
+                    "metrics": dict(faint.get("metrics") or {}),
+                    "failedCriteria": list(faint.get("failedCriteria") or []),
+                    "warpedPath": str(
+                        rd.get("warpedPath")
+                        or faint.get("warpedPath")
+                        or q.get("warpedPath")
+                        or ""
+                    ),
+                    "sourcePath": str(q.get("path") or ""),
+                    "path": str(q.get("path") or ""),
+                    "faint": faint,
+                }
+            )
+        dlg = FaintReviewDialog(
+            self,
+            test_id=self.app.active_test_id,
+            queue=queue,
+            fields=self._fields,
+            on_ocr=self._run_manual_warp_ocr,
+        )
+        dlg.exec()
 
     def _open_manual_warp_for_row(self, row_idx: int) -> None:
         if not self.app.require_active_test():

@@ -8,6 +8,10 @@
   "speech_pause_seconds": 1.8,
   "stylus_palm_rejection": true,
   "stylus_eraser_mode": "pixel",
+  "faint_check_enabled": true,
+  "faint_min_sigma": 12.0,
+  "faint_min_p95_p5": 35.0,
+  "faint_min_bg_delta": 18.0,
   "floating_palette": {
     "x": 0,
     "y": 0,

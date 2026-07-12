@@ -125,12 +125,13 @@ def build_ocr_work_queue(test_id: str, inbox_path: str) -> dict[str, Any]:
 
 def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
     """フォルダ・DB・失敗記録を統合したファイル一覧（③ UI 用）。"""
-    from models.test_repo import get_result_preview, get_step3_failed
+    from models.test_repo import get_result_preview, get_step3_failed, get_step3_faint
 
     inbox = Path(inbox_path) if inbox_path else test_inbox(test_id)
     archive = test_archive(test_id)
     results = {normalize_file_name(r["fileName"]): r for r in get_result_preview(test_id)}
     failed_map = get_step3_failed(test_id)
+    faint_map = get_step3_faint(test_id)
 
     files_meta: dict[str, dict[str, Any]] = {}
 
@@ -156,17 +157,21 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
         for f in list_inbox_files(archive):
             add_file(f, True)
 
-    all_keys = set(files_meta.keys()) | set(results.keys()) | set(failed_map.keys())
+    all_keys = set(files_meta.keys()) | set(results.keys()) | set(failed_map.keys()) | set(
+        faint_map.keys()
+    )
     rows: list[dict[str, Any]] = []
 
     for key in sorted(all_keys, key=lambda k: files_meta.get(k, {}).get("name", k)):
         fmeta = files_meta.get(key, {})
         result = results.get(key)
         fail = failed_map.get(key)
+        faint = faint_map.get(key)
         name = (
             fmeta.get("name")
             or (result or {}).get("fileName")
             or (fail or {}).get("fileName")
+            or (faint or {}).get("fileName")
             or key
         )
         warped = find_warped_for_original(test_id, name)
@@ -174,16 +179,28 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
 
         if in_db:
             status = "反映済"
+            fail_text = ""
+            fail_stage = ""
         elif key in failed_map:
             status = "失敗"
+            fail_text = (fail or {}).get("error", "")
+            fail_stage = (fail or {}).get("stage", "")
+        elif key in faint_map and not in_db:
+            status = "要確認（薄い）"
+            fail_text = (faint or {}).get("reason", "")
+            fail_stage = "faint"
         elif warped and fmeta:
             status = "補正済"
+            fail_text = ""
+            fail_stage = ""
         elif fmeta:
             status = "未処理"
-        elif key in failed_map:
-            status = "失敗"
+            fail_text = ""
+            fail_stage = ""
         else:
             status = "反映済" if in_db else "不明"
+            fail_text = ""
+            fail_stage = ""
 
         queue_item: dict[str, Any] | None = None
         if not in_db and fmeta.get("path"):
@@ -202,14 +219,18 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
             {
                 "fileName": name,
                 "status": status,
-                "fail": (fail or {}).get("error", "") if status == "失敗" else "",
-                "failStage": (fail or {}).get("stage", "") if status == "失敗" else "",
+                "fail": fail_text,
+                "failStage": fail_stage,
                 "studentId": (result or {}).get("studentId") or "",
                 "texts": (result or {}).get("textMapping") or {},
                 "db": "済" if in_db else "—",
                 "hint": "（補正済）" if status == "補正済" else "",
                 "inArchive": bool(fmeta.get("inArchive")),
                 "queueItem": queue_item,
+                "faint": faint or None,
+                "warpedPath": warped
+                or ((faint or {}).get("warpedPath") if faint else "")
+                or "",
             }
         )
 
@@ -219,6 +240,7 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
         "warped": sum(1 for r in rows if r["status"] == "補正済"),
         "processed": sum(1 for r in rows if r["status"] == "反映済"),
         "failed": sum(1 for r in rows if r["status"] == "失敗"),
+        "faint": sum(1 for r in rows if r["status"] == "要確認（薄い）"),
         "inInbox": sum(1 for r in rows if not r.get("inArchive") and r["status"] != "反映済"),
     }
     return {"rows": rows, "stats": stats}

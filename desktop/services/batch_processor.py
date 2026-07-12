@@ -6,13 +6,21 @@ import shutil
 from pathlib import Path
 from typing import Any, Callable
 
-from config import load_config, test_archive, test_warped
-from models.test_repo import flush_result_rows, get_answer_fields, get_use_id_mark
+from config import faint_thresholds_from_config, load_config, test_archive, test_warped
+from models.test_repo import (
+    flush_result_rows,
+    get_answer_fields,
+    get_step3_faint,
+    get_use_id_mark,
+    normalize_file_name,
+    save_step3_faint,
+)
+from services.faint_ink import analyze_warped_fields
 from services.image_loader import imread_bgr
 from services.image_warp import warp_image_file, warped_file_name
 from services.ocr import run_ocr_on_warped_image
 from services.omr_id import detect_omr_id
-from services.work_queue import build_ocr_work_queue
+from services.work_queue import build_ocr_work_queue, find_warped_for_original
 
 
 ProgressCallback = Callable[[int, int, str], None]
@@ -384,4 +392,85 @@ def run_ocr_for_manual_warp_entries(
         "errors": errors,
         "flush": flush_result,
         "itemLogs": item_logs,
+    }
+
+
+def run_faint_precheck(
+    test_id: str,
+    items: list[dict[str, Any]],
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """未OCR答案を補正（必要時）し、薄い字指標ではじいたものを記録する。"""
+    fields = get_answer_fields(test_id)
+    if not fields:
+        raise ValueError("記述欄が設定されていません。")
+    cfg = load_config()
+    thresholds = faint_thresholds_from_config(cfg)
+    if not bool(thresholds.get("enabled", True)):
+        return {
+            "checked": 0,
+            "faint": 0,
+            "ok": 0,
+            "errors": [],
+            "faintFiles": [],
+            "disabled": True,
+        }
+
+    orientation = cfg.get("default_orientation", "landscape")
+    total = len(items)
+    faint_map = get_step3_faint(test_id)
+    errors: list[dict[str, str]] = []
+    ok_count = 0
+    faint_count_new = 0
+
+    for idx, item in enumerate(items, start=1):
+        file_name = str(item.get("name") or item.get("fileName") or "")
+        if on_progress:
+            on_progress(idx, total, file_name)
+        source_path = item.get("path") or item.get("id") or ""
+        key = normalize_file_name(file_name)
+        try:
+            warped_path = str(item.get("warpedPath") or "").strip()
+            if not warped_path:
+                found = find_warped_for_original(test_id, file_name)
+                warped_path = found or ""
+            if not warped_path:
+                if not source_path:
+                    raise ValueError("原画像パスがありません。")
+                out_path = test_warped(test_id) / warped_file_name(file_name)
+                warp_image_file(source_path, out_path, orientation=orientation)
+                warped_path = str(out_path.resolve())
+
+            warped_bgr = _load_warped_bgr(warped_path)
+            analysis = analyze_warped_fields(warped_bgr, fields, thresholds)
+            if analysis["isFaint"]:
+                worst = analysis.get("worstField") or {}
+                faint_map[key] = {
+                    "fileName": file_name,
+                    "reason": analysis.get("reason") or "",
+                    "fieldId": str(worst.get("fieldId") or ""),
+                    "metrics": dict(worst.get("metrics") or {}),
+                    "failedCriteria": list(worst.get("failedCriteria") or []),
+                    "warpedPath": warped_path,
+                }
+                faint_count_new += 1
+            else:
+                faint_map.pop(key, None)
+                ok_count += 1
+        except Exception as e:
+            errors.append({"fileName": file_name, "error": str(e)})
+
+    save_step3_faint(test_id, faint_map)
+    return {
+        "checked": total,
+        "faint": faint_count_new,
+        "ok": ok_count,
+        "errors": errors,
+        "faintFiles": [
+            v["fileName"]
+            for k, v in faint_map.items()
+            if normalize_file_name(v.get("fileName") or "")
+            in {normalize_file_name(i.get("name") or i.get("fileName") or "") for i in items}
+        ],
+        "disabled": False,
     }

@@ -848,8 +848,82 @@ def clear_step3_failed(test_id: str) -> None:
         conn.commit()
 
 
+# --- ③ テキスト化: 薄い字の要確認記録 ---
+
+def _step3_faint_key(test_id: str) -> str:
+    return f"step3_faint_{test_id}"
+
+
+def get_step3_faint(test_id: str) -> dict[str, dict[str, Any]]:
+    """normalize_file_name → {fileName, reason, fieldId, metrics, failedCriteria}"""
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM app_state WHERE key = ?", (_step3_faint_key(test_id),)
+        ).fetchone()
+    if not row or not row["value"]:
+        return {}
+    try:
+        raw = json.loads(row["value"])
+    except json.JSONDecodeError:
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for item in raw if isinstance(raw, list) else []:
+        name = str(item.get("fileName") or "")
+        key = normalize_file_name(name)
+        if key:
+            out[key] = {
+                "fileName": name,
+                "reason": str(item.get("reason") or ""),
+                "fieldId": str(item.get("fieldId") or ""),
+                "metrics": dict(item.get("metrics") or {}),
+                "failedCriteria": list(item.get("failedCriteria") or []),
+                "warpedPath": str(item.get("warpedPath") or ""),
+            }
+    return out
+
+
+def save_step3_faint(test_id: str, faint: dict[str, dict[str, Any]]) -> None:
+    rows = list(faint.values())
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO app_state(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+            (_step3_faint_key(test_id), json.dumps(rows, ensure_ascii=False)),
+        )
+        conn.commit()
+
+
+def set_step3_faint_entry(test_id: str, entry: dict[str, Any]) -> None:
+    faint = get_step3_faint(test_id)
+    name = str(entry.get("fileName") or "")
+    key = normalize_file_name(name)
+    if not key:
+        return
+    faint[key] = {
+        "fileName": name,
+        "reason": str(entry.get("reason") or ""),
+        "fieldId": str(entry.get("fieldId") or ""),
+        "metrics": dict(entry.get("metrics") or {}),
+        "failedCriteria": list(entry.get("failedCriteria") or []),
+        "warpedPath": str(entry.get("warpedPath") or ""),
+    }
+    save_step3_faint(test_id, faint)
+
+
+def clear_step3_faint_entry(test_id: str, file_name: str) -> None:
+    faint = get_step3_faint(test_id)
+    faint.pop(normalize_file_name(file_name), None)
+    save_step3_faint(test_id, faint)
+
+
+def clear_step3_faint(test_id: str) -> None:
+    with connect() as conn:
+        conn.execute("DELETE FROM app_state WHERE key = ?", (_step3_faint_key(test_id),))
+        conn.commit()
+
+
 def reset_step3_data(test_id: str) -> dict[str, int]:
-    """③ の処理結果を初期化（DB・補正画像・失敗記録を消し、原本をフォルダへ戻す）。"""
+    """③ の処理結果を初期化（DB・補正画像・失敗/薄さ記録を消し、原本をフォルダへ戻す）。"""
     import shutil
     from pathlib import Path
 
@@ -880,6 +954,7 @@ def reset_step3_data(test_id: str) -> dict[str, int]:
         cur = conn.execute("DELETE FROM results WHERE test_id = ?", (test_id,))
         deleted_results = cur.rowcount
         conn.execute("DELETE FROM app_state WHERE key = ?", (_step3_failed_key(test_id),))
+        conn.execute("DELETE FROM app_state WHERE key = ?", (_step3_faint_key(test_id),))
         touch_progress_conn(conn, test_id, 2, "リセット済み")
         conn.commit()
 
