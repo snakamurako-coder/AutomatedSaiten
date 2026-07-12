@@ -41,18 +41,21 @@ from models.test_repo import (
     reset_step3_data,
     save_student_folder,
     set_step3_failed_entry,
+    upsert_result_texts,
 )
 from services.batch_processor import (
     STAGE_LABELS,
     run_batch_ocr,
     run_faint_precheck,
     run_ocr_for_manual_warp_entries,
+    run_ocr_preview_for_entries,
 )
 from services.work_queue import build_file_inventory
 from ui_qt import helpers as h
 from ui_qt.faint_review_dialog import FaintReviewDialog
 from ui_qt.helpers import ProgressBridge
 from ui_qt.layout_helpers import CollapsibleSection, main_table_frame, make_expanding
+from ui_qt.ocr_compare_dialog import OcrCompareDialog
 from ui_qt.style import COLORS
 from ui_qt.manual_warp_dialog import (
     ManualWarpDialog,
@@ -86,6 +89,8 @@ class Step3Page(QWidget):
         self._last_pending_rows: list[dict[str, Any]] = []
         self._loaded_test_id: str | None = None
         self._scanned = False
+        self._filter_key = "all"
+        self._filter_btns: dict[str, QPushButton] = {}
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
@@ -146,9 +151,32 @@ class Step3Page(QWidget):
         sel_row.addStretch()
         root.addLayout(sel_row)
 
+        filter_row = QHBoxLayout()
+        filter_row.addWidget(QLabel("表示:"))
+        for label, key in [
+            ("全て", "all"),
+            ("未処理", "unprocessed"),
+            ("補正済", "warped"),
+            ("薄字該当", "faint"),
+            ("反映済", "processed"),
+            ("失敗", "failed"),
+        ]:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(key == "all")
+            btn.setToolTip("一覧の表示を絞り込みます（チェック状態は維持）")
+            btn.clicked.connect(partial(self._set_filter, key))
+            self._filter_btns[key] = btn
+            filter_row.addWidget(btn)
+        filter_row.addStretch()
+        root.addLayout(filter_row)
+
         btns = QHBoxLayout()
         self.run_btn = h.button("チェックしたファイルを OCR", self._on_run_ocr, variant="primary")
         btns.addWidget(self.run_btn)
+        btns.addWidget(
+            h.button("チェックしたファイルを薄字補正", self._on_checked_faint_enhance)
+        )
         btns.addWidget(
             h.button("連続手動補正", self._on_continuous_manual_warp, variant="primary")
         )
@@ -275,6 +303,7 @@ class Step3Page(QWidget):
         )
         self._inventory_rows = inv["rows"]
         self._rebuild_table(self._inventory_rows)
+        self._apply_row_filter()
         self._scanned = True
         n = sum(1 for i in range(self.table.rowCount()) if self._row_checked(i))
         self.status_label.setText(
@@ -299,6 +328,45 @@ class Step3Page(QWidget):
             self._row_by_name[key] = i
             default_check = rd.get("status") in _DEFAULT_CHECK
             self._set_row(i, rd, checked=default_check)
+        self._apply_row_filter()
+
+    def _row_matches_filter(self, rd: dict[str, Any]) -> bool:
+        key = self._filter_key
+        if key == "all":
+            return True
+        status = rd.get("status") or ""
+        if key == "unprocessed":
+            return status == "未処理"
+        if key == "warped":
+            return status == "補正済"
+        if key == "faint":
+            return status == "要確認（薄い）" or bool(rd.get("faint"))
+        if key == "processed":
+            return status == "反映済"
+        if key == "failed":
+            return status == "失敗"
+        return True
+
+    def _apply_row_filter(self) -> None:
+        for i, rd in enumerate(self._inventory_rows):
+            hide = not self._row_matches_filter(rd)
+            if i < self.table.rowCount():
+                self.table.setRowHidden(i, hide)
+
+    def _set_filter(self, key: str) -> None:
+        self._filter_key = key
+        for k, btn in self._filter_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(k == key)
+            btn.blockSignals(False)
+        self._apply_row_filter()
+        visible = sum(
+            1
+            for i, rd in enumerate(self._inventory_rows)
+            if self._row_matches_filter(rd) and i < self.table.rowCount()
+        )
+        if self._scanned:
+            self.status_label.setText(f"表示フィルター: {visible} 件")
 
     def _row_checked(self, row_idx: int) -> bool:
         return is_toggle_checked(self.table.item(row_idx, _COL_CHECK))
@@ -353,8 +421,10 @@ class Step3Page(QWidget):
         status = data.get("status") or ""
         q = data.get("queueItem")
         has_path = bool(q and q.get("path"))
-        is_faint = status == "要確認（薄い）"
-        if not has_path and not is_faint:
+        has_warped = bool(str(data.get("warpedPath") or "").strip())
+        is_faint = status == "要確認（薄い）" or bool(data.get("faint"))
+        can_review = is_faint or has_warped
+        if not has_path and not can_review:
             self.table.removeCellWidget(row_idx, col)
             self._set_cell(row_idx, col, "—")
             return
@@ -371,9 +441,9 @@ class Step3Page(QWidget):
             "color: #d97706; text-decoration: underline; "
             "border: none; background: transparent;"
         )
-        if is_faint:
+        if can_review:
             review_btn = QPushButton("目視・強調")
-            review_btn.setStyleSheet(warn_style)
+            review_btn.setStyleSheet(warn_style if is_faint else link_style)
             review_btn.setCursor(Qt.PointingHandCursor)
             review_btn.clicked.connect(partial(self._open_faint_review_for_row, row_idx))
             lay.addWidget(review_btn)
@@ -884,6 +954,8 @@ class Step3Page(QWidget):
             rd
             for rd in self._inventory_rows
             if rd.get("status") == "要確認（薄い）"
+            or bool(rd.get("faint"))
+            or bool(str(rd.get("warpedPath") or "").strip())
         ]
         if start_row is None or start_row < 0 or start_row >= len(self._inventory_rows):
             return rows
@@ -900,43 +972,152 @@ class Step3Page(QWidget):
                 rest.append(rd)
         return ordered + rest
 
-    def _open_faint_review_for_row(self, row_idx: int) -> None:
-        if not self.app.require_active_test():
+    def _review_entry_from_row(self, rd: dict[str, Any]) -> dict[str, Any]:
+        q = rd.get("queueItem") or {}
+        faint = rd.get("faint") or {}
+        return {
+            "fileName": str(rd.get("fileName") or ""),
+            "reason": str(rd.get("fail") or faint.get("reason") or ""),
+            "fieldId": str(faint.get("fieldId") or ""),
+            "metrics": dict(faint.get("metrics") or {}),
+            "failedCriteria": list(faint.get("failedCriteria") or []),
+            "warpedPath": str(
+                rd.get("warpedPath")
+                or faint.get("warpedPath")
+                or q.get("warpedPath")
+                or ""
+            ),
+            "sourcePath": str(
+                q.get("path")
+                or rd.get("sourcePath")
+                or ""
+            ),
+            "path": str(q.get("path") or rd.get("sourcePath") or ""),
+            "faint": faint,
+        }
+
+    def _open_faint_review_queue(self, rows: list[dict[str, Any]]) -> None:
+        queue = [self._review_entry_from_row(rd) for rd in rows]
+        queue = [
+            e
+            for e in queue
+            if e.get("warpedPath") or e.get("sourcePath") or e.get("path")
+        ]
+        if not queue:
+            h.warn(self, "対象なし", "補正画像または原画像がある行がありません。")
             return
-        raw_queue = self._faint_review_queue(row_idx)
-        if not raw_queue:
-            h.warn(self, "対象なし", "要確認（薄い）の行がありません。")
-            return
-        queue: list[dict[str, Any]] = []
-        for rd in raw_queue:
-            q = rd.get("queueItem") or {}
-            faint = rd.get("faint") or {}
-            queue.append(
-                {
-                    "fileName": str(rd.get("fileName") or ""),
-                    "reason": str(rd.get("fail") or faint.get("reason") or ""),
-                    "fieldId": str(faint.get("fieldId") or ""),
-                    "metrics": dict(faint.get("metrics") or {}),
-                    "failedCriteria": list(faint.get("failedCriteria") or []),
-                    "warpedPath": str(
-                        rd.get("warpedPath")
-                        or faint.get("warpedPath")
-                        or q.get("warpedPath")
-                        or ""
-                    ),
-                    "sourcePath": str(q.get("path") or ""),
-                    "path": str(q.get("path") or ""),
-                    "faint": faint,
-                }
-            )
         dlg = FaintReviewDialog(
             self,
             test_id=self.app.active_test_id,
             queue=queue,
             fields=self._fields,
-            on_ocr=self._run_manual_warp_ocr,
+            on_ocr=self._run_compare_ocr,
         )
         dlg.exec()
+        # OCR 比較経路はプレビュー完了後に一覧更新する
+        if self._scanned and not dlg.did_flush_ocr():
+            self._scan_folder()
+
+    def _on_checked_faint_enhance(self) -> None:
+        if not self.app.require_active_test():
+            return
+        if not self._scanned:
+            h.warn(self, "一覧未表示", "先に「フォルダを再認識」でファイル一覧を表示してください。")
+            return
+        rows: list[dict[str, Any]] = []
+        for i, rd in enumerate(self._inventory_rows):
+            if not self._row_checked(i):
+                continue
+            if str(rd.get("warpedPath") or "").strip() or (rd.get("queueItem") or {}).get("path"):
+                rows.append(rd)
+        if not rows:
+            h.warn(
+                self,
+                "選択なし",
+                "薄字補正するファイルにチェックを入れ、補正画像または原画像があることを確認してください。",
+            )
+            return
+        self._open_faint_review_queue(rows)
+
+    def _open_faint_review_for_row(self, row_idx: int) -> None:
+        if not self.app.require_active_test():
+            return
+        queue_rows = self._faint_review_queue(row_idx)
+        if not queue_rows:
+            h.warn(self, "対象なし", "目視・強調できる行がありません。")
+            return
+        self._open_faint_review_queue(queue_rows)
+
+    def _run_compare_ocr(self, entries: list[dict[str, Any]]) -> None:
+        if not entries or not self.app.require_active_test():
+            return
+        test_id = self.app.active_test_id
+        total = len(entries)
+        self.run_btn.setEnabled(False)
+        self.progress.setValue(0)
+        self.progress_label.setText(f"0/{total}")
+        self.status_label.setText(f"再OCRプレビュー（{total} 件）…")
+        self.log.appendPlainText(f"--- 再OCRプレビュー開始（{total} 件）---")
+
+        bridge = ProgressBridge(self)
+        bridge.updated.connect(self._update_progress)
+
+        def task():
+            def on_progress(current: int, t: int, name: str) -> None:
+                bridge.updated.emit(current, t, name)
+
+            return run_ocr_preview_for_entries(test_id, entries, on_progress=on_progress)
+
+        h.run_in_thread(self, task, self._on_compare_preview_done)
+
+    def _on_compare_preview_done(
+        self, result: dict[str, Any] | None, err: Exception | None
+    ) -> None:
+        self.run_btn.setEnabled(True)
+        if err:
+            h.error(self, "再OCRエラー", str(err))
+            self.log.appendPlainText(f"再OCRプレビューエラー: {err}")
+            self.status_label.setText(f"再OCR中断: {err}")
+            return
+        assert result is not None
+        for e in result.get("errors") or []:
+            self.log.appendPlainText(f"  × {e.get('fileName')}: {e.get('error')}")
+        previews = list(result.get("previews") or [])
+        if not previews:
+            h.warn(self, "プレビューなし", "OCR できる画像がありませんでした。")
+            self.status_label.setText("再OCRプレビューなし")
+            return
+
+        test_id = self.app.active_test_id
+
+        def on_commit(payload: dict[str, Any]) -> str:
+            action = upsert_result_texts(
+                test_id,
+                str(payload.get("fileName") or ""),
+                dict(payload.get("textMapping") or {}),
+                source_path=str(payload.get("sourcePath") or ""),
+                warped_path=str(payload.get("warpedPath") or ""),
+                student_id=str(payload.get("studentId") or "") or None,
+            )
+            clear_step3_faint_entry(test_id, str(payload.get("fileName") or ""))
+            clear_step3_failed_entry(test_id, str(payload.get("fileName") or ""))
+            self.log.appendPlainText(
+                f"  採用 {payload.get('fileName')}: {action}"
+            )
+            return action
+
+        dlg = OcrCompareDialog(
+            self,
+            fields=self._fields,
+            previews=previews,
+            on_commit=on_commit,
+        )
+        dlg.exec()
+        n = dlg.committed_count()
+        self.log.appendPlainText(f"--- 比較採用完了: {n} 件 ---")
+        self.status_label.setText(f"比較採用 {n} 件 — 一覧を更新しました")
+        if self._scanned:
+            self._scan_folder()
 
     def _open_manual_warp_for_row(self, row_idx: int) -> None:
         if not self.app.require_active_test():

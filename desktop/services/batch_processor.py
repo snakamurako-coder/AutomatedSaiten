@@ -395,6 +395,63 @@ def run_ocr_for_manual_warp_entries(
     }
 
 
+def run_ocr_preview_for_entries(
+    test_id: str,
+    entries: list[dict[str, Any]],
+    on_progress: ProgressCallback | None = None,
+) -> dict[str, Any]:
+    """補正画像を OCR して旧テキストと比較用プレビューを返す（DB 非書き込み）。"""
+    from models.test_repo import get_result_by_file_name
+
+    fields = get_answer_fields(test_id)
+    if not fields:
+        raise ValueError("記述欄が設定されていません。")
+    use_id_mark = get_use_id_mark(test_id)
+    total = len(entries)
+    previews: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+
+    for idx, entry in enumerate(entries, start=1):
+        file_name = str(entry.get("fileName") or entry.get("name") or "")
+        if on_progress:
+            on_progress(idx, total, file_name)
+        warped_path = str(entry.get("warpedPath") or "").strip()
+        source_path = str(entry.get("sourcePath") or entry.get("path") or "")
+        try:
+            if not warped_path:
+                found = find_warped_for_original(test_id, file_name)
+                warped_path = found or ""
+            if not warped_path:
+                raise ValueError("補正画像がありません。")
+            warped_bgr = _load_warped_bgr(warped_path)
+            student_id = ""
+            if use_id_mark:
+                cfg = load_config()
+                orientation = cfg.get("default_orientation", "landscape")
+                student_id = detect_omr_id(warped_bgr, orientation)
+            new_texts = run_ocr_on_warped_image(warped_bgr, fields)
+            existing = get_result_by_file_name(test_id, file_name)
+            old_texts = dict((existing or {}).get("textMapping") or {})
+            if existing and not student_id:
+                student_id = str(existing.get("studentId") or "")
+            previews.append(
+                {
+                    "fileName": file_name,
+                    "sourcePath": source_path
+                    or str((existing or {}).get("sourcePath") or ""),
+                    "warpedPath": warped_path,
+                    "studentId": student_id,
+                    "oldTexts": old_texts,
+                    "newTexts": new_texts,
+                    "hasExisting": existing is not None,
+                }
+            )
+        except Exception as e:
+            errors.append({"fileName": file_name, "error": str(e)})
+
+    return {"previews": previews, "errors": errors}
+
+
 def run_faint_precheck(
     test_id: str,
     items: list[dict[str, Any]],

@@ -229,7 +229,11 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
                 "queueItem": queue_item,
                 "faint": faint or None,
                 "warpedPath": warped
+                or ((result or {}).get("warpedPath") if result else "")
                 or ((faint or {}).get("warpedPath") if faint else "")
+                or "",
+                "sourcePath": (result or {}).get("sourcePath")
+                or fmeta.get("path")
                 or "",
             }
         )

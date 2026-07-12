@@ -104,6 +104,7 @@ class FaintReviewDialog(QDialog):
         self._preview_bgr: np.ndarray | None = None
         self._pending_ocr: list[dict[str, Any]] = []
         self._highlight_id = ""
+        self._did_flush_ocr = False
         self.finished.connect(self._flush_pending_ocr)
 
         root = QVBoxLayout(self)
@@ -154,8 +155,12 @@ class FaintReviewDialog(QDialog):
         self._next_btn.clicked.connect(self._go_next)
         btns.addWidget(self._next_btn)
         btns.addStretch()
+        save_only = QPushButton("強調を保存して次へ")
+        save_only.setToolTip("強調画像だけ保存し、OCR は行わない")
+        save_only.clicked.connect(self._save_and_advance)
+        btns.addWidget(save_only)
         ocr_plain = QPushButton("このまま OCR")
-        ocr_plain.setToolTip("強調せず現在の補正画像で OCR")
+        ocr_plain.setToolTip("強調せず現在の補正画像で OCR（比較画面へ）")
         ocr_plain.clicked.connect(lambda: self._run_ocr(enhance=False))
         btns.addWidget(ocr_plain)
         save_ocr = QPushButton("強調を保存して OCR")
@@ -286,11 +291,23 @@ class FaintReviewDialog(QDialog):
         imwrite_bgr(warped_path, self._preview_bgr, quality=90)
         return str(warped_path.resolve())
 
+    def did_flush_ocr(self) -> bool:
+        return self._did_flush_ocr
+
+    def _save_and_advance(self) -> None:
+        entry = self._current()
+        if entry is None or self._preview_bgr is None:
+            return
+        warped = self._save_enhanced(entry)
+        entry["warpedPath"] = warped
+        self._advance_after_queue()
+
     def _flush_pending_ocr(self, _result: int = 0) -> None:
         if not self._pending_ocr or not self._on_ocr:
             return
         payload = list(self._pending_ocr)
         self._pending_ocr = []
+        self._did_flush_ocr = True
         self._on_ocr(payload)
 
     def _advance_after_queue(self) -> None:

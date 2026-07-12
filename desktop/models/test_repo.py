@@ -547,6 +547,88 @@ def rewrite_field_texts(
     return updated
 
 
+def upsert_result_texts(
+    test_id: str,
+    file_name: str,
+    text_mapping: dict[str, str],
+    *,
+    source_path: str = "",
+    warped_path: str = "",
+    student_id: str | None = None,
+) -> str:
+    """texts（とパス類）だけ更新し、既存の judgments / scores は保持する。
+
+    行が無い場合は INSERT（判定・得点は空）。戻り値: inserted / updated。
+    """
+    file_name = str(file_name or "").strip()
+    if not file_name:
+        raise ValueError("ファイル名が空です。")
+    texts_json = json.dumps(text_mapping or {}, ensure_ascii=False)
+    now = _now()
+
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT id, student_id, source_path, warped_path, name, "
+            "judgments_json, scores_json FROM results "
+            "WHERE test_id = ? AND file_name = ?",
+            (test_id, file_name),
+        ).fetchone()
+        if existing:
+            sid = (
+                student_id
+                if student_id is not None
+                else (existing["student_id"] or "")
+            )
+            src = source_path or (existing["source_path"] or "")
+            warp = warped_path or (existing["warped_path"] or "")
+            conn.execute(
+                """
+                UPDATE results SET
+                    student_id = ?, source_path = ?, warped_path = ?,
+                    texts_json = ?
+                WHERE id = ?
+                """,
+                (sid or "", src, warp, texts_json, existing["id"]),
+            )
+            touch_progress_conn(conn, test_id, 3, "テキスト化中")
+            conn.commit()
+            return "updated"
+        conn.execute(
+            """
+            INSERT INTO results(
+                test_id, student_id, file_name, source_path, warped_path, name,
+                texts_json, judgments_json, scores_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                test_id,
+                student_id or "",
+                file_name,
+                source_path or "",
+                warped_path or "",
+                "",
+                texts_json,
+                "{}",
+                "{}",
+                now,
+            ),
+        )
+        touch_progress_conn(conn, test_id, 3, "テキスト化中")
+        conn.commit()
+        return "inserted"
+
+
+def get_result_by_file_name(test_id: str, file_name: str) -> dict[str, Any] | None:
+    """normalize 後のファイル名で 1 件取得。無ければ None。"""
+    key = normalize_file_name(file_name)
+    if not key:
+        return None
+    for row in get_all_results(test_id):
+        if normalize_file_name(row.get("fileName") or "") == key:
+            return row
+    return None
+
+
 def upsert_result_row(
     test_id: str,
     file_name: str,
