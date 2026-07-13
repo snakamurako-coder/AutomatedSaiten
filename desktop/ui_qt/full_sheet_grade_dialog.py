@@ -1,13 +1,15 @@
-"""一枚全容採点ダイアログ — 補正全画像上で全記述欄を採点。"""
+"""一枚全容採点ダイアログ — 補正全画像上で全記述欄を採点・シート注釈編集。"""
 
 from __future__ import annotations
 
 import copy
 from typing import Any
 
+from PIL import Image
 from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QDialog,
     QHBoxLayout,
@@ -20,19 +22,48 @@ from PySide6.QtWidgets import (
 
 from models.domain_repo import calculate_domain_scores
 from models.grading_status import PENDING_JUDGMENT, normalize_judgment
+from models.ink_repo import (
+    SHEET_FIELD_ID,
+    field_local_ink_to_warped,
+    get_ink_strokes,
+    save_ink_strokes,
+)
 from models.output_repo import get_feedback_style
+from models.text_annotation_repo import (
+    field_local_text_to_warped,
+    get_text_annotations,
+    save_text_annotations,
+)
 from models.test_repo import update_results_field_grades
 from services.compositor import (
     REGION_FILL_ALPHA,
     REGION_FILL_ALPHA_SELECTED,
     REGION_STROKE_NORMAL,
     REGION_STROKE_SELECTED,
+    bgr_to_rgba_image,
+    render_ink_layer,
+    render_text_annotation_layer,
 )
-from services.feedback_renderer import render_feedback_for_row
+from services.feedback_exporter import gather_row_render_data
+from services.feedback_renderer import render_feedback_overlay_layer
 from services.image_loader import imread_bgr
 from ui_qt.crop_widgets import ZoomControls
-from ui_qt.helpers import bgr_to_qpixmap, pil_to_qpixmap
+from ui_qt.floating_palette.palette_prefs import load_palette_prefs
 from ui_qt.style import COLORS
+from ui_qt.stylus_overlay import (
+    DEFAULT_BASE_WIDTH,
+    DEFAULT_INK_COLOR,
+    TOOL_ERASER,
+    TOOL_NONE,
+    TOOL_PEN,
+    TOOL_TEXT,
+    CropInkImageStack,
+)
+
+MODE_GRADE = "grade"
+MODE_PEN = "pen"
+MODE_ERASER = "eraser"
+MODE_TEXT = "text"
 
 
 def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
@@ -53,55 +84,49 @@ def _fill_color(stroke: str, alpha: float) -> QColor:
     return c
 
 
-class _SheetCanvas(QWidget):
-    """補正画像（または個票合成）＋記述欄ヒット。"""
+class _FieldHitOverlay(QWidget):
+    """採点モード用の透明ヒット＋欄枠。"""
 
     fieldClicked = Signal(str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._pixmap: QPixmap | None = None
         self._fields: list[dict[str, Any]] = []
         self._selected_id = ""
         self._show_outlines = True
         self._zoom = 1.0
-        self._native_w = 1
-        self._native_h = 1
+        self._hit_enabled = True
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, False)
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
+    def set_hit_enabled(self, enabled: bool) -> None:
+        self._hit_enabled = bool(enabled)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, not self._hit_enabled)
+        self.setCursor(
+            Qt.PointingHandCursor if self._hit_enabled else Qt.ArrowCursor
+        )
+
     def set_content(
         self,
-        pixmap: QPixmap,
         fields: list[dict[str, Any]],
         *,
         show_outlines: bool,
         selected_id: str = "",
         zoom: float = 1.0,
+        size: tuple[int, int] | None = None,
     ) -> None:
-        self._pixmap = pixmap
         self._fields = list(fields)
         self._show_outlines = bool(show_outlines)
         self._selected_id = str(selected_id or "")
         self._zoom = max(0.1, float(zoom))
-        self._native_w = max(1, pixmap.width())
-        self._native_h = max(1, pixmap.height())
-        self._recompute_size()
-        self.update()
-
-    def set_zoom(self, zoom: float) -> None:
-        self._zoom = max(0.1, float(zoom))
-        self._recompute_size()
+        if size:
+            self.setFixedSize(max(1, size[0]), max(1, size[1]))
         self.update()
 
     def set_selected_id(self, field_id: str) -> None:
         self._selected_id = str(field_id or "")
         self.update()
-
-    def _recompute_size(self) -> None:
-        w = max(1, int(self._native_w * self._zoom))
-        h = max(1, int(self._native_h * self._zoom))
-        self.setFixedSize(w, h)
 
     def _field_rect_disp(self, field: dict[str, Any]) -> QRect:
         x = int(float(field.get("x") or 0) * self._zoom)
@@ -111,15 +136,9 @@ class _SheetCanvas(QWidget):
         return QRect(x, y, w, h)
 
     def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(COLORS["sidebar"]))
-        if self._pixmap is None:
-            painter.setPen(QColor(COLORS["text_secondary"]))
-            painter.drawText(self.rect(), Qt.AlignCenter, "画像なし")
+        if not self._show_outlines and not self._selected_id:
             return
-        painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        painter.drawPixmap(self.rect(), self._pixmap)
-
+        painter = QPainter(self)
         for f in self._fields:
             fid = str(f.get("id") or "")
             rect = self._field_rect_disp(f)
@@ -154,7 +173,7 @@ class _SheetCanvas(QWidget):
                 )
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
-        if event.button() != Qt.LeftButton:
+        if not self._hit_enabled or event.button() != Qt.LeftButton:
             return
         pos = event.position().toPoint()
         hit = ""
@@ -166,7 +185,7 @@ class _SheetCanvas(QWidget):
 
 
 class FullSheetGradeDialog(QDialog):
-    """選択答案の補正全画像で全記述欄を採点する。"""
+    """選択答案の補正全画像で全記述欄を採点し、シート注釈を編集する。"""
 
     def __init__(
         self,
@@ -200,6 +219,7 @@ class FullSheetGradeDialog(QDialog):
         self._scores = dict(self._row.get("scores") or {})
         self._show_outlines = True
         self._show_marks = True
+        self._tool_mode = MODE_GRADE
         self._palette_key: str | None = None
         self._selected_field_id = str(initial_field_id or "").strip()
         if self._selected_field_id and not any(
@@ -210,11 +230,17 @@ class FullSheetGradeDialog(QDialog):
             self._selected_field_id = str(self._fields[0].get("id") or "")
 
         self._feedback_style = get_feedback_style()
-        self._base_pixmap: QPixmap | None = None
-        self._marked_pixmap: QPixmap | None = None
         self._dirty_grades = False
+        self._result_id = int(self._row.get("id") or 0)
+        self._stack: CropInkImageStack | None = None
+        self._workspace: QWidget | None = None
+        self._hit: _FieldHitOverlay | None = None
+        self._base_bgr = imread_bgr(self._warped_path)
 
-        self._load_base_image()
+        prefs = load_palette_prefs()
+        self._brush_color = str(prefs.get("last_color") or DEFAULT_INK_COLOR)
+        self._brush_width = float(prefs.get("last_width") or DEFAULT_BASE_WIDTH)
+        self._brush_alpha = float(prefs.get("last_alpha") or 1.0)
 
         root = QVBoxLayout(self)
         root.setSpacing(8)
@@ -237,17 +263,35 @@ class FullSheetGradeDialog(QDialog):
         header.addWidget(self._chk_marks)
         root.addLayout(header)
 
+        tools = QHBoxLayout()
+        tools.addWidget(QLabel("ツール:"))
+        self._tool_group = QButtonGroup(self)
+        self._tool_group.setExclusive(True)
+        self._tool_btns: dict[str, QPushButton] = {}
+        for key, label in (
+            (MODE_GRADE, "採点"),
+            (MODE_PEN, "ペン"),
+            (MODE_ERASER, "消しゴム"),
+            (MODE_TEXT, "テキスト"),
+        ):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setChecked(key == MODE_GRADE)
+            btn.clicked.connect(lambda _c=False, k=key: self._set_tool_mode(k))
+            self._tool_group.addButton(btn)
+            self._tool_btns[key] = btn
+            tools.addWidget(btn)
+        tools.addStretch()
+        root.addLayout(tools)
+
         self._zoom = ZoomControls(min_pct=10, max_pct=200, value=40)
         self._zoom.connect_zoom_changed(self._on_zoom_changed)
         root.addWidget(self._zoom)
 
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(False)
-        scroll.setAlignment(Qt.AlignCenter)
-        self._canvas = _SheetCanvas()
-        self._canvas.fieldClicked.connect(self._on_field_clicked)
-        scroll.setWidget(self._canvas)
-        root.addWidget(scroll, 1)
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(False)
+        self._scroll.setAlignment(Qt.AlignCenter)
+        root.addWidget(self._scroll, 1)
 
         info = QHBoxLayout()
         self._field_label = QLabel("")
@@ -260,7 +304,7 @@ class FullSheetGradeDialog(QDialog):
         root.addLayout(info)
 
         hint = QLabel(
-            "回答欄を選ぶ → 配点に応じた判定リストから ○／△(点)／×／? を選ぶと、その場で保存されます。"
+            "採点: 回答欄を選んで判定を押す　／　ペン・消しゴム・テキスト: 答案全体レイヤー（欄またぎ可）"
         )
         hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
         root.addWidget(hint)
@@ -276,18 +320,201 @@ class FullSheetGradeDialog(QDialog):
         btns.addWidget(close_btn)
         root.addLayout(btns)
 
+        self._rebuild_workspace()
         self._rebuild_palette_buttons()
         self._highlight_current_grade()
         self._refresh_info()
-        self._refresh_canvas()
+        self._apply_tool_mode()
 
-    def _load_base_image(self) -> None:
-        bgr = imread_bgr(self._warped_path)
-        if bgr is None:
-            self._base_pixmap = QPixmap(400, 300)
-            self._base_pixmap.fill(QColor(COLORS["surface"]))
+    def _load_sheet_strokes(self) -> list[dict[str, Any]]:
+        return get_ink_strokes(self._test_id, self._result_id, SHEET_FIELD_ID)
+
+    def _load_sheet_annotations(self) -> list[dict[str, Any]]:
+        boxes = get_text_annotations(self._test_id, self._result_id, SHEET_FIELD_ID)
+        out = []
+        for b in boxes:
+            item = dict(b)
+            item.pop("source", None)
+            out.append(item)
+        return out
+
+    def _field_underlay_ink(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for f in self._fields:
+            fid = str(f.get("id") or "")
+            if not fid:
+                continue
+            local = get_ink_strokes(self._test_id, self._result_id, fid)
+            out.extend(field_local_ink_to_warped(local, f))
+        return out
+
+    def _field_underlay_text(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for f in self._fields:
+            fid = str(f.get("id") or "")
+            if not fid:
+                continue
+            local = get_text_annotations(self._test_id, self._result_id, fid)
+            out.extend(field_local_text_to_warped(local, f))
+        return out
+
+    def _compose_display_pil(self) -> Image.Image:
+        if self._base_bgr is None:
+            return Image.new("RGB", (400, 300), (240, 240, 240))
+        rgba = bgr_to_rgba_image(self._base_bgr)
+        if self._show_marks:
+            try:
+                self._row["judgments"] = dict(self._judgments)
+                self._row["scores"] = dict(self._scores)
+                data = gather_row_render_data(self._test_id, self._row)
+                payload = data["payload"]
+                mark_layer = render_feedback_overlay_layer(
+                    rgba.size,
+                    payload["fields"],
+                    payload["outputSlots"],
+                    payload["fieldMarks"],
+                    payload["totals"],
+                    data["style"],
+                )
+                rgba = Image.alpha_composite(rgba, mark_layer)
+            except Exception:
+                pass
+        field_ink = self._field_underlay_ink()
+        if field_ink:
+            rgba = Image.alpha_composite(
+                rgba, render_ink_layer(rgba.size, field_ink, scale=1.0)
+            )
+        field_tb = self._field_underlay_text()
+        if field_tb:
+            rgba = Image.alpha_composite(
+                rgba, render_text_annotation_layer(rgba.size, field_tb, scale=1.0)
+            )
+        return rgba.convert("RGB")
+
+    def _rebuild_workspace(self) -> None:
+        zoom = self._zoom.zoom_value() / 100.0
+        pil = self._compose_display_pil()
+        sheet_strokes = self._load_sheet_strokes()
+        sheet_ann = self._load_sheet_annotations()
+
+        self._stack = CropInkImageStack(
+            pil_image=pil,
+            field_id=SHEET_FIELD_ID,
+            result_id=self._result_id,
+            strokes=sheet_strokes,
+            annotations=sheet_ann,
+            zoom=zoom,
+            on_strokes_changed=self._on_sheet_strokes_changed,
+            on_annotations_changed=self._on_sheet_annotations_changed,
+        )
+        self._stack.set_brush(self._brush_color, self._brush_width, self._brush_alpha)
+
+        self._workspace = QWidget()
+        self._workspace.setFixedSize(self._stack.size())
+        self._stack.setParent(self._workspace)
+        self._stack.move(0, 0)
+
+        self._hit = _FieldHitOverlay(self._workspace)
+        self._hit.setGeometry(0, 0, self._workspace.width(), self._workspace.height())
+        self._hit.fieldClicked.connect(self._on_field_clicked)
+        self._hit.raise_()
+        self._refresh_hit_overlay()
+
+        self._scroll.setWidget(self._workspace)
+
+    def _refresh_display_image_only(self) -> None:
+        """判定変更時など、下敷き画像だけ差し替え（シート編集状態は維持）。"""
+        if self._stack is None:
+            self._rebuild_workspace()
             return
-        self._base_pixmap = bgr_to_qpixmap(bgr)
+        pil = self._compose_display_pil()
+        zoom = self._zoom.zoom_value() / 100.0
+        # スタック再生成（シートストロークは現在のオーバーレイから）
+        sheet_strokes = self._stack.ink_overlay.strokes()
+        sheet_ann = self._stack.text_layer.annotations()
+        save_ink_strokes(
+            self._test_id, self._result_id, SHEET_FIELD_ID, sheet_strokes
+        )
+        save_text_annotations(
+            self._test_id, self._result_id, SHEET_FIELD_ID, sheet_ann
+        )
+        old_mode = self._tool_mode
+        self._rebuild_workspace()
+        self._tool_mode = old_mode
+        self._apply_tool_mode()
+
+    def _refresh_hit_overlay(self) -> None:
+        if self._hit is None or self._workspace is None:
+            return
+        zoom = self._zoom.zoom_value() / 100.0
+        self._hit.set_content(
+            self._fields_for_hit(),
+            show_outlines=self._show_outlines,
+            selected_id=self._selected_field_id,
+            zoom=zoom,
+            size=(self._workspace.width(), self._workspace.height()),
+        )
+        self._hit.setGeometry(0, 0, self._workspace.width(), self._workspace.height())
+        self._hit.raise_()
+
+    def _fields_for_hit(self) -> list[dict[str, Any]]:
+        out: list[dict[str, Any]] = []
+        for f in self._fields:
+            item = dict(f)
+            fid = str(f.get("id") or "")
+            item["_judgment"] = normalize_judgment(self._judgments.get(fid)) or ""
+            out.append(item)
+        return out
+
+    def _on_sheet_strokes_changed(self, strokes: list[dict[str, Any]]) -> None:
+        try:
+            save_ink_strokes(
+                self._test_id, self._result_id, SHEET_FIELD_ID, strokes
+            )
+        except Exception as e:
+            self._ocr_label.setText(f"手書き保存失敗: {e}")
+
+    def _on_sheet_annotations_changed(self, items: list[dict[str, Any]]) -> None:
+        try:
+            save_text_annotations(
+                self._test_id, self._result_id, SHEET_FIELD_ID, items
+            )
+        except Exception as e:
+            self._ocr_label.setText(f"TB保存失敗: {e}")
+
+    def _set_tool_mode(self, mode: str) -> None:
+        self._tool_mode = mode
+        for k, btn in self._tool_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(k == mode)
+            btn.blockSignals(False)
+        self._apply_tool_mode()
+
+    def _apply_tool_mode(self) -> None:
+        if self._stack is None or self._hit is None:
+            return
+        grade = self._tool_mode == MODE_GRADE
+        self._hit.set_hit_enabled(grade)
+        self._hit.raise_()
+        if grade:
+            self._stack.set_tool_mode(TOOL_NONE)
+            self._stack.ink_overlay.set_drawing_enabled(False)
+            self._stack.text_layer.set_placement_mode(False)
+            self._stack.text_layer.set_text_tool_mode(False)
+        elif self._tool_mode == MODE_PEN:
+            self._stack.set_tool_mode(TOOL_PEN)
+            self._stack.ink_overlay.set_drawing_enabled(True)
+        elif self._tool_mode == MODE_ERASER:
+            self._stack.set_tool_mode(TOOL_ERASER)
+            self._stack.ink_overlay.set_drawing_enabled(True)
+        elif self._tool_mode == MODE_TEXT:
+            self._stack.set_tool_mode(TOOL_TEXT)
+            self._stack.ink_overlay.set_drawing_enabled(False)
+            self._stack.text_layer.set_placement_mode(True)
+            self._stack.text_layer.set_text_tool_mode(True)
+        # パレットは採点時のみ有効
+        for btn in self._palette_btns.values():
+            btn.setEnabled(grade and bool(self._selected_field_id))
 
     def _field_max_score(self, field_id: str | None = None) -> int:
         fid = field_id or self._selected_field_id
@@ -364,7 +591,9 @@ class FullSheetGradeDialog(QDialog):
             btn.setFixedHeight(36)
             btn.setMinimumWidth(44)
             btn.setCursor(Qt.PointingHandCursor)
-            btn.setEnabled(bool(self._selected_field_id))
+            btn.setEnabled(
+                self._tool_mode == MODE_GRADE and bool(self._selected_field_id)
+            )
             btn.setStyleSheet(self._btn_style(key, active=False))
             btn.clicked.connect(lambda _c=False, k=key: self._on_palette_clicked(k))
             self._palette_btns[key] = btn
@@ -381,8 +610,7 @@ class FullSheetGradeDialog(QDialog):
             btn.setStyleSheet(self._btn_style(k, active=k == self._palette_key))
 
     def _on_palette_clicked(self, key: str) -> None:
-        if not self._selected_field_id:
-            self._ocr_label.setText("先に回答欄を選択してください。")
+        if self._tool_mode != MODE_GRADE or not self._selected_field_id:
             return
         spec = next((s for s in self._palette_specs() if s[0] == key), None)
         if spec is None:
@@ -396,53 +624,14 @@ class FullSheetGradeDialog(QDialog):
 
     def _on_show_outlines_toggled(self, checked: bool) -> None:
         self._show_outlines = bool(checked)
-        self._refresh_canvas()
+        self._refresh_hit_overlay()
 
     def _on_show_marks_toggled(self, checked: bool) -> None:
         self._show_marks = bool(checked)
-        if self._show_marks:
-            self._ensure_marked_pixmap()
-        self._refresh_canvas()
+        self._refresh_display_image_only()
 
     def _on_zoom_changed(self) -> None:
-        self._canvas.set_zoom(self._zoom.zoom_value() / 100.0)
-
-    def _fields_for_canvas(self) -> list[dict[str, Any]]:
-        out: list[dict[str, Any]] = []
-        for f in self._fields:
-            item = dict(f)
-            fid = str(f.get("id") or "")
-            item["_judgment"] = normalize_judgment(self._judgments.get(fid)) or ""
-            out.append(item)
-        return out
-
-    def _ensure_marked_pixmap(self) -> None:
-        self._row["judgments"] = dict(self._judgments)
-        self._row["scores"] = dict(self._scores)
-        try:
-            img = render_feedback_for_row(self._test_id, self._row)
-            self._marked_pixmap = pil_to_qpixmap(img)
-        except Exception as e:
-            self._marked_pixmap = self._base_pixmap
-            self._ocr_label.setText(f"個票合成に失敗: {e}")
-
-    def _refresh_canvas(self) -> None:
-        zoom = self._zoom.zoom_value() / 100.0
-        if self._show_marks:
-            if self._marked_pixmap is None:
-                self._ensure_marked_pixmap()
-            pm = self._marked_pixmap or self._base_pixmap
-        else:
-            pm = self._base_pixmap
-        if pm is None:
-            return
-        self._canvas.set_content(
-            pm,
-            self._fields_for_canvas(),
-            show_outlines=self._show_outlines,
-            selected_id=self._selected_field_id,
-            zoom=zoom,
-        )
+        self._refresh_display_image_only()
 
     def _refresh_info(self) -> None:
         fid = self._selected_field_id
@@ -462,12 +651,12 @@ class FullSheetGradeDialog(QDialog):
         self._ocr_label.setText(ocr)
 
     def _on_field_clicked(self, field_id: str) -> None:
-        # 欄選択のみ。判定はパレット操作で反映する。
         self._selected_field_id = field_id
         self._rebuild_palette_buttons()
         self._highlight_current_grade()
         self._refresh_info()
-        self._canvas.set_selected_id(field_id)
+        if self._hit is not None:
+            self._hit.set_selected_id(field_id)
 
     def _apply_judgment_to_field(
         self, field_id: str, judgment: str, score: int
@@ -500,10 +689,27 @@ class FullSheetGradeDialog(QDialog):
         self._dirty_grades = True
         self._refresh_info()
         if self._show_marks:
-            self._ensure_marked_pixmap()
-        self._refresh_canvas()
+            self._refresh_display_image_only()
+        else:
+            self._refresh_hit_overlay()
 
     def accept(self) -> None:
+        if self._stack is not None:
+            try:
+                save_ink_strokes(
+                    self._test_id,
+                    self._result_id,
+                    SHEET_FIELD_ID,
+                    self._stack.ink_overlay.strokes(),
+                )
+                save_text_annotations(
+                    self._test_id,
+                    self._result_id,
+                    SHEET_FIELD_ID,
+                    self._stack.text_layer.annotations(),
+                )
+            except Exception:
+                pass
         if self._dirty_grades:
             try:
                 calculate_domain_scores(self._test_id)
@@ -512,9 +718,4 @@ class FullSheetGradeDialog(QDialog):
         super().accept()
 
     def reject(self) -> None:
-        if self._dirty_grades:
-            try:
-                calculate_domain_scores(self._test_id)
-            except Exception:
-                pass
-        super().reject()
+        self.accept()

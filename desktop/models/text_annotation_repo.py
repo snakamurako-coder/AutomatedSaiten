@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from models.database import connect
+from models.ink_repo import SHEET_FIELD_ID, is_sheet_field_id
 
 TEXT_PALETTE_COLORS: tuple[str, ...] = (
     "#111827",
@@ -199,11 +200,17 @@ def collect_warped_text_annotations(
     result_id: int,
     fields: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """記述欄ローカル座標のテキストを補正画像座標へ変換。"""
+    """記述欄ローカル座標のテキストを補正画像座標へ変換。
+
+    末尾に答案全体レイヤー（__sheet__）を追記する。
+    """
     warped: list[dict[str, Any]] = []
     rid = int(result_id)
     for f in fields:
-        local = get_text_annotations(test_id, rid, f["id"])
+        fid = str(f.get("id") or "")
+        if not fid or is_sheet_field_id(fid):
+            continue
+        local = get_text_annotations(test_id, rid, fid)
         if not local:
             continue
         ox = float(f.get("x") or 0)
@@ -212,12 +219,102 @@ def collect_warped_text_annotations(
             warped.append(
                 {
                     **box,
-                    "fieldId": f["id"],
+                    "fieldId": fid,
                     "x": ox + float(box.get("x") or 0),
                     "y": oy + float(box.get("y") or 0),
                 }
             )
+    for box in get_text_annotations(test_id, rid, SHEET_FIELD_ID):
+        item = dict(box)
+        item["fieldId"] = SHEET_FIELD_ID
+        item["source"] = "sheet"
+        warped.append(item)
     return warped
+
+
+def _aabb_intersects(
+    ax: float, ay: float, aw: float, ah: float,
+    bx: float, by: float, bw: float, bh: float,
+) -> bool:
+    if aw <= 0 or ah <= 0 or bw <= 0 or bh <= 0:
+        return False
+    return ax < bx + bw and ax + aw > bx and ay < by + bh and ay + ah > by
+
+
+def project_sheet_text_to_field_local(
+    sheet_boxes: list[dict[str, Any]],
+    field: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """シートTBのうち記述欄と交差するものをローカル座標へ写す。
+
+    source='sheet' を付与。クロップでは削除のみ可。
+    """
+    ox = float(field.get("x") or 0)
+    oy = float(field.get("y") or 0)
+    fw = float(field.get("width") or 0)
+    fh = float(field.get("height") or 0)
+    out: list[dict[str, Any]] = []
+    for box in sheet_boxes or []:
+        bx = float(box.get("x") or 0)
+        by = float(box.get("y") or 0)
+        bw = float(box.get("width") or 0)
+        bh = float(box.get("height") or 0)
+        if not _aabb_intersects(bx, by, bw, bh, ox, oy, fw, fh):
+            continue
+        item = dict(box)
+        item["x"] = bx - ox
+        item["y"] = by - oy
+        item["source"] = "sheet"
+        item["fieldId"] = SHEET_FIELD_ID
+        out.append(item)
+    return out
+
+
+def field_local_text_to_warped(
+    local_boxes: list[dict[str, Any]],
+    field: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """欄ローカルTBを補正画像座標へ（全容下敷き用）。"""
+    ox = float(field.get("x") or 0)
+    oy = float(field.get("y") or 0)
+    fid = str(field.get("id") or "")
+    out: list[dict[str, Any]] = []
+    for box in local_boxes or []:
+        if str(box.get("source") or "") == "sheet":
+            continue
+        item = dict(box)
+        item["fieldId"] = fid
+        item["x"] = ox + float(box.get("x") or 0)
+        item["y"] = oy + float(box.get("y") or 0)
+        out.append(item)
+    return out
+
+
+def strip_sheet_source_for_save(annotations: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """永続化用に source=sheet の項目を除き、ランタイムフラグを落とす。"""
+    out: list[dict[str, Any]] = []
+    for box in annotations or []:
+        if str(box.get("source") or "") == "sheet":
+            continue
+        item = dict(box)
+        item.pop("source", None)
+        out.append(item)
+    return out
+
+
+def sheet_boxes_without_ids(
+    sheet_boxes: list[dict[str, Any]], remove_ids: set[str]
+) -> list[dict[str, Any]]:
+    """シートTB一覧から指定 id を除いたコピー。"""
+    rid = {str(i) for i in remove_ids}
+    out: list[dict[str, Any]] = []
+    for box in sheet_boxes or []:
+        if str(box.get("id") or "") in rid:
+            continue
+        item = dict(box)
+        item.pop("source", None)
+        out.append(item)
+    return out
 
 
 def iter_text_annotations_for_test(

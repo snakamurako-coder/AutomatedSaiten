@@ -626,7 +626,7 @@ class PaletteController:
 
             h.warn(self._main, "消去", "対象の画像をクリックして選択してください")
             return
-        if not stack.text_layer.annotations():
+        if not stack.text_layer.field_local_annotations():
             from ui_qt import helpers as h
 
             h.warn(self._main, "消去", "選択中の画像にテキストボックスがありません")

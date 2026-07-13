@@ -173,6 +173,7 @@ class InkOverlayWidget(QWidget):
         self._display_w = self._native_w
         self._display_h = self._native_h
         self._strokes: list[dict[str, Any]] = []
+        self._bg_strokes: list[dict[str, Any]] = []
         self._current: dict[str, Any] | None = None
         self._palm_rejection = True
         self._show_ink = True
@@ -209,6 +210,19 @@ class InkOverlayWidget(QWidget):
 
     def set_drawing_enabled(self, enabled: bool) -> None:
         self._drawing_enabled = bool(enabled)
+        if not self._drawing_enabled:
+            self._cancel_current_stroke()
+            self._pen_active = False
+            self._eraser_active = False
+            self._finish_eraser_session()
+
+    def set_background_strokes(self, strokes: list[dict[str, Any]] | None) -> None:
+        """表示専用ストローク（消しゴム・全消去の対象外）。"""
+        self._bg_strokes = list(strokes or [])
+        self.update()
+
+    def background_strokes(self) -> list[dict[str, Any]]:
+        return list(self._bg_strokes)
 
     def set_eraser_mode(self, mode: str) -> None:
         m = str(mode or ERASER_MODE_PIXEL).strip().lower()
@@ -229,6 +243,8 @@ class InkOverlayWidget(QWidget):
         return True
 
     def _stylus_may_draw(self) -> bool:
+        if not self._drawing_enabled:
+            return False
         if self._palm_rejection:
             return self._tool_mode != TOOL_ERASER
         if _is_text_like_tool(self._tool_mode):
@@ -238,6 +254,8 @@ class InkOverlayWidget(QWidget):
         return self._tool_mode in (TOOL_PEN, TOOL_NONE)
 
     def _pointer_may_draw(self) -> bool:
+        if not self._drawing_enabled:
+            return False
         if _is_text_like_tool(self._tool_mode):
             return False
         if self._palm_rejection:
@@ -468,6 +486,8 @@ class InkOverlayWidget(QWidget):
             return
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
+        for stroke in self._bg_strokes:
+            self._paint_stroke(painter, stroke)
         all_strokes = list(self._strokes)
         if self._current:
             all_strokes.append(self._current)
@@ -504,6 +524,8 @@ class InkOverlayWidget(QWidget):
             painter.drawLine(QPointF(ax, ay), QPointF(bx, by))
 
     def _should_handle_tablet(self, event: QTabletEvent) -> bool:
+        if not self._drawing_enabled:
+            return False
         if not self._stylus_may_draw():
             return False
         if is_eraser_tablet_event(event):
@@ -519,11 +541,15 @@ class InkOverlayWidget(QWidget):
         return True
 
     def _should_draw_tablet(self, event: QTabletEvent) -> bool:
+        if not self._drawing_enabled:
+            return False
         if is_eraser_tablet_event(event) or self._software_eraser:
             return False
         return self._should_handle_tablet(event)
 
     def _should_erase_tablet(self, event: QTabletEvent) -> bool:
+        if not self._drawing_enabled:
+            return False
         if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
             return False
         if not self._stylus_may_draw() and not self._software_eraser:
@@ -531,6 +557,8 @@ class InkOverlayWidget(QWidget):
         return is_eraser_tablet_event(event) or self._eraser_active or self._software_eraser
 
     def _should_draw_mouse(self, event: QMouseEvent) -> bool:
+        if not self._drawing_enabled:
+            return False
         if is_eraser_mouse_event(event) or self._software_eraser:
             return False
         if _is_text_like_tool(self._tool_mode):
@@ -540,6 +568,8 @@ class InkOverlayWidget(QWidget):
         return True
 
     def _should_erase_mouse(self, event: QMouseEvent) -> bool:
+        if not self._drawing_enabled:
+            return False
         if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
             return False
         if self._palm_rejection and _is_stylus_synthesized_mouse(event):
@@ -776,10 +806,12 @@ class CropInkImageStack(QWidget):
         field_id: str,
         result_id: int = 0,
         strokes: list[dict[str, Any]] | None = None,
+        sheet_strokes: list[dict[str, Any]] | None = None,
         annotations: list[dict[str, Any]] | None = None,
         zoom: float = 1.0,
         on_strokes_changed: Callable[[list[dict[str, Any]]], None] | None = None,
         on_annotations_changed: Callable[[list[dict[str, Any]]], None] | None = None,
+        on_sheet_box_deleted: Callable[[str], None] | None = None,
         placement_meta: dict[str, Any] | None = None,
         parent: QWidget | None = None,
     ) -> None:
@@ -789,6 +821,7 @@ class CropInkImageStack(QWidget):
         self._placement_meta = copy.deepcopy(placement_meta) if isinstance(placement_meta, dict) else None
         self._on_strokes_changed = on_strokes_changed
         self._on_annotations_changed = on_annotations_changed
+        self._on_sheet_box_deleted = on_sheet_box_deleted
         self._palm_rejection = True
         self._show_ink = True
         self._show_text = True
@@ -822,6 +855,8 @@ class CropInkImageStack(QWidget):
         self.ink_overlay.set_display_size(pix.width(), pix.height())
         if strokes:
             self.ink_overlay.set_strokes(strokes)
+        if sheet_strokes:
+            self.ink_overlay.set_background_strokes(sheet_strokes)
         self.ink_overlay.strokes_changed.connect(self._emit_strokes_changed)
         self.ink_overlay.click_through.connect(self._on_ink_click_through)
         self.ink_overlay.set_before_draw_callback(self._before_ink_stroke)
@@ -835,6 +870,7 @@ class CropInkImageStack(QWidget):
             on_changed=self._emit_annotations_changed,
         )
         self.text_layer.set_display_size(pix.width(), pix.height())
+        self.text_layer.sheet_box_deleted.connect(self._emit_sheet_box_deleted)
         if self._placement_meta:
             self.text_layer.set_placement_meta(self._placement_meta)
 
@@ -1164,6 +1200,10 @@ class CropInkImageStack(QWidget):
     def _emit_annotations_changed(self, items: list[dict[str, Any]]) -> None:
         if self._on_annotations_changed:
             self._on_annotations_changed(items)
+
+    def _emit_sheet_box_deleted(self, box_id: str) -> None:
+        if self._on_sheet_box_deleted:
+            self._on_sheet_box_deleted(box_id)
 
     def set_palm_rejection(self, enabled: bool) -> None:
         self._palm_rejection = bool(enabled)

@@ -217,6 +217,9 @@ class TextBoxWidget(QFrame):
             data["style"] = resolve_text_style(data["style"])
         return data
 
+    def is_sheet_source(self) -> bool:
+        return str(self._box.get("source") or "") == "sheet"
+
     def _native_pt_to_display(self, pt: float) -> float:
         return max(6.0, float(pt) / self._scale)
 
@@ -340,6 +343,9 @@ class TextBoxWidget(QFrame):
         self._load_editor_content()
 
     def start_editing(self, *, caret_at_end: bool = False, record_undo: bool = True) -> None:
+        if self.is_sheet_source():
+            # シートTBはクロップ上では削除のみ（編集は全容画面）
+            return
         if not self._selected:
             self.selected.emit(self.box_id)
         if record_undo and not self._editing:
@@ -353,12 +359,16 @@ class TextBoxWidget(QFrame):
 
     def focus_caret_at_end(self) -> bool:
         """編集中のテキスト末尾へカーソルを移動してフォーカスする。"""
+        if self.is_sheet_source():
+            return False
         if not self._editing:
             self._set_editing_mode(True)
         return self._focus_editor_at_end()
 
     def prepare_speech_input(self) -> bool:
         """Windows 音声入力の直前に、末尾カーソルとエディタフォーカスを確実にする。"""
+        if self.is_sheet_source():
+            return False
         from ui_qt.speech.windows_voice_typing import focus_widget_for_voice_input
 
         if not self._selected:
@@ -568,8 +578,11 @@ class TextBoxWidget(QFrame):
         self._update_handles()
 
     def _update_handles(self) -> None:
-        show = self._selected and not self._editing and (
-            not self._preview_mode or self._preview_resize
+        show = (
+            self._selected
+            and not self._editing
+            and not self.is_sheet_source()
+            and (not self._preview_mode or self._preview_resize)
         )
         half = _HANDLE_SIZE // 2
         ox = _HANDLE_OVERHANG
@@ -891,6 +904,8 @@ class TextBoxWidget(QFrame):
         self._moving = False
 
     def _update_move_drag(self, global_pos: QPoint) -> None:
+        if self.is_sheet_source():
+            return
         if self._press_origin is None or self._editing:
             return
         if not self._press_moved:
@@ -922,6 +937,8 @@ class TextBoxWidget(QFrame):
         self._moving = False
 
     def _begin_resize(self, corner: str, global_pos: QPoint) -> None:
+        if self.is_sheet_source():
+            return
         if self._preview_mode and not self._preview_resize:
             return
         if not self._selected:

@@ -35,6 +35,7 @@ class TextBoxLayer(QWidget):
     selection_changed = Signal(object)  # box dict | None
     char_format_state_changed = Signal(dict)
     editing_finished = Signal()
+    sheet_box_deleted = Signal(str)  # sheet TB id removed from crop view
 
     def __init__(
         self,
@@ -278,27 +279,52 @@ class TextBoxLayer(QWidget):
         self.finish_all_editing()
         self._undo_begin()
         self._sync_annotations_from_widgets()
+        deleted = next(
+            (a for a in self._annotations if str(a.get("id") or "") == deleted_id),
+            None,
+        )
         self._annotations = [
             a for a in self._annotations if str(a.get("id") or "") != deleted_id
         ]
+        self._selected_id = None
+        self._rebuild_widgets(from_widgets=False)
+        if deleted is not None and str(deleted.get("source") or "") == "sheet":
+            self.sheet_box_deleted.emit(deleted_id)
+            self.selection_changed.emit(None)
+            self._undo_commit()
+            return
+        self._persist_annotations()
+        self.selection_changed.emit(None)
+        self._undo_commit()
+
+    def clear_all(self) -> None:
+        """欄ローカルのテキストボックスをすべて削除（シートTBは残す）。"""
+        self.finish_all_editing()
+        self._sync_annotations_from_widgets()
+        sheet = [
+            a for a in self._annotations if str(a.get("source") or "") == "sheet"
+        ]
+        local = [
+            a for a in self._annotations if str(a.get("source") or "") != "sheet"
+        ]
+        if not local and not self._widgets:
+            return
+        if not local and sheet:
+            # ローカルが無くシートのみ → 何もしない（全消去対象外）
+            return
+        self._undo_begin()
+        self._annotations = sheet
         self._selected_id = None
         self._rebuild_widgets(from_widgets=False)
         self._persist_annotations()
         self.selection_changed.emit(None)
         self._undo_commit()
 
-    def clear_all(self) -> None:
-        """画像上のテキストボックスをすべて削除。"""
-        if not self._annotations and not self._widgets:
-            return
-        self.finish_all_editing()
-        self._undo_begin()
-        self._annotations = []
-        self._selected_id = None
-        self._rebuild_widgets(from_widgets=False)
-        self._persist_annotations()
-        self.selection_changed.emit(None)
-        self._undo_commit()
+    def field_local_annotations(self) -> list[dict[str, Any]]:
+        """永続化用: シート由来を除いた注釈。"""
+        from models.text_annotation_repo import strip_sheet_source_for_save
+
+        return strip_sheet_source_for_save(self.annotations())
 
     def has_speech_place_pending(self) -> bool:
         return bool(self._speech_place_text)
@@ -600,9 +626,11 @@ class TextBoxLayer(QWidget):
         self._persist_annotations()
 
     def _persist_annotations(self) -> None:
+        from models.text_annotation_repo import strip_sheet_source_for_save
+
         self.annotations_changed.emit()
         if self._on_changed:
-            self._on_changed(copy.deepcopy(self._annotations))
+            self._on_changed(strip_sheet_source_for_save(self._annotations))
 
     def persist_annotations(self) -> None:
         self._sync_annotations_from_widgets()

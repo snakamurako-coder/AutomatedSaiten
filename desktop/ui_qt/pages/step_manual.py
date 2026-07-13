@@ -32,8 +32,19 @@ from models.grading_status import (
     field_grading_complete_map,
     normalize_judgment,
 )
-from models.ink_repo import get_ink_strokes_batch, save_ink_strokes
-from models.text_annotation_repo import get_text_annotations_batch, save_text_annotations
+from models.ink_repo import (
+    SHEET_FIELD_ID,
+    get_ink_strokes_batch,
+    project_sheet_ink_to_field_local,
+    save_ink_strokes,
+)
+from models.text_annotation_repo import (
+    get_text_annotations,
+    get_text_annotations_batch,
+    project_sheet_text_to_field_local,
+    save_text_annotations,
+    sheet_boxes_without_ids,
+)
 from models.output_repo import get_feedback_style
 from models.test_repo import (
     get_all_results,
@@ -776,9 +787,21 @@ class StepManualPage(QWidget):
             result_ids = [int(src["rowIndex"]) for src in rows if src.get("rowIndex")]
             ink_map = get_ink_strokes_batch(test_id, fid, result_ids) if test_id else {}
             text_map = get_text_annotations_batch(test_id, fid, result_ids) if test_id else {}
+            sheet_ink_map = (
+                get_ink_strokes_batch(test_id, SHEET_FIELD_ID, result_ids) if test_id else {}
+            )
+            sheet_text_map = (
+                get_text_annotations_batch(test_id, SHEET_FIELD_ID, result_ids)
+                if test_id
+                else {}
+            )
             self._items = []
             for cr, src in zip(crop_results, rows, strict=False):
                 rid = int(src["rowIndex"])
+                local_tb = text_map.get(rid, [])
+                sheet_tb = project_sheet_text_to_field_local(
+                    sheet_text_map.get(rid, []), field
+                )
                 self._items.append(
                     {
                         **cr,
@@ -786,7 +809,10 @@ class StepManualPage(QWidget):
                         "judgment": src["judgment"],
                         "score": src["score"],
                         "ink_strokes": ink_map.get(rid, []),
-                        "text_annotations": text_map.get(rid, []),
+                        "sheet_ink_strokes": project_sheet_ink_to_field_local(
+                            sheet_ink_map.get(rid, []), field
+                        ),
+                        "text_annotations": list(local_tb) + list(sheet_tb),
                     }
                 )
             self._sort_items()
@@ -819,11 +845,15 @@ class StepManualPage(QWidget):
         fid = self._selected_field_id() or ""
         if not test_id or not fid:
             return
-        from models.text_annotation_repo import get_text_annotations
-
+        field = next((f for f in self._fields if str(f.get("id")) == fid), None)
         for item in self._items:
             rid = int(item.get("result_id") or 0)
-            item["text_annotations"] = get_text_annotations(test_id, rid, fid)
+            local = get_text_annotations(test_id, rid, fid)
+            sheet = get_text_annotations(test_id, rid, SHEET_FIELD_ID)
+            sheet_tb = (
+                project_sheet_text_to_field_local(sheet, field) if field else []
+            )
+            item["text_annotations"] = list(local) + list(sheet_tb)
 
     def palette_save_annotations(
         self, result_id: int, field_id: str, items: list
@@ -838,7 +868,43 @@ class StepManualPage(QWidget):
             return
         for item in self._items:
             if int(item.get("result_id") or 0) == int(result_id):
-                item["text_annotations"] = list(items)
+                prev = item.get("text_annotations") or []
+                sheet = [a for a in prev if str(a.get("source") or "") == "sheet"]
+                item["text_annotations"] = list(items) + sheet
+                break
+
+    def _on_sheet_box_deleted(self, result_id: int, box_id: str) -> None:
+        test_id = self.app.active_test_id
+        bid = str(box_id or "").strip()
+        if not test_id or not bid:
+            return
+        try:
+            boxes = get_text_annotations(test_id, int(result_id), SHEET_FIELD_ID)
+            save_text_annotations(
+                test_id,
+                int(result_id),
+                SHEET_FIELD_ID,
+                sheet_boxes_without_ids(boxes, {bid}),
+            )
+        except Exception as e:
+            h.error(self, "シートTB削除エラー", str(e))
+            return
+        for stack in self._ink_stacks:
+            if int(stack.result_id) != int(result_id):
+                continue
+            anns = [
+                a
+                for a in stack.text_layer.annotations()
+                if str(a.get("id") or "") != bid
+            ]
+            stack.text_layer.set_annotations(anns)
+        for item in self._items:
+            if int(item.get("result_id") or 0) == int(result_id):
+                item["text_annotations"] = [
+                    a
+                    for a in (item.get("text_annotations") or [])
+                    if str(a.get("id") or "") != bid
+                ]
                 break
 
     def _apply_stylus_settings(self) -> None:
@@ -1229,12 +1295,16 @@ class StepManualPage(QWidget):
             field_id=fid,
             result_id=rid,
             strokes=item.get("ink_strokes") or [],
+            sheet_strokes=item.get("sheet_ink_strokes") or [],
             annotations=item.get("text_annotations") or [],
             zoom=zoom,
             placement_meta=placement_meta,
             on_strokes_changed=lambda s, rid=rid: self._save_ink_strokes(rid, s),
             on_annotations_changed=lambda s, rid=rid: self.palette_save_annotations(
                 rid, fid, s
+            ),
+            on_sheet_box_deleted=lambda bid, rid=rid: self._on_sheet_box_deleted(
+                rid, bid
             ),
         )
         ink_stack.image_clicked.connect(
