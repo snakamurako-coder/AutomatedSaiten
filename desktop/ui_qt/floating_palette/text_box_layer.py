@@ -566,6 +566,7 @@ class TextBoxLayer(QWidget):
             w.editing_started.connect(self._undo_begin)
             w.editing_committed.connect(self._undo_commit)
             w.char_format_state_changed.connect(self._on_widget_char_format_state)
+            w.delete_requested.connect(self._on_widget_delete_requested)
             w.set_selected(bid == self._selected_id)
             w.show()
             w.raise_()
@@ -585,6 +586,14 @@ class TextBoxLayer(QWidget):
     def _on_widget_editing_finished(self, _box_id: str) -> None:
         if not self.has_editing_focus():
             self.editing_finished.emit()
+
+    def _on_widget_delete_requested(self, box_id: str) -> None:
+        """編集中・空テキストで Del/BackSpace → ボックス削除。"""
+        bid = str(box_id or "").strip()
+        if not bid or bid not in self._widgets:
+            return
+        self.select_box(bid)
+        self.delete_selected()
 
     def _notify_changed(self) -> None:
         self._sync_annotations_from_widgets()

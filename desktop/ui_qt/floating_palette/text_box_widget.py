@@ -9,6 +9,7 @@ from PySide6.QtCore import QPoint, Qt, Signal, QTimer, QEvent
 from PySide6.QtGui import (
     QColor,
     QFont,
+    QKeyEvent,
     QMouseEvent,
     QPalette,
     QTextBlockFormat,
@@ -113,6 +114,7 @@ class TextBoxWidget(QFrame):
     editing_started = Signal()
     editing_committed = Signal()
     char_format_state_changed = Signal(dict)
+    delete_requested = Signal(str)
 
     def __init__(
         self,
@@ -492,7 +494,22 @@ class TextBoxWidget(QFrame):
     def eventFilter(self, watched, event) -> bool:  # noqa: N802
         if watched is self._editor and event.type() == QEvent.Type.FocusOut:
             QTimer.singleShot(0, self._check_editing_finished)
+        if (
+            watched is self._editor
+            and self._editing
+            and event.type() == QEvent.Type.KeyPress
+            and isinstance(event, QKeyEvent)
+        ):
+            key = event.key()
+            if key in (Qt.Key.Key_Backspace, Qt.Key.Key_Delete):
+                if self._editor_is_effectively_empty():
+                    self.delete_requested.emit(self.box_id)
+                    return True
         return super().eventFilter(watched, event)
+
+    def _editor_is_effectively_empty(self) -> bool:
+        """入力が一切ない（空白のみの空段落含む）とみなす。"""
+        return not str(self._editor.toPlainText() or "").strip()
 
     def _check_editing_finished(self) -> None:
         if self._suppress_focus_check or not self._editing:
