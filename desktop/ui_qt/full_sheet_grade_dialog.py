@@ -328,6 +328,9 @@ class FullSheetGradeDialog(QDialog):
         self._ocr_label.setWordWrap(True)
         self._ocr_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         info.addWidget(self._ocr_label, 1)
+        close_btn = QPushButton("閉じる")
+        close_btn.clicked.connect(self.accept)
+        info.addWidget(close_btn)
         root.addLayout(info)
 
         self._hint = QLabel(
@@ -341,13 +344,6 @@ class FullSheetGradeDialog(QDialog):
         self._palette_row.setContentsMargins(0, 0, 0, 0)
         self._palette_btns: dict[str, QPushButton] = {}
         root.addWidget(self._palette_frame)
-
-        btns = QHBoxLayout()
-        btns.addStretch()
-        close_btn = QPushButton("閉じる")
-        close_btn.clicked.connect(self.accept)
-        btns.addWidget(close_btn)
-        root.addLayout(btns)
 
         for key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
             sc = QShortcut(QKeySequence(key), self)
