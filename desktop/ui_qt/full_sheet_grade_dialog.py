@@ -245,7 +245,25 @@ class FullSheetGradeDialog(QDialog):
         sid = str(self._row.get("studentId") or "") or "—"
         self._title = QLabel(f"{name}  （生徒ID: {sid}）")
         self._title.setStyleSheet(f"font-weight: 600; color: {COLORS['text']};")
-        header.addWidget(self._title, 1)
+        header.addWidget(self._title, 0)
+
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._btn_grade = QPushButton("採点（判定・配点）")
+        self._btn_grade.setCheckable(True)
+        self._btn_grade.setChecked(True)
+        self._btn_grade.clicked.connect(lambda: self._set_tool_mode(MODE_GRADE))
+        self._mode_group.addButton(self._btn_grade)
+        header.addWidget(self._btn_grade)
+        self._btn_draw = QPushButton("描画ツール")
+        self._btn_draw.setCheckable(True)
+        self._btn_draw.setToolTip(
+            "おなじみのフローティング描画パレットを表示し、全画像上で手書き・TBを編集します"
+        )
+        self._btn_draw.clicked.connect(lambda: self._set_tool_mode(MODE_DRAW))
+        self._mode_group.addButton(self._btn_draw)
+        header.addWidget(self._btn_draw)
+        header.addStretch(1)
 
         self._chk_outlines = QCheckBox("欄枠を表示")
         self._chk_outlines.setChecked(True)
@@ -258,30 +276,44 @@ class FullSheetGradeDialog(QDialog):
         header.addWidget(self._chk_marks)
         root.addLayout(header)
 
-        tools = QHBoxLayout()
-        tools.addWidget(QLabel("ツール:"))
-        self._mode_group = QButtonGroup(self)
-        self._mode_group.setExclusive(True)
-        self._btn_grade = QPushButton("採点（判定・配点）")
-        self._btn_grade.setCheckable(True)
-        self._btn_grade.setChecked(True)
-        self._btn_grade.clicked.connect(lambda: self._set_tool_mode(MODE_GRADE))
-        self._mode_group.addButton(self._btn_grade)
-        tools.addWidget(self._btn_grade)
-        self._btn_draw = QPushButton("描画ツール")
-        self._btn_draw.setCheckable(True)
-        self._btn_draw.setToolTip(
-            "おなじみのフローティング描画パレットを表示し、全画像上で手書き・TBを編集します"
-        )
-        self._btn_draw.clicked.connect(lambda: self._set_tool_mode(MODE_DRAW))
-        self._mode_group.addButton(self._btn_draw)
-        tools.addWidget(self._btn_draw)
-        tools.addStretch()
-        root.addLayout(tools)
+        zoom_row = QHBoxLayout()
+        self._fit_group = QButtonGroup(self)
+        self._fit_group.setExclusive(True)
+        self._fit_mode: str | None = None
+        self._suppress_fit_clear = False
+        self._fit_btns: dict[str, QPushButton] = {}
+        for key, label, tip in (
+            (
+                "width",
+                "幅基準最大化",
+                "縦は見切れてもよいので、横幅が見切れない最大倍率",
+            ),
+            (
+                "height",
+                "高さ基準最大化",
+                "横は見切れてもよいので、高さが見切れない最大倍率",
+            ),
+            (
+                "contain",
+                "見切れ無し最大化",
+                "どこも見切れない範囲で表示領域に収まる最大倍率",
+            ),
+        ):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setToolTip(tip)
+            btn.clicked.connect(lambda _c=False, k=key: self._on_fit_mode(k))
+            self._fit_group.addButton(btn)
+            self._fit_btns[key] = btn
+            zoom_row.addWidget(btn)
 
-        self._zoom = ZoomControls(min_pct=10, max_pct=200, value=40)
+        self._zoom = ZoomControls(
+            min_pct=10, max_pct=400, value=40, slider_max_width=140
+        )
         self._zoom.connect_zoom_changed(self._on_zoom_changed)
-        root.addWidget(self._zoom)
+        zoom_row.addWidget(self._zoom)
+        zoom_row.addStretch(1)
+        root.addLayout(zoom_row)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(False)
@@ -725,8 +757,63 @@ class FullSheetGradeDialog(QDialog):
         self._show_marks = bool(checked)
         self._refresh_display_image_only()
 
-    def _on_zoom_changed(self) -> None:
+    def _native_image_size(self) -> tuple[int, int]:
+        if self._base_bgr is not None:
+            h, w = self._base_bgr.shape[:2]
+            return max(1, int(w)), max(1, int(h))
+        if self._stack is not None:
+            return (
+                max(1, self._stack.ink_overlay._native_w),
+                max(1, self._stack.ink_overlay._native_h),
+            )
+        return 1, 1
+
+    def _viewport_size(self) -> tuple[int, int]:
+        vp = self._scroll.viewport().size()
+        # スクロールバー余白を少し引く
+        return max(40, vp.width() - 8), max(40, vp.height() - 8)
+
+    def _on_fit_mode(self, mode: str) -> None:
+        self._fit_mode = mode
+        for k, btn in self._fit_btns.items():
+            btn.blockSignals(True)
+            btn.setChecked(k == mode)
+            btn.blockSignals(False)
+        self._apply_fit_zoom(mode)
+
+    def _apply_fit_zoom(self, mode: str) -> None:
+        nw, nh = self._native_image_size()
+        vw, vh = self._viewport_size()
+        if mode == "width":
+            pct = int(round(100.0 * vw / nw))
+        elif mode == "height":
+            pct = int(round(100.0 * vh / nh))
+        else:
+            pct = int(round(100.0 * min(vw / nw, vh / nh)))
+        pct = max(10, min(400, pct))
+        self._suppress_fit_clear = True
+        try:
+            self._zoom.set_zoom_value(pct)
+        finally:
+            self._suppress_fit_clear = False
         self._refresh_display_image_only()
+
+    def _on_zoom_changed(self) -> None:
+        if self._suppress_fit_clear:
+            return
+        # 手動倍率変更時はフィット選択を解除
+        if self._fit_mode is not None:
+            self._fit_mode = None
+            for btn in self._fit_btns.values():
+                btn.blockSignals(True)
+                btn.setChecked(False)
+                btn.blockSignals(False)
+        self._refresh_display_image_only()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if self._fit_mode:
+            self._apply_fit_zoom(self._fit_mode)
 
     def _refresh_info(self) -> None:
         fid = self._selected_field_id
