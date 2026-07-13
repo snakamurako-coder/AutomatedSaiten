@@ -214,6 +214,13 @@ class MainWindow(QMainWindow):
         lay.addWidget(divider)
         lay.addSpacing(6)
 
+        search_btn = QPushButton("文字列検索")
+        set_variant(search_btn, "nav")
+        search_btn.setCursor(Qt.PointingHandCursor)
+        search_btn.setToolTip("OCR・テキストボックス内の文字列を検索し、該当答案へジャンプします")
+        search_btn.clicked.connect(self._open_text_search)
+        lay.addWidget(search_btn)
+
         settings_btn = QPushButton("詳細設定")
         set_variant(settings_btn, "nav")
         settings_btn.setCursor(Qt.PointingHandCursor)
@@ -272,6 +279,44 @@ class MainWindow(QMainWindow):
             self.palette_controller.refresh_speech_prefs()
 
         open_settings_dialog(self, on_saved=on_saved)
+
+    def _open_text_search(self) -> None:
+        self._sync_active_test()
+        if not self.require_active_test():
+            return
+        from ui_qt.text_search_dialog import TextSearchDialog
+
+        dlg = TextSearchDialog(
+            self,
+            test_id=str(self.active_test_id),
+            on_open_crop=self._text_search_open_crop,
+            on_open_full_sheet=self._text_search_open_full_sheet,
+            on_open_step4=self._text_search_open_step4,
+        )
+        dlg.exec()
+
+    def _text_search_open_crop(self, hit: dict) -> None:
+        self.load_step(4)
+        page = self.pages.get(4)
+        if page is not None and hasattr(page, "show_crop_from_search"):
+            page.show_crop_from_search(hit)  # type: ignore[attr-defined]
+
+    def _text_search_open_full_sheet(self, hit: dict) -> None:
+        from models.ink_repo import is_sheet_field_id
+
+        rid = int(hit.get("resultId") or 0)
+        fid = str(hit.get("fieldId") or "")
+        if is_sheet_field_id(fid):
+            fid = ""
+        self.palette_controller.open_full_sheet_grade_dialog(
+            result_id=rid, field_id=fid or None
+        )
+
+    def _text_search_open_step4(self, hit: dict) -> None:
+        self.load_step(4)
+        page = self.pages.get(4)
+        if page is not None and hasattr(page, "focus_field_from_search"):
+            page.focus_field_from_search(str(hit.get("fieldId") or ""))  # type: ignore[attr-defined]
 
     def load_step(self, step_id: int) -> None:
         self._sync_active_test()

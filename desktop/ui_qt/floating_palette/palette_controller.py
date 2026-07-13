@@ -949,8 +949,13 @@ class PaletteController:
     def _on_full_sheet_grade_requested(self) -> None:
         self.open_full_sheet_grade_dialog()
 
-    def open_full_sheet_grade_dialog(self) -> None:
-        """選択中答案の補正全画像で全記述欄を採点する。"""
+    def open_full_sheet_grade_dialog(
+        self,
+        *,
+        result_id: int | None = None,
+        field_id: str | None = None,
+    ) -> None:
+        """選択中（または指定）答案の補正全画像で全記述欄を採点する。"""
         from ui_qt import helpers as h
         from models.database import connect
         from models.test_repo import (
@@ -961,19 +966,12 @@ class PaletteController:
         from services.crop_preview import resolve_warped_path
         from ui_qt.full_sheet_grade_dialog import FullSheetGradeDialog
 
-        stack = self._resolve_active_stack()
-        if stack is None:
-            h.warn(
-                self._main,
-                "一枚全容採点",
-                "対象の画像をクリックして選択してください。",
-            )
-            return
-
         test_id = ""
         if self._page is not None:
             test_id_fn = getattr(self._page, "palette_test_id", None)
             test_id = str(test_id_fn() or "") if callable(test_id_fn) else ""
+        if not test_id:
+            test_id = str(getattr(self._main, "active_test_id", None) or "")
         if not test_id:
             app = getattr(self._main, "app", None)
             test_id = str(getattr(app, "active_test_id", None) or "")
@@ -981,9 +979,28 @@ class PaletteController:
             h.warn(self._main, "一枚全容採点", "テストが選択されていません。")
             return
 
-        result_id = int(stack.result_id)
+        resolved_rid: int | None = int(result_id) if result_id is not None else None
+        initial_fid = str(field_id or "").strip()
+
+        if resolved_rid is None:
+            stack = self._resolve_active_stack()
+            if stack is None:
+                h.warn(
+                    self._main,
+                    "一枚全容採点",
+                    "対象の画像をクリックして選択してください。",
+                )
+                return
+            resolved_rid = int(stack.result_id)
+            if not initial_fid:
+                initial_fid = str(getattr(stack, "field_id", "") or "")
+
         row = next(
-            (r for r in get_all_results(test_id) if int(r.get("id") or 0) == result_id),
+            (
+                r
+                for r in get_all_results(test_id)
+                if int(r.get("id") or 0) == int(resolved_rid)
+            ),
             None,
         )
         if row is None:
@@ -1004,6 +1021,11 @@ class PaletteController:
         with connect() as conn:
             points = get_points_conn(conn, test_id)
 
+        from models.ink_repo import is_sheet_field_id
+
+        if is_sheet_field_id(initial_fid):
+            initial_fid = str(fields[0].get("id") or "") if fields else ""
+
         dlg = FullSheetGradeDialog(
             self._main,
             test_id=test_id,
@@ -1011,7 +1033,7 @@ class PaletteController:
             warped_path=warped,
             fields=fields,
             points=points or {},
-            initial_field_id=str(getattr(stack, "field_id", "") or ""),
+            initial_field_id=initial_fid,
             palette_controller=self,
         )
         # パレットはダイアログ側で描画時のみ前面表示する（採点時は格納）

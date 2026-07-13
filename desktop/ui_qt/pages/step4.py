@@ -433,6 +433,84 @@ class Step4Page(QWidget):
             return None
         return self._fields[idx]["id"]
 
+    def select_field_id(self, field_id: str) -> bool:
+        """記述欄コンボを field_id に合わせる。見つからなければ False。"""
+        fid = str(field_id or "").strip()
+        if not fid:
+            return False
+        for i, f in enumerate(self._fields):
+            if str(f.get("id")) == fid:
+                self.field_combo.blockSignals(True)
+                self.field_combo.setCurrentIndex(i)
+                self.field_combo.blockSignals(False)
+                self._on_field_changed(i)
+                return True
+        return False
+
+    def focus_field_from_search(self, field_id: str) -> None:
+        """文字列検索「④採点基準の設定」: 当該記述欄を選択。"""
+        from models.ink_repo import is_sheet_field_id
+
+        if not self.app.active_test_id:
+            return
+        self.refresh()
+        fid = str(field_id or "").strip()
+        if is_sheet_field_id(fid):
+            if self._fields:
+                self.select_field_id(str(self._fields[0].get("id") or ""))
+            h.info(
+                self,
+                "答案全体レイヤー",
+                "ヒットは答案全体のテキストボックスです。"
+                "④では先頭の記述欄を選択しました。一枚全容採点で位置を確認できます。",
+            )
+            return
+        if not self.select_field_id(fid):
+            h.warn(self, "記述欄なし", f"記述欄が見つかりません: {fid}")
+
+    def show_crop_from_search(self, hit: dict[str, Any]) -> None:
+        """文字列検索「記述欄画像」: 該当答案の該当欄クロップを表示。"""
+        from models.ink_repo import is_sheet_field_id
+        from models.test_repo import get_all_results
+        from services.text_search import crop_field_id_for_hit
+
+        if not self.app.active_test_id:
+            return
+        self.refresh()
+        rid = int(hit.get("resultId") or 0)
+        if not rid:
+            h.warn(self, "エラー", "答案 ID が不正です。")
+            return
+        fid = crop_field_id_for_hit(hit, self._fields)
+        if not fid:
+            h.warn(self, "記述欄なし", "表示できる記述欄がありません。")
+            return
+        if is_sheet_field_id(str(hit.get("fieldId") or "")):
+            # シートTBは欄クロップに投影表示される
+            pass
+        if not self.select_field_id(fid):
+            h.warn(self, "記述欄なし", f"記述欄が見つかりません: {fid}")
+            return
+        row = next(
+            (r for r in get_all_results(self.app.active_test_id) if int(r.get("id") or 0) == rid),
+            None,
+        )
+        if row is None:
+            h.warn(self, "答案なし", "対象の答案が見つかりません。")
+            return
+        texts = row.get("textMapping") or {}
+        ans = str(texts.get(fid) or "").strip() or "なし"
+        crop_row = {
+            "rowIndex": rid,
+            "studentId": row.get("studentId") or "",
+            "fileName": row.get("fileName") or "",
+            "fileId": row.get("sourcePath") or row.get("warpedPath") or "",
+            "warpedPath": row.get("warpedPath") or "",
+            "studentName": row.get("name") or "",
+            "answer_text": ans,
+        }
+        self._load_crops_async([crop_row], allow_incorrect=True)
+
     def _toggle_deemed(self, fid: str, ans: str) -> None:
         if self._canonical() and ans == self._canonical():
             return
