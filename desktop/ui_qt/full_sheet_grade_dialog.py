@@ -7,13 +7,15 @@ from typing import Any
 
 from PIL import Image
 from PySide6.QtCore import QRect, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QShortcut
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
     QDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QVBoxLayout,
@@ -48,22 +50,17 @@ from services.feedback_exporter import gather_row_render_data
 from services.feedback_renderer import render_feedback_overlay_layer
 from services.image_loader import imread_bgr
 from ui_qt.crop_widgets import ZoomControls
-from ui_qt.floating_palette.palette_prefs import load_palette_prefs
 from ui_qt.style import COLORS
 from ui_qt.stylus_overlay import (
-    DEFAULT_BASE_WIDTH,
-    DEFAULT_INK_COLOR,
-    TOOL_ERASER,
     TOOL_NONE,
-    TOOL_PEN,
-    TOOL_TEXT,
     CropInkImageStack,
 )
 
 MODE_GRADE = "grade"
-MODE_PEN = "pen"
-MODE_ERASER = "eraser"
-MODE_TEXT = "text"
+MODE_DRAW = "draw"
+
+CLEAR_SHEET_ONLY = "sheet"
+CLEAR_INCLUDING_FIELDS = "fields"
 
 
 def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
@@ -197,6 +194,7 @@ class FullSheetGradeDialog(QDialog):
         fields: list[dict[str, Any]],
         points: dict[str, int],
         initial_field_id: str = "",
+        palette_controller: Any | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("一枚全容採点")
@@ -220,6 +218,7 @@ class FullSheetGradeDialog(QDialog):
         self._show_outlines = True
         self._show_marks = True
         self._tool_mode = MODE_GRADE
+        self._palette_controller = palette_controller
         self._palette_key: str | None = None
         self._selected_field_id = str(initial_field_id or "").strip()
         if self._selected_field_id and not any(
@@ -236,11 +235,6 @@ class FullSheetGradeDialog(QDialog):
         self._workspace: QWidget | None = None
         self._hit: _FieldHitOverlay | None = None
         self._base_bgr = imread_bgr(self._warped_path)
-
-        prefs = load_palette_prefs()
-        self._brush_color = str(prefs.get("last_color") or DEFAULT_INK_COLOR)
-        self._brush_width = float(prefs.get("last_width") or DEFAULT_BASE_WIDTH)
-        self._brush_alpha = float(prefs.get("last_alpha") or 1.0)
 
         root = QVBoxLayout(self)
         root.setSpacing(8)
@@ -265,22 +259,22 @@ class FullSheetGradeDialog(QDialog):
 
         tools = QHBoxLayout()
         tools.addWidget(QLabel("ツール:"))
-        self._tool_group = QButtonGroup(self)
-        self._tool_group.setExclusive(True)
-        self._tool_btns: dict[str, QPushButton] = {}
-        for key, label in (
-            (MODE_GRADE, "採点"),
-            (MODE_PEN, "ペン"),
-            (MODE_ERASER, "消しゴム"),
-            (MODE_TEXT, "テキスト"),
-        ):
-            btn = QPushButton(label)
-            btn.setCheckable(True)
-            btn.setChecked(key == MODE_GRADE)
-            btn.clicked.connect(lambda _c=False, k=key: self._set_tool_mode(k))
-            self._tool_group.addButton(btn)
-            self._tool_btns[key] = btn
-            tools.addWidget(btn)
+        self._mode_group = QButtonGroup(self)
+        self._mode_group.setExclusive(True)
+        self._btn_grade = QPushButton("採点（判定・配点）")
+        self._btn_grade.setCheckable(True)
+        self._btn_grade.setChecked(True)
+        self._btn_grade.clicked.connect(lambda: self._set_tool_mode(MODE_GRADE))
+        self._mode_group.addButton(self._btn_grade)
+        tools.addWidget(self._btn_grade)
+        self._btn_draw = QPushButton("描画ツール")
+        self._btn_draw.setCheckable(True)
+        self._btn_draw.setToolTip(
+            "おなじみのフローティング描画パレットを表示し、全画像上で手書き・TBを編集します"
+        )
+        self._btn_draw.clicked.connect(lambda: self._set_tool_mode(MODE_DRAW))
+        self._mode_group.addButton(self._btn_draw)
+        tools.addWidget(self._btn_draw)
         tools.addStretch()
         root.addLayout(tools)
 
@@ -303,15 +297,17 @@ class FullSheetGradeDialog(QDialog):
         info.addWidget(self._ocr_label, 1)
         root.addLayout(info)
 
-        hint = QLabel(
-            "採点: 回答欄を選んで判定を押す　／　ペン・消しゴム・テキスト: 答案全体レイヤー（欄またぎ可）"
+        self._hint = QLabel(
+            "採点: 回答欄を選んで判定を押す　／　描画ツール: フローティングパレットで答案全体レイヤーを編集（選択TBは Del で削除）"
         )
-        hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        root.addWidget(hint)
+        self._hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
+        root.addWidget(self._hint)
 
-        self._palette_row = QHBoxLayout()
+        self._palette_frame = QFrame()
+        self._palette_row = QHBoxLayout(self._palette_frame)
+        self._palette_row.setContentsMargins(0, 0, 0, 0)
         self._palette_btns: dict[str, QPushButton] = {}
-        root.addLayout(self._palette_row)
+        root.addWidget(self._palette_frame)
 
         btns = QHBoxLayout()
         btns.addStretch()
@@ -320,11 +316,18 @@ class FullSheetGradeDialog(QDialog):
         btns.addWidget(close_btn)
         root.addLayout(btns)
 
+        for key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            sc = QShortcut(QKeySequence(key), self)
+            sc.setContext(Qt.ShortcutContext.WindowShortcut)
+            sc.activated.connect(self._on_delete_selected_text_hotkey)
+
         self._rebuild_workspace()
         self._rebuild_palette_buttons()
         self._highlight_current_grade()
         self._refresh_info()
         self._apply_tool_mode()
+        if self._palette_controller is not None:
+            self._palette_controller.bind_full_sheet_dialog(self)
 
     def _load_sheet_strokes(self) -> list[dict[str, Any]]:
         return get_ink_strokes(self._test_id, self._result_id, SHEET_FIELD_ID)
@@ -407,7 +410,6 @@ class FullSheetGradeDialog(QDialog):
             on_strokes_changed=self._on_sheet_strokes_changed,
             on_annotations_changed=self._on_sheet_annotations_changed,
         )
-        self._stack.set_brush(self._brush_color, self._brush_width, self._brush_alpha)
 
         self._workspace = QWidget()
         self._workspace.setFixedSize(self._stack.size())
@@ -421,14 +423,20 @@ class FullSheetGradeDialog(QDialog):
         self._refresh_hit_overlay()
 
         self._scroll.setWidget(self._workspace)
+        if self._palette_controller is not None and self._tool_mode == MODE_DRAW:
+            self._palette_controller.set_full_sheet_stack(self._stack)
+
+    def ink_stack(self) -> CropInkImageStack | None:
+        return self._stack
+
+    def is_draw_mode(self) -> bool:
+        return self._tool_mode == MODE_DRAW
 
     def _refresh_display_image_only(self) -> None:
         """判定変更時など、下敷き画像だけ差し替え（シート編集状態は維持）。"""
         if self._stack is None:
             self._rebuild_workspace()
             return
-        pil = self._compose_display_pil()
-        zoom = self._zoom.zoom_value() / 100.0
         # スタック再生成（シートストロークは現在のオーバーレイから）
         sheet_strokes = self._stack.ink_overlay.strokes()
         sheet_ann = self._stack.text_layer.annotations()
@@ -439,6 +447,8 @@ class FullSheetGradeDialog(QDialog):
             self._test_id, self._result_id, SHEET_FIELD_ID, sheet_ann
         )
         old_mode = self._tool_mode
+        if self._palette_controller is not None:
+            self._palette_controller.set_full_sheet_stack(None)
         self._rebuild_workspace()
         self._tool_mode = old_mode
         self._apply_tool_mode()
@@ -483,38 +493,122 @@ class FullSheetGradeDialog(QDialog):
             self._ocr_label.setText(f"TB保存失敗: {e}")
 
     def _set_tool_mode(self, mode: str) -> None:
-        self._tool_mode = mode
-        for k, btn in self._tool_btns.items():
-            btn.blockSignals(True)
-            btn.setChecked(k == mode)
-            btn.blockSignals(False)
+        self._tool_mode = mode if mode in (MODE_GRADE, MODE_DRAW) else MODE_GRADE
+        self._btn_grade.blockSignals(True)
+        self._btn_draw.blockSignals(True)
+        self._btn_grade.setChecked(self._tool_mode == MODE_GRADE)
+        self._btn_draw.setChecked(self._tool_mode == MODE_DRAW)
+        self._btn_grade.blockSignals(False)
+        self._btn_draw.blockSignals(False)
         self._apply_tool_mode()
 
     def _apply_tool_mode(self) -> None:
         if self._stack is None or self._hit is None:
             return
         grade = self._tool_mode == MODE_GRADE
+        self._palette_frame.setVisible(grade)
         self._hit.set_hit_enabled(grade)
         self._hit.raise_()
+        ctrl = self._palette_controller
         if grade:
             self._stack.set_tool_mode(TOOL_NONE)
             self._stack.ink_overlay.set_drawing_enabled(False)
             self._stack.text_layer.set_placement_mode(False)
             self._stack.text_layer.set_text_tool_mode(False)
-        elif self._tool_mode == MODE_PEN:
-            self._stack.set_tool_mode(TOOL_PEN)
+            if ctrl is not None:
+                ctrl.hide_palette_for_full_sheet()
+                ctrl.set_full_sheet_stack(None)
+        else:
             self._stack.ink_overlay.set_drawing_enabled(True)
-        elif self._tool_mode == MODE_ERASER:
-            self._stack.set_tool_mode(TOOL_ERASER)
-            self._stack.ink_overlay.set_drawing_enabled(True)
-        elif self._tool_mode == MODE_TEXT:
-            self._stack.set_tool_mode(TOOL_TEXT)
-            self._stack.ink_overlay.set_drawing_enabled(False)
-            self._stack.text_layer.set_placement_mode(True)
-            self._stack.text_layer.set_text_tool_mode(True)
-        # パレットは採点時のみ有効
+            if ctrl is not None:
+                ctrl.set_full_sheet_stack(self._stack)
+                ctrl.show_palette_for_full_sheet()
+            else:
+                # コントローラ無し時のフォールバック（描画不可）
+                self._stack.set_tool_mode(TOOL_NONE)
+                self._stack.ink_overlay.set_drawing_enabled(False)
         for btn in self._palette_btns.values():
             btn.setEnabled(grade and bool(self._selected_field_id))
+
+    def _on_delete_selected_text_hotkey(self) -> None:
+        """選択中のテキストボックスを Del/Backspace で削除（編集中はエディタ側）。"""
+        if self._tool_mode != MODE_DRAW or self._stack is None:
+            return
+        layer = self._stack.text_layer
+        if layer.has_editing_focus():
+            return
+        if not layer.selected_box():
+            return
+        layer.delete_selected()
+
+    def request_clear_ink(self) -> None:
+        scope = self._confirm_clear_scope("ink")
+        if scope is None:
+            return
+        self._clear_ink(scope)
+
+    def request_clear_text_boxes(self) -> None:
+        scope = self._confirm_clear_scope("text")
+        if scope is None:
+            return
+        self._clear_text_boxes(scope)
+
+    def _confirm_clear_scope(self, kind: str) -> str | None:
+        """シートのみ / 記述欄も含む / キャンセル。戻り値 CLEAR_* or None。"""
+        label = "ペン描写" if kind == "ink" else "テキストボックス"
+        box = QMessageBox(self)
+        box.setWindowTitle(f"{label}の全消去")
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setText(f"どの範囲の{label}を消去しますか？")
+        box.setInformativeText(
+            "一枚全容採点で書き込んだ内容は答案全体レイヤーです。\n"
+            "各記述欄に個別で書いた内容は、記述欄レイヤーです。"
+        )
+        sheet_btn = box.addButton(
+            "一枚全容レイヤーのみ", QMessageBox.ButtonRole.AcceptRole
+        )
+        fields_btn = box.addButton(
+            "記述欄レイヤーも含む", QMessageBox.ButtonRole.DestructiveRole
+        )
+        cancel_btn = box.addButton("キャンセル", QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(cancel_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is sheet_btn:
+            return CLEAR_SHEET_ONLY
+        if clicked is fields_btn:
+            return CLEAR_INCLUDING_FIELDS
+        return None
+
+    def _clear_ink(self, scope: str) -> None:
+        if self._stack is None:
+            return
+        try:
+            save_ink_strokes(self._test_id, self._result_id, SHEET_FIELD_ID, [])
+            self._stack.ink_overlay.clear_strokes()
+            if scope == CLEAR_INCLUDING_FIELDS:
+                for f in self._fields:
+                    fid = str(f.get("id") or "")
+                    if fid:
+                        save_ink_strokes(self._test_id, self._result_id, fid, [])
+                self._refresh_display_image_only()
+        except Exception as e:
+            self._ocr_label.setText(f"ペン全消去失敗: {e}")
+
+    def _clear_text_boxes(self, scope: str) -> None:
+        if self._stack is None:
+            return
+        try:
+            save_text_annotations(self._test_id, self._result_id, SHEET_FIELD_ID, [])
+            self._stack.text_layer.set_annotations([])
+            if scope == CLEAR_INCLUDING_FIELDS:
+                for f in self._fields:
+                    fid = str(f.get("id") or "")
+                    if fid:
+                        save_text_annotations(self._test_id, self._result_id, fid, [])
+                self._refresh_display_image_only()
+        except Exception as e:
+            self._ocr_label.setText(f"TB全消去失敗: {e}")
 
     def _field_max_score(self, field_id: str | None = None) -> int:
         fid = field_id or self._selected_field_id
@@ -694,6 +788,8 @@ class FullSheetGradeDialog(QDialog):
             self._refresh_hit_overlay()
 
     def accept(self) -> None:
+        if self._palette_controller is not None:
+            self._palette_controller.unbind_full_sheet_dialog(self)
         if self._stack is not None:
             try:
                 save_ink_strokes(
@@ -719,3 +815,8 @@ class FullSheetGradeDialog(QDialog):
 
     def reject(self) -> None:
         self.accept()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._palette_controller is not None:
+            self._palette_controller.unbind_full_sheet_dialog(self)
+        super().closeEvent(event)

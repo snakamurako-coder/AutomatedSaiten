@@ -163,6 +163,9 @@ class PaletteController:
         self._pending_phrase_id: str | None = None
         self._pending_phrase_template: dict[str, Any] | None = None
         self._editing_phrase_id: str | None = None
+        self._full_sheet_dialog: Any | None = None
+        self._full_sheet_stack: CropInkImageStack | None = None
+        self._full_sheet_palette_prev_visible = False
         self._undo = AnnotationUndoStack()
         self._undo.set_on_changed(self._sync_undo_ui)
         self.refresh_speech_prefs()
@@ -510,9 +513,60 @@ class PaletteController:
             self._main.show_app_message("操作をやり直しました", level="info")
 
     def _stacks(self) -> list[CropInkImageStack]:
-        if not self._page:
-            return []
-        return self._page.palette_ink_stacks()
+        stacks: list[CropInkImageStack] = []
+        if self._page:
+            stacks.extend(self._page.palette_ink_stacks())
+        if self._full_sheet_stack is not None:
+            stacks.append(self._full_sheet_stack)
+        return stacks
+
+    def bind_full_sheet_dialog(self, dialog: Any) -> None:
+        """一枚全容ダイアログ開始（初期は採点モード＝パレット格納）。"""
+        self._full_sheet_dialog = dialog
+        self._full_sheet_palette_prev_visible = self.tool_window.isVisible()
+        self.hide_palette_for_full_sheet()
+
+    def unbind_full_sheet_dialog(self, dialog: Any | None = None) -> None:
+        if dialog is not None and self._full_sheet_dialog is not dialog:
+            return
+        self.set_full_sheet_stack(None)
+        self._full_sheet_dialog = None
+        # 閉じたあと通常のパレット表示へ戻す
+        self.fab.hide()
+        if self._full_sheet_palette_prev_visible and not self._settings_overlay_active:
+            self.tool_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+            self.tool_window.show()
+            self.tool_window.raise_()
+        else:
+            self.ensure_palette_visible()
+
+    def set_full_sheet_stack(self, stack: CropInkImageStack | None) -> None:
+        if self._full_sheet_stack is not None and self._full_sheet_stack is not stack:
+            self._unbind_stack(self._full_sheet_stack)
+            if self._active_stack is self._full_sheet_stack:
+                self._active_stack = None
+        self._full_sheet_stack = stack
+        if stack is not None:
+            self._bind_stack(stack)
+            self._set_active_stack(stack)
+            self._apply_to_stacks()
+
+    def show_palette_for_full_sheet(self) -> None:
+        """一枚全容の描画モード: フローティングパレットを手前に出す。"""
+        self.fab.hide()
+        # モーダルダイアログの上に重ねる
+        self.tool_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        self.tool_window.show()
+        self.tool_window.raise_()
+        self.tool_window.activateWindow()
+        if self._full_sheet_stack is not None:
+            self._set_active_stack(self._full_sheet_stack)
+            self._apply_to_stacks()
+
+    def hide_palette_for_full_sheet(self) -> None:
+        """一枚全容の採点モード: パレットを格納。"""
+        self.tool_window.hide()
+        self.fab.hide()
 
     def _apply_to_stacks(self) -> None:
         color, width, alpha = self.tool_window.current_brush()
@@ -574,7 +628,14 @@ class PaletteController:
             s.text_layer.clear_selection()
 
     def _resolve_active_stack(self) -> CropInkImageStack | None:
+        if self._full_sheet_stack is not None and self._full_sheet_dialog is not None:
+            if getattr(self._full_sheet_dialog, "is_draw_mode", lambda: False)():
+                self._active_stack = self._full_sheet_stack
+                return self._full_sheet_stack
+
         stacks = self._stacks()
+        # 全容スタックを通常解決から除外（採点モード時）
+        stacks = [s for s in stacks if s is not self._full_sheet_stack]
         if not stacks:
             return None
 
@@ -596,6 +657,9 @@ class PaletteController:
         return None
 
     def _on_clear_active_ink(self) -> None:
+        if self._full_sheet_dialog is not None and self._full_sheet_dialog.is_draw_mode():
+            self._full_sheet_dialog.request_clear_ink()
+            return
         stack = self._resolve_active_stack()
         if stack is None:
             from ui_qt import helpers as h
@@ -619,6 +683,9 @@ class PaletteController:
         stack.clear_ink()
 
     def _on_clear_active_text_boxes(self) -> None:
+        if self._full_sheet_dialog is not None and self._full_sheet_dialog.is_draw_mode():
+            self._full_sheet_dialog.request_clear_text_boxes()
+            return
         self._stop_speech()
         stack = self._resolve_active_stack()
         if stack is None:
@@ -909,13 +976,16 @@ class PaletteController:
             fields=fields,
             points=points or {},
             initial_field_id=str(getattr(stack, "field_id", "") or ""),
+            palette_controller=self,
         )
+        # パレットはダイアログ側で描画時のみ前面表示する（採点時は格納）
         self.set_settings_overlay_active(True)
         try:
             dlg.raise_()
             dlg.activateWindow()
             dlg.exec()
         finally:
+            self.unbind_full_sheet_dialog(dlg)
             self.set_settings_overlay_active(False)
             self._refresh_crop_grid_annotations()
             if self._page is not None:
