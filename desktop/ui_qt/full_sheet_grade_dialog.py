@@ -240,21 +240,24 @@ class FullSheetGradeDialog(QDialog):
         root = QVBoxLayout(self)
         root.setSpacing(8)
 
-        header = QHBoxLayout()
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(6)
         name = str(self._row.get("fileName") or "")
         sid = str(self._row.get("studentId") or "") or "—"
-        self._title = QLabel(f"{name}  （生徒ID: {sid}）")
+        self._title = QLabel(f"生徒ID: {sid}")
         self._title.setStyleSheet(f"font-weight: 600; color: {COLORS['text']};")
-        header.addWidget(self._title, 0)
+        if name:
+            self._title.setToolTip(name)
+        toolbar.addWidget(self._title, 0)
 
         self._mode_group = QButtonGroup(self)
         self._mode_group.setExclusive(True)
-        self._btn_grade = QPushButton("採点（判定・配点）")
+        self._btn_grade = QPushButton("採点（判定・得点）")
         self._btn_grade.setCheckable(True)
         self._btn_grade.setChecked(True)
         self._btn_grade.clicked.connect(lambda: self._set_tool_mode(MODE_GRADE))
         self._mode_group.addButton(self._btn_grade)
-        header.addWidget(self._btn_grade)
+        toolbar.addWidget(self._btn_grade)
         self._btn_draw = QPushButton("描画ツール")
         self._btn_draw.setCheckable(True)
         self._btn_draw.setToolTip(
@@ -262,21 +265,14 @@ class FullSheetGradeDialog(QDialog):
         )
         self._btn_draw.clicked.connect(lambda: self._set_tool_mode(MODE_DRAW))
         self._mode_group.addButton(self._btn_draw)
-        header.addWidget(self._btn_draw)
-        header.addStretch(1)
+        toolbar.addWidget(self._btn_draw)
 
-        self._chk_outlines = QCheckBox("欄枠を表示")
-        self._chk_outlines.setChecked(True)
-        self._chk_outlines.toggled.connect(self._on_show_outlines_toggled)
-        header.addWidget(self._chk_outlines)
+        self._zoom = ZoomControls(
+            min_pct=10, max_pct=400, value=40, slider_max_width=120
+        )
+        self._zoom.connect_zoom_changed(self._on_zoom_changed)
+        toolbar.addWidget(self._zoom)
 
-        self._chk_marks = QCheckBox("判定・得点を表示")
-        self._chk_marks.setChecked(True)
-        self._chk_marks.toggled.connect(self._on_show_marks_toggled)
-        header.addWidget(self._chk_marks)
-        root.addLayout(header)
-
-        zoom_row = QHBoxLayout()
         self._fit_group = QButtonGroup(self)
         self._fit_group.setExclusive(True)
         self._fit_mode: str | None = None
@@ -305,15 +301,19 @@ class FullSheetGradeDialog(QDialog):
             btn.clicked.connect(lambda _c=False, k=key: self._on_fit_mode(k))
             self._fit_group.addButton(btn)
             self._fit_btns[key] = btn
-            zoom_row.addWidget(btn)
+            toolbar.addWidget(btn)
 
-        self._zoom = ZoomControls(
-            min_pct=10, max_pct=400, value=40, slider_max_width=140
-        )
-        self._zoom.connect_zoom_changed(self._on_zoom_changed)
-        zoom_row.addWidget(self._zoom)
-        zoom_row.addStretch(1)
-        root.addLayout(zoom_row)
+        self._chk_outlines = QCheckBox("枠欄を表示")
+        self._chk_outlines.setChecked(True)
+        self._chk_outlines.toggled.connect(self._on_show_outlines_toggled)
+        toolbar.addWidget(self._chk_outlines)
+
+        self._chk_marks = QCheckBox("判定得点を表示")
+        self._chk_marks.setChecked(True)
+        self._chk_marks.toggled.connect(self._on_show_marks_toggled)
+        toolbar.addWidget(self._chk_marks)
+        toolbar.addStretch(1)
+        root.addLayout(toolbar)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(False)
