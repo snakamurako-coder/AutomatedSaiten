@@ -210,30 +210,51 @@ def _draw_text_annotations_pdf(
         draw_annotation_pdf(page, box)
 
 
-def _draw_ink_strokes_pdf(
-    page: fitz.Page,
-    strokes: list[dict[str, Any]],
-    *,
-    page_size: tuple[int, int],
-) -> None:
-    """手書きはネイティブ解像度で1枚ラスタ化し PDF に重ねる（線分 Shape 爆発を避ける）。"""
-    from io import BytesIO
+def _stroke_mean_width(base_width: float, points: list[dict[str, Any]]) -> float:
+    """筆圧の平均からストローク一定幅を算出（compositor と同式）。"""
+    if not points:
+        return max(1.0, float(base_width))
+    pressures = [float(p.get("p", 1.0)) for p in points]
+    mean_p = sum(pressures) / len(pressures)
+    mean_p = max(0.0, min(1.0, mean_p))
+    return max(1.0, float(base_width) * (0.5 + 0.5 * mean_p))
 
-    from services.compositor import render_ink_layer
 
-    if not strokes:
-        return
-    w, h = int(page_size[0]), int(page_size[1])
-    if w <= 0 or h <= 0:
-        return
-    layer = render_ink_layer((w, h), strokes, scale=1.0, supersample=1)
-    # 完全透明ならスキップ
-    extrema = layer.getextrema()
-    if extrema and len(extrema) >= 4 and extrema[3][1] == 0:
-        return
-    buf = BytesIO()
-    layer.save(buf, format="PNG")
-    page.insert_image(fitz.Rect(0, 0, w, h), stream=buf.getvalue())
+def _draw_ink_strokes_pdf(page: fitz.Page, strokes: list[dict[str, Any]]) -> None:
+    """手書きをストローク単位のベクトル polyline（round cap/join）で描く。"""
+    for stroke in strokes or []:
+        points = stroke.get("points") or []
+        if not points:
+            continue
+        color = _hex_to_rgb01(stroke.get("color") or "#111827")
+        alpha = float(stroke.get("alpha", 1.0))
+        base_width = float(stroke.get("baseWidth") or 2.5)
+        width = _stroke_mean_width(base_width, points)
+        shape = page.new_shape()
+        if len(points) == 1:
+            p = points[0]
+            r = width / 2
+            cx, cy = float(p["x"]), float(p["y"])
+            shape.draw_oval(fitz.Rect(cx - r, cy - r, cx + r, cy + r))
+            shape.finish(
+                color=color,
+                fill=color,
+                fill_opacity=alpha,
+                width=0,
+                closePath=True,
+            )
+        else:
+            pts = [fitz.Point(float(p["x"]), float(p["y"])) for p in points]
+            shape.draw_polyline(pts)
+            shape.finish(
+                width=width,
+                color=color,
+                stroke_opacity=alpha,
+                closePath=False,
+                lineCap=1,
+                lineJoin=1,
+            )
+        shape.commit()
 
 
 def build_feedback_pdf_document(
@@ -279,7 +300,7 @@ def build_feedback_pdf_document(
     if text_annotations:
         _draw_text_annotations_pdf(page, text_annotations)
     if ink_strokes:
-        _draw_ink_strokes_pdf(page, ink_strokes, page_size=(w_px, h_px))
+        _draw_ink_strokes_pdf(page, ink_strokes)
     return doc
 
 

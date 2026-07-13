@@ -24,8 +24,6 @@ from services.feedback_renderer import (
     build_feedback_shared_context,
     render_feedback_image,
 )
-from services.ink_export import thin_ink_strokes_for_export
-
 FeedbackExportFormat = Literal["pdf", "pdf_combined", "jpeg", "png"]
 PerFileExportFormat = Literal["pdf", "jpeg", "png"]
 
@@ -95,8 +93,6 @@ def gather_row_render_data(
         raise FileNotFoundError(f"補正画像が見つかりません: {row.get('fileName')}")
     result_id = int(row.get("id") or 0)
     ink = collect_warped_ink_strokes(test_id, result_id, payload["fields"]) if result_id else []
-    if ink:
-        ink = thin_ink_strokes_for_export(ink)
     text_ann = (
         collect_warped_text_annotations(test_id, result_id, payload["fields"])
         if result_id
