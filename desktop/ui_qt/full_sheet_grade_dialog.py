@@ -199,7 +199,8 @@ class FullSheetGradeDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("一枚全容採点")
         self.resize(1100, 760)
-        self.setModal(True)
+        # WindowModal: メインはブロックしつつ、子にしたフローティングパレットは操作可能
+        self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowFlags(
             self.windowFlags()
             | Qt.Window

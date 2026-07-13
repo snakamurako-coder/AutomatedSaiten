@@ -531,6 +531,7 @@ class PaletteController:
             return
         self.set_full_sheet_stack(None)
         self._full_sheet_dialog = None
+        self._restore_palette_window_parent()
         # 閉じたあと通常のパレット表示へ戻す
         self.fab.hide()
         if self._full_sheet_palette_prev_visible and not self._settings_overlay_active:
@@ -551,11 +552,44 @@ class PaletteController:
             self._set_active_stack(stack)
             self._apply_to_stacks()
 
+    def _restore_palette_window_parent(self) -> None:
+        """全容ダイアログの子から独立ウィンドウへ戻す。"""
+        from PySide6.QtCore import QPoint
+
+        if self.tool_window.parentWidget() is None:
+            return
+        global_pos = self.tool_window.mapToGlobal(QPoint(0, 0))
+        was_visible = self.tool_window.isVisible()
+        self.tool_window.setParent(None)
+        self.tool_window.setWindowFlags(
+            Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint
+        )
+        self.tool_window.move(global_pos)
+        if was_visible:
+            self.tool_window.show()
+
     def show_palette_for_full_sheet(self) -> None:
-        """一枚全容の描画モード: フローティングパレットを手前に出す。"""
+        """一枚全容の描画モード: フローティングパレットを手前に出す。
+
+        モーダルダイアログより手前で触れられるよう、
+        一時的にダイアログの子ウィンドウとして出す。
+        """
+        from PySide6.QtCore import QPoint
+
         self.fab.hide()
-        # モーダルダイアログの上に重ねる
-        self.tool_window.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        dlg = self._full_sheet_dialog
+        flags = (
+            Qt.WindowType.Window
+            | Qt.WindowType.WindowStaysOnTopHint
+            | Qt.WindowType.Tool
+        )
+        global_pos = self.tool_window.mapToGlobal(QPoint(0, 0))
+        if dlg is not None:
+            self.tool_window.setParent(dlg, flags)
+            self.tool_window.move(dlg.mapFromGlobal(global_pos))
+        else:
+            self.tool_window.setParent(None, flags)
+            self.tool_window.move(global_pos)
         self.tool_window.show()
         self.tool_window.raise_()
         self.tool_window.activateWindow()
@@ -567,6 +601,8 @@ class PaletteController:
         """一枚全容の採点モード: パレットを格納。"""
         self.tool_window.hide()
         self.fab.hide()
+        self._restore_palette_window_parent()
+        self.tool_window.hide()
 
     def _apply_to_stacks(self) -> None:
         color, width, alpha = self.tool_window.current_brush()
