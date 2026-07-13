@@ -57,6 +57,7 @@ class ToolPaletteWindow(QWidget):
     minimize_requested = Signal()
     clear_ink_requested = Signal()
     clear_text_boxes_requested = Signal()
+    full_sheet_grade_requested = Signal()
     undo_requested = Signal()
     redo_requested = Signal()
 
@@ -295,6 +296,13 @@ class ToolPaletteWindow(QWidget):
         self._show_text_check.toggled.connect(self._on_show_text_toggled_from_draw)
         detail_lay.addWidget(self._show_text_check)
 
+        self._full_sheet_grade_btn = QPushButton("一枚全容採点")
+        self._full_sheet_grade_btn.setToolTip(
+            "選択中の答案の補正全画像を開き、各記述欄を採点します"
+        )
+        self._full_sheet_grade_btn.clicked.connect(self.full_sheet_grade_requested.emit)
+        detail_lay.addWidget(self._full_sheet_grade_btn)
+
         draw_lay.addWidget(self._detail_frame, 0)
         draw_lay.addStretch(1)
 
@@ -367,6 +375,15 @@ class ToolPaletteWindow(QWidget):
         self._text_show_text_check.setChecked(True)
         self._text_show_text_check.toggled.connect(self._on_show_text_toggled_from_text)
         text_detail_lay.addWidget(self._text_show_text_check)
+
+        self._text_full_sheet_grade_btn = QPushButton("一枚全容採点")
+        self._text_full_sheet_grade_btn.setToolTip(
+            "選択中の答案の補正全画像を開き、各記述欄を採点します"
+        )
+        self._text_full_sheet_grade_btn.clicked.connect(
+            self.full_sheet_grade_requested.emit
+        )
+        text_detail_lay.addWidget(self._text_full_sheet_grade_btn)
 
         text_lay.addWidget(self._text_detail_frame, 0)
         text_lay.addStretch(1)

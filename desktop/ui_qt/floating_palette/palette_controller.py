@@ -135,6 +135,9 @@ class PaletteController:
         )
         pp.copy_from_textbox_requested.connect(self._on_copy_phrase_from_textbox)
         pp.placement_cancel_requested.connect(self._cancel_phrase_placement)
+        self.tool_window.full_sheet_grade_requested.connect(
+            self._on_full_sheet_grade_requested
+        )
         preview = self.tool_window.phrase_preview
         preview.content_changed.connect(
             lambda: self._persist_phrase_from_preview(reload_list=False)
@@ -839,6 +842,86 @@ class PaletteController:
 
     def _on_phrase_batch_update_requested(self, group_id: str) -> None:
         self.open_phrase_batch_update_dialog(group_id)
+
+    def _on_full_sheet_grade_requested(self) -> None:
+        self.open_full_sheet_grade_dialog()
+
+    def open_full_sheet_grade_dialog(self) -> None:
+        """選択中答案の補正全画像で全記述欄を採点する。"""
+        from ui_qt import helpers as h
+        from models.database import connect
+        from models.test_repo import (
+            get_all_results,
+            get_answer_fields,
+            get_points_conn,
+        )
+        from services.crop_preview import resolve_warped_path
+        from ui_qt.full_sheet_grade_dialog import FullSheetGradeDialog
+
+        stack = self._resolve_active_stack()
+        if stack is None:
+            h.warn(
+                self._main,
+                "一枚全容採点",
+                "対象の画像をクリックして選択してください。",
+            )
+            return
+
+        test_id = ""
+        if self._page is not None:
+            test_id_fn = getattr(self._page, "palette_test_id", None)
+            test_id = str(test_id_fn() or "") if callable(test_id_fn) else ""
+        if not test_id:
+            app = getattr(self._main, "app", None)
+            test_id = str(getattr(app, "active_test_id", None) or "")
+        if not test_id:
+            h.warn(self._main, "一枚全容採点", "テストが選択されていません。")
+            return
+
+        result_id = int(stack.result_id)
+        row = next(
+            (r for r in get_all_results(test_id) if int(r.get("id") or 0) == result_id),
+            None,
+        )
+        if row is None:
+            h.warn(self._main, "一枚全容採点", "答案データが見つかりません。")
+            return
+
+        try:
+            warped = resolve_warped_path(row)
+        except FileNotFoundError as e:
+            h.warn(self._main, "一枚全容採点", str(e))
+            return
+
+        fields = get_answer_fields(test_id)
+        if not fields:
+            h.warn(self._main, "一枚全容採点", "記述欄が設定されていません。")
+            return
+
+        with connect() as conn:
+            points = get_points_conn(conn, test_id)
+
+        dlg = FullSheetGradeDialog(
+            self._main,
+            test_id=test_id,
+            result_row=row,
+            warped_path=warped,
+            fields=fields,
+            points=points or {},
+            initial_field_id=str(getattr(stack, "field_id", "") or ""),
+        )
+        self.set_settings_overlay_active(True)
+        try:
+            dlg.raise_()
+            dlg.activateWindow()
+            dlg.exec()
+        finally:
+            self.set_settings_overlay_active(False)
+            self._refresh_crop_grid_annotations()
+            if self._page is not None:
+                refresh_fn = getattr(self._page, "refresh", None)
+                if callable(refresh_fn):
+                    refresh_fn()
 
     def open_phrase_batch_update_dialog(
         self,
