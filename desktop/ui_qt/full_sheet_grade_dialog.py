@@ -5,7 +5,7 @@ from __future__ import annotations
 import copy
 from typing import Any
 
-from PySide6.QtCore import QEvent, QRect, Qt, Signal
+from PySide6.QtCore import QRect, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -235,17 +235,6 @@ class FullSheetGradeDialog(QDialog):
         self._chk_marks.setChecked(True)
         self._chk_marks.toggled.connect(self._on_show_marks_toggled)
         header.addWidget(self._chk_marks)
-
-        self._btn_fullscreen = QPushButton("フルウィンドウ")
-        self._btn_fullscreen.setToolTip("ウィンドウを最大化／元のサイズに戻す")
-        self._btn_fullscreen.clicked.connect(self._toggle_fullscreen)
-        header.addWidget(self._btn_fullscreen)
-
-        close_x = QPushButton("×")
-        close_x.setFixedWidth(36)
-        close_x.setToolTip("閉じる")
-        close_x.clicked.connect(self.accept)
-        header.addWidget(close_x)
         root.addLayout(header)
 
         self._zoom = ZoomControls(min_pct=10, max_pct=200, value=40)
@@ -414,24 +403,6 @@ class FullSheetGradeDialog(QDialog):
         if self._show_marks:
             self._ensure_marked_pixmap()
         self._refresh_canvas()
-
-    def _toggle_fullscreen(self) -> None:
-        if self.isMaximized():
-            self.showNormal()
-            self._btn_fullscreen.setText("フルウィンドウ")
-        else:
-            self.showMaximized()
-            self._btn_fullscreen.setText("元のサイズ")
-
-    def changeEvent(self, event) -> None:  # noqa: N802
-        super().changeEvent(event)
-        if event.type() == QEvent.WindowStateChange and hasattr(
-            self, "_btn_fullscreen"
-        ):
-            if self.isMaximized():
-                self._btn_fullscreen.setText("元のサイズ")
-            else:
-                self._btn_fullscreen.setText("フルウィンドウ")
 
     def _on_zoom_changed(self) -> None:
         self._canvas.set_zoom(self._zoom.zoom_value() / 100.0)
