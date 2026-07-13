@@ -176,6 +176,29 @@ def get_text_annotations_batch(
     return out
 
 
+def get_text_annotations_for_result(
+    test_id: str, result_id: int
+) -> dict[str, list[dict[str, Any]]]:
+    """1 答案分の全 field_id → 注釈を1クエリで取得。"""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT field_id, annotations_json FROM text_annotations "
+            "WHERE test_id = ? AND result_id = ?",
+            (test_id, int(result_id)),
+        ).fetchall()
+    out: dict[str, list[dict[str, Any]]] = {}
+    for row in rows:
+        fid = str(row["field_id"] or "")
+        if not fid:
+            continue
+        try:
+            data = json.loads(row["annotations_json"] or "[]")
+            out[fid] = data if isinstance(data, list) else []
+        except json.JSONDecodeError:
+            out[fid] = []
+    return out
+
+
 def save_text_annotations(
     test_id: str,
     result_id: int,
@@ -206,11 +229,12 @@ def collect_warped_text_annotations(
     """
     warped: list[dict[str, Any]] = []
     rid = int(result_id)
+    by_field = get_text_annotations_for_result(test_id, rid)
     for f in fields:
         fid = str(f.get("id") or "")
         if not fid or is_sheet_field_id(fid):
             continue
-        local = get_text_annotations(test_id, rid, fid)
+        local = by_field.get(fid) or []
         if not local:
             continue
         ox = float(f.get("x") or 0)
@@ -224,7 +248,7 @@ def collect_warped_text_annotations(
                     "y": oy + float(box.get("y") or 0),
                 }
             )
-    for box in get_text_annotations(test_id, rid, SHEET_FIELD_ID):
+    for box in by_field.get(SHEET_FIELD_ID) or []:
         item = dict(box)
         item["fieldId"] = SHEET_FIELD_ID
         item["source"] = "sheet"

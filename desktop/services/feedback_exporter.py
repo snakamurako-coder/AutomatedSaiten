@@ -19,7 +19,12 @@ from services.feedback_pdf import (
     rasterize_pdf_bytes,
     render_feedback_pdf,
 )
-from services.feedback_renderer import build_feedback_payload, render_feedback_image
+from services.feedback_renderer import (
+    build_feedback_payload,
+    build_feedback_shared_context,
+    render_feedback_image,
+)
+from services.ink_export import thin_ink_strokes_for_export
 
 FeedbackExportFormat = Literal["pdf", "pdf_combined", "jpeg", "png"]
 PerFileExportFormat = Literal["pdf", "jpeg", "png"]
@@ -63,15 +68,35 @@ def feedback_filename(student_id: str, student_name: str, fmt: str | None) -> st
     return f"個票_{sid}_{sname}{ext}"
 
 
-def gather_row_render_data(test_id: str, row: dict[str, Any]) -> dict[str, Any]:
-    info = get_test_info(test_id)
-    points = {k: int(v) for k, v in (info.get("points") or {}).items()}
-    payload = build_feedback_payload(test_id, row, points)
+def gather_row_render_data(
+    test_id: str,
+    row: dict[str, Any],
+    *,
+    shared: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    if shared is None:
+        info = get_test_info(test_id)
+        points = {k: int(v) for k, v in (info.get("points") or {}).items()}
+        payload = build_feedback_payload(test_id, row, points)
+        style = get_feedback_style()
+    else:
+        points = shared["points"]
+        payload = build_feedback_payload(
+            test_id,
+            row,
+            points,
+            fields=shared["fields"],
+            output_slots=shared["output_slots"],
+            domain_settings=shared.get("domain_settings"),
+        )
+        style = shared["style"]
     warped = str(row.get("warpedPath") or "").strip()
     if not warped or not Path(warped).exists():
         raise FileNotFoundError(f"補正画像が見つかりません: {row.get('fileName')}")
     result_id = int(row.get("id") or 0)
     ink = collect_warped_ink_strokes(test_id, result_id, payload["fields"]) if result_id else []
+    if ink:
+        ink = thin_ink_strokes_for_export(ink)
     text_ann = (
         collect_warped_text_annotations(test_id, result_id, payload["fields"])
         if result_id
@@ -82,12 +107,17 @@ def gather_row_render_data(test_id: str, row: dict[str, Any]) -> dict[str, Any]:
         "payload": payload,
         "ink_strokes": ink,
         "text_annotations": text_ann,
-        "style": get_feedback_style(),
+        "style": style,
     }
 
 
-def _build_row_pdf_document(test_id: str, row: dict[str, Any]) -> fitz.Document:
-    data = gather_row_render_data(test_id, row)
+def _build_row_pdf_document(
+    test_id: str,
+    row: dict[str, Any],
+    *,
+    shared: dict[str, Any] | None = None,
+) -> fitz.Document:
+    data = gather_row_render_data(test_id, row, shared=shared)
     payload = data["payload"]
     return build_feedback_pdf_document(
         data["warped_path"],
@@ -106,9 +136,11 @@ def export_feedback_row(
     row: dict[str, Any],
     out_path: str | Path,
     fmt: FeedbackExportFormat | str | None = None,
+    *,
+    shared: dict[str, Any] | None = None,
 ) -> Path:
     export_fmt = per_file_export_format(fmt)
-    data = gather_row_render_data(test_id, row)
+    data = gather_row_render_data(test_id, row, shared=shared)
     payload = data["payload"]
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -148,10 +180,13 @@ def export_combined_feedback_pdf(
     rows: list[dict[str, Any]],
     out_path: str | Path,
     on_progress: Callable[[int, int, str], None] | None = None,
+    *,
+    shared: dict[str, Any] | None = None,
 ) -> tuple[int, list[str], list[dict[str, str]]]:
     """全対象行を 1 つの PDF にまとめて保存する。"""
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    ctx = shared if shared is not None else build_feedback_shared_context(test_id)
     master = fitz.open()
     saved = 0
     skipped: list[str] = []
@@ -167,7 +202,7 @@ def export_combined_feedback_pdf(
                 skipped.append(name)
                 continue
             try:
-                doc = _build_row_pdf_document(test_id, row)
+                doc = _build_row_pdf_document(test_id, row, shared=ctx)
                 try:
                     master.insert_pdf(doc)
                     saved += 1

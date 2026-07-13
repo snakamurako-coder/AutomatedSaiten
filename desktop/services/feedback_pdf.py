@@ -9,7 +9,6 @@ from typing import Any
 import cv2
 import fitz
 
-from models.text_annotation_repo import resolve_text_style
 from services.compositor import hex_to_rgba
 from services.feedback_renderer import (
     _inset_rect,
@@ -45,10 +44,6 @@ def _resolve_font_file(*, bold: bool = False, preferred: str | None = None) -> s
         if cand.is_file():
             return str(cand)
     raise FileNotFoundError("日本語フォントが見つかりません（meiryo.ttc 等）")
-
-
-def _seg_width(base_width: float, pressure: float) -> float:
-    return max(1.0, base_width * (0.5 + 0.5 * max(0.0, min(1.0, pressure))))
 
 
 def _fit_font_size(
@@ -215,45 +210,30 @@ def _draw_text_annotations_pdf(
         draw_annotation_pdf(page, box)
 
 
-def _draw_ink_strokes_pdf(page: fitz.Page, strokes: list[dict[str, Any]]) -> None:
-    for stroke in strokes or []:
-        points = stroke.get("points") or []
-        if not points:
-            continue
-        color = _hex_to_rgb01(stroke.get("color") or "#111827")
-        alpha = float(stroke.get("alpha", 1.0))
-        base_width = float(stroke.get("baseWidth") or 2.5)
+def _draw_ink_strokes_pdf(
+    page: fitz.Page,
+    strokes: list[dict[str, Any]],
+    *,
+    page_size: tuple[int, int],
+) -> None:
+    """手書きはネイティブ解像度で1枚ラスタ化し PDF に重ねる（線分 Shape 爆発を避ける）。"""
+    from io import BytesIO
 
-        if len(points) == 1:
-            p = points[0]
-            r = _seg_width(base_width, float(p.get("p", 1.0))) / 2
-            cx, cy = float(p["x"]), float(p["y"])
-            shape = page.new_shape()
-            shape.draw_oval(fitz.Rect(cx - r, cy - r, cx + r, cy + r))
-            shape.finish(color=color, fill=color, fill_opacity=alpha, width=0, closePath=True)
-            shape.commit()
-            continue
+    from services.compositor import render_ink_layer
 
-        for a, b in zip(points, points[1:]):
-            ax, ay = float(a["x"]), float(a["y"])
-            bx, by = float(b["x"]), float(b["y"])
-            width = _seg_width(base_width, float(b.get("p", 1.0)))
-            seg = page.new_shape()
-            seg.draw_line(fitz.Point(ax, ay), fitz.Point(bx, by))
-            seg.finish(width=width, color=color, stroke_opacity=alpha, closePath=False)
-            seg.commit()
-            cap_r = width / 2
-            cap = page.new_shape()
-            cap.draw_oval(fitz.Rect(bx - cap_r, by - cap_r, bx + cap_r, by + cap_r))
-            cap.finish(color=color, fill=color, fill_opacity=alpha, width=0, closePath=True)
-            cap.commit()
-        p0 = points[0]
-        r0 = _seg_width(base_width, float(p0.get("p", 1.0))) / 2
-        x0, y0 = float(p0["x"]), float(p0["y"])
-        start_cap = page.new_shape()
-        start_cap.draw_oval(fitz.Rect(x0 - r0, y0 - r0, x0 + r0, y0 + r0))
-        start_cap.finish(color=color, fill=color, fill_opacity=alpha, width=0, closePath=True)
-        start_cap.commit()
+    if not strokes:
+        return
+    w, h = int(page_size[0]), int(page_size[1])
+    if w <= 0 or h <= 0:
+        return
+    layer = render_ink_layer((w, h), strokes, scale=1.0, supersample=1)
+    # 完全透明ならスキップ
+    extrema = layer.getextrema()
+    if extrema and len(extrema) >= 4 and extrema[3][1] == 0:
+        return
+    buf = BytesIO()
+    layer.save(buf, format="PNG")
+    page.insert_image(fitz.Rect(0, 0, w, h), stream=buf.getvalue())
 
 
 def build_feedback_pdf_document(
@@ -299,7 +279,7 @@ def build_feedback_pdf_document(
     if text_annotations:
         _draw_text_annotations_pdf(page, text_annotations)
     if ink_strokes:
-        _draw_ink_strokes_pdf(page, ink_strokes)
+        _draw_ink_strokes_pdf(page, ink_strokes, page_size=(w_px, h_px))
     return doc
 
 

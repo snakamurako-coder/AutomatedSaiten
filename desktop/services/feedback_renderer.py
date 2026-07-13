@@ -227,6 +227,8 @@ def render_feedback_overlay_layer(
     field_marks: dict[str, dict[str, Any]],
     totals: dict[str, Any],
     style: dict[str, Any],
+    *,
+    supersample: int | None = None,
 ) -> Image.Image:
     """判定マーク・合計欄をスーパーサンプリングで描いた RGBA レイヤー。"""
 
@@ -246,7 +248,7 @@ def render_feedback_overlay_layer(
         for slot in output_slots:
             draw_total(layer, _scale_slot(slot, sf), totals.get(slot["slotKey"]), style)
 
-    return render_supersampled_rgba(size, paint)
+    return render_supersampled_rgba(size, paint, supersample)
 
 
 # ==================== 合成本体 ====================
@@ -268,27 +270,45 @@ def render_feedback_image(
     from services.compositor import bgr_to_rgba_image, render_ink_layer, render_text_annotation_layer
 
     base = bgr_to_rgba_image(bgr)
+    # 個票出力はフルページ 2〜4x を避け、ネイティブ解像度で合成する
     layer = render_feedback_overlay_layer(
-        base.size, fields, output_slots, field_marks, totals, style
+        base.size,
+        fields,
+        output_slots,
+        field_marks,
+        totals,
+        style,
+        supersample=1,
     )
 
     composite = Image.alpha_composite(base, layer)
     if text_annotations:
-        text_layer = render_text_annotation_layer(composite.size, text_annotations, scale=1.0)
+        text_layer = render_text_annotation_layer(
+            composite.size, text_annotations, scale=1.0, supersample=1
+        )
         composite = Image.alpha_composite(composite, text_layer)
     if ink_strokes:
-        ink_layer = render_ink_layer(composite.size, ink_strokes, scale=1.0)
+        ink_layer = render_ink_layer(
+            composite.size, ink_strokes, scale=1.0, supersample=1
+        )
         composite = Image.alpha_composite(composite, ink_layer)
     return composite.convert("RGB")
 
 
 # ==================== ペイロード構築 ====================
 
-def _compute_totals(test_id: str, row: dict[str, Any], slot_keys: list[str]) -> dict[str, Any]:
+def _compute_totals(
+    test_id: str,
+    row: dict[str, Any],
+    slot_keys: list[str],
+    *,
+    domain_settings: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     """slotKey → 値。domain_scores_json 優先、なければ ⑥のグループ定義から合算。"""
     domain_scores = row.get("domainScores") or {}
     scores = row.get("scores") or {}
-    groups = _domain_groups(get_domain_settings(test_id))
+    settings = domain_settings if domain_settings is not None else get_domain_settings(test_id)
+    groups = _domain_groups(settings)
     prefix_map = {prefix: groups.get(prefix, {}) for _attr, prefix in DOMAIN_KINDS}
 
     totals: dict[str, Any] = {}
@@ -322,14 +342,34 @@ def _fmt_num(value: Any) -> Any:
     return int(f) if f == int(f) else f
 
 
+def build_feedback_shared_context(test_id: str) -> dict[str, Any]:
+    """一括生成向け: テスト共通データを1回だけ読む。"""
+    from models.test_repo import get_test_info
+
+    info = get_test_info(test_id)
+    return {
+        "points": {k: int(v) for k, v in (info.get("points") or {}).items()},
+        "fields": get_answer_fields(test_id),
+        "output_slots": get_output_slots(test_id),
+        "style": get_feedback_style(),
+        "domain_settings": get_domain_settings(test_id),
+    }
+
+
 def build_feedback_payload(
-    test_id: str, row: dict[str, Any], points: dict[str, int]
+    test_id: str,
+    row: dict[str, Any],
+    points: dict[str, int],
+    *,
+    fields: list[dict[str, Any]] | None = None,
+    output_slots: list[dict[str, Any]] | None = None,
+    domain_settings: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """1 生徒分の描画データ（判定推論込み）を作る。"""
-    fields = get_answer_fields(test_id)
-    slots = get_output_slots(test_id)
+    field_list = fields if fields is not None else get_answer_fields(test_id)
+    slots = output_slots if output_slots is not None else get_output_slots(test_id)
     field_marks: dict[str, dict[str, Any]] = {}
-    for f in fields:
+    for f in field_list:
         fid = f["id"]
         judgment = str((row.get("judgments") or {}).get(fid, "") or "").strip()
         score = (row.get("scores") or {}).get(fid)
@@ -339,8 +379,18 @@ def build_feedback_payload(
             except (TypeError, ValueError):
                 judgment = ""
         field_marks[fid] = {"judgment": judgment, "score": score}
-    totals = _compute_totals(test_id, row, [s["slotKey"] for s in slots])
-    return {"fields": fields, "outputSlots": slots, "fieldMarks": field_marks, "totals": totals}
+    totals = _compute_totals(
+        test_id,
+        row,
+        [s["slotKey"] for s in slots],
+        domain_settings=domain_settings,
+    )
+    return {
+        "fields": field_list,
+        "outputSlots": slots,
+        "fieldMarks": field_marks,
+        "totals": totals,
+    }
 
 
 def _load_rows_with_extras(test_id: str) -> list[dict[str, Any]]:
@@ -417,6 +467,7 @@ def batch_generate_feedback(
     skipped: list[str] = []
     errors: list[dict[str, str]] = []
     total = len(rows)
+    shared = build_feedback_shared_context(test_id)
 
     if is_combined_pdf_export(fmt):
         combined_path = out_dir / COMBINED_PDF_FILENAME
@@ -425,6 +476,7 @@ def batch_generate_feedback(
             rows,
             combined_path,
             on_progress=on_progress,
+            shared=shared,
         )
         from models.test_repo import touch_progress
 
@@ -455,7 +507,7 @@ def batch_generate_feedback(
             sid = _safe_name(row.get("studentId") or "不明")
             sname = _safe_name(row.get("name") or row.get("fileName") or "")
             out_path = out_dir / feedback_filename(sid, sname, file_fmt)
-            export_feedback_row(test_id, row, out_path, file_fmt)
+            export_feedback_row(test_id, row, out_path, file_fmt, shared=shared)
             saved += 1
         except Exception as e:
             errors.append({"fileName": name, "error": str(e)})
