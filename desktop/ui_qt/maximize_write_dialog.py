@@ -290,13 +290,14 @@ class MaximizeWriteDialog(QDialog):
             self._fit_group.addButton(btn)
             self._fit_btns[key] = btn
             toolbar.addWidget(btn)
+            if key == saved_fit:
+                btn.setChecked(True)
 
         toolbar.addWidget(QLabel("グラバー"))
         self._grabber_combo = QComboBox()
         self._grabber_combo.addItem("左", PALM_GRABBER_LEFT)
         self._grabber_combo.addItem("中央", PALM_GRABBER_CENTER)
         self._grabber_combo.addItem("右", PALM_GRABBER_RIGHT)
-        prefs = load_stylus_prefs()
         side = str(
             prefs.get("maximize_write_palm_grabber_side") or PALM_GRABBER_LEFT
         )
@@ -310,7 +311,7 @@ class MaximizeWriteDialog(QDialog):
         toolbar.addWidget(close_btn)
         root.addLayout(toolbar)
 
-        self._host = _CanvasHost(self)
+        self._host = _CanvasHost(self, vertical_align=saved_v_align)
         root.addWidget(self._host, 1)
         self._host.blanket.set_grabber_side(
             str(self._grabber_combo.currentData() or PALM_GRABBER_LEFT)
@@ -320,7 +321,22 @@ class MaximizeWriteDialog(QDialog):
             self._palette_controller.bind_full_sheet_dialog(self)
             self._palette_controller.show_palette_for_full_sheet()
 
-        self._show_current()
+        self._update_nav()
+
+    def showEvent(self, event: QShowEvent) -> None:  # noqa: N802
+        super().showEvent(event)
+        if self._initial_layout_done:
+            return
+        self._initial_layout_done = True
+        self.showMaximized()
+
+        def _apply_initial_fit() -> None:
+            if self._fit_mode:
+                self._apply_fit_zoom(self._fit_mode)
+            elif self._queue:
+                self._show_current()
+
+        QTimer.singleShot(0, _apply_initial_fit)
 
     def ink_stack(self) -> CropInkImageStack | None:
         return self._stack
@@ -405,6 +421,7 @@ class MaximizeWriteDialog(QDialog):
             btn.blockSignals(True)
             btn.setChecked(k == mode)
             btn.blockSignals(False)
+        save_maximize_write_fit_mode(mode)
         self._apply_fit_zoom(mode)
 
     def _apply_fit_zoom(self, mode: str) -> None:
@@ -417,6 +434,15 @@ class MaximizeWriteDialog(QDialog):
         finally:
             self._suppress_fit_clear = False
         self._rebuild_stack()
+
+    def _on_vertical_align_changed(self, _index: int) -> None:
+        align = str(self._v_align_combo.currentData() or VERTICAL_ALIGN_CENTER)
+        self._vertical_align = align
+        self._host.set_vertical_align(align)
+        save_maximize_write_vertical_align(align)
+        # 配置変更を即反映（スタックサイズはそのまま）
+        if self._stack is not None:
+            self._host.scroll.setWidget(self._stack)
 
     def _on_zoom_changed(self) -> None:
         if self._suppress_fit_clear:
