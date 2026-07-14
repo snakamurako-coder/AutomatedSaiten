@@ -328,16 +328,16 @@ class FullSheetGradeDialog(QDialog):
         self._ocr_label.setWordWrap(True)
         self._ocr_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
         info.addWidget(self._ocr_label, 1)
-        close_btn = QPushButton("閉じる")
-        close_btn.clicked.connect(self.accept)
-        info.addWidget(close_btn)
-        root.addLayout(info)
-
         self._hint = QLabel(
             "採点: 回答欄を選んで判定を押す　／　描画ツール: フローティングパレットで答案全体レイヤーを編集（選択TBは Del で削除）"
         )
         self._hint.setStyleSheet(f"color: {COLORS['text_muted']}; font-size: 11px;")
-        root.addWidget(self._hint)
+        self._hint.setWordWrap(True)
+        info.addWidget(self._hint, 0)
+        close_btn = QPushButton("閉じる")
+        close_btn.clicked.connect(self.accept)
+        info.addWidget(close_btn)
+        root.addLayout(info)
 
         self._palette_frame = QFrame()
         self._palette_row = QHBoxLayout(self._palette_frame)
