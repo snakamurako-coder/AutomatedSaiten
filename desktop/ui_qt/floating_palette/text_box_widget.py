@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
     QVBoxLayout,
     QWidget,
 )
+from shiboken6 import isValid as _qt_is_valid
 
 from models.text_annotation_repo import (
     DEFAULT_TEXT_COLOR,
@@ -234,8 +235,21 @@ class TextBoxWidget(QFrame):
         )
         return self._native_pt_to_display(native)
 
+    def _editor_alive(self) -> bool:
+        ed = getattr(self, "_editor", None)
+        return ed is not None and _qt_is_valid(ed)
+
     def current_char_format_state(self) -> dict[str, Any]:
         st = self._style()
+        if not self._editor_alive():
+            return {
+                "color": str(st.get("textColor") or DEFAULT_TEXT_COLOR),
+                "fontSize": int(round(float(st.get("fontSize") or _DEFAULT_FONT_PT))),
+                "lineSpacing": int(round(self._line_spacing_pt())),
+                "bold": False,
+                "italic": False,
+                "underline": False,
+            }
         cursor = self._editor.textCursor()
         fmt = cursor.charFormat() if cursor.hasSelection() else self._editor.currentCharFormat()
         color = fmt.foreground().color()
@@ -408,7 +422,7 @@ class TextBoxWidget(QFrame):
         return self.is_editor_focused_at_end()
 
     def _focus_editor(self) -> None:
-        if not self._editing:
+        if not self._editing or not self._editor_alive():
             return
         self._editor.setFocus(Qt.FocusReason.OtherFocusReason)
 
@@ -742,7 +756,7 @@ class TextBoxWidget(QFrame):
         self._editor.mergeCurrentCharFormat(fmt)
 
     def _emit_char_format_state(self) -> None:
-        if self._syncing_format_ui or not self._editing:
+        if self._syncing_format_ui or not self._editing or not self._editor_alive():
             return
         self.char_format_state_changed.emit(self.current_char_format_state())
 

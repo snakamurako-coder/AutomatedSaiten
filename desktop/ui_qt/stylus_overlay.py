@@ -574,11 +574,12 @@ class InkOverlayWidget(QWidget):
             return False
         if self._palm_rejection and _is_stylus_synthesized_mouse(event):
             return False
-        if self._palm_rejection and is_eraser_mouse_event(event):
+        # ハードウェアイレイザーは TOOL_NONE（テキストUIからの転送）でも有効
+        if is_eraser_mouse_event(event):
             return True
         if not self._pointer_may_draw() and not self._software_eraser:
             return False
-        return is_eraser_mouse_event(event) or self._eraser_active or self._software_eraser
+        return self._eraser_active or self._software_eraser
 
     def _handle_tablet_eraser_at(self, pos: QPointF, event: QTabletEvent) -> None:
         pressure = _event_pressure(event)
@@ -611,7 +612,7 @@ class InkOverlayWidget(QWidget):
     def _handle_tablet_eraser(self, event: QTabletEvent) -> None:
         self._handle_tablet_eraser_at(event.position(), event)
 
-    def _handle_mouse_eraser(self, event: QMouseEvent) -> None:
+    def _handle_mouse_eraser_at(self, pos: QPointF, event: QMouseEvent) -> None:
         if event.button() != Qt.LeftButton and not (event.buttons() & Qt.LeftButton):
             if event.type() == QEvent.Type.MouseButtonRelease:
                 self._eraser_active = False
@@ -621,7 +622,6 @@ class InkOverlayWidget(QWidget):
                 event.ignore()
             return
         pressure = _event_pressure(event)
-        pos = event.position()
         t = event.type()
         if t == QEvent.Type.MouseButtonPress:
             self._notify_before_draw()
@@ -633,7 +633,8 @@ class InkOverlayWidget(QWidget):
             event.accept()
             return
         if t == QEvent.Type.MouseMove:
-            if self._eraser_active:
+            if self._eraser_active or is_eraser_mouse_event(event):
+                self._eraser_active = True
                 self._erase_at(pos.x(), pos.y(), pressure)
                 self.update()
             event.accept()
@@ -642,6 +643,19 @@ class InkOverlayWidget(QWidget):
             self._eraser_active = False
             self._finish_eraser_session()
             event.accept()
+            return
+        event.ignore()
+
+    def _handle_mouse_eraser(self, event: QMouseEvent) -> None:
+        self._handle_mouse_eraser_at(event.position(), event)
+
+    def process_mouse_at(self, event: QMouseEvent, local_pos: QPointF) -> None:
+        """座標変換済みマウス入力（テキスト系タブからのイレイザー転送用）。sendEvent は使わない。"""
+        if _is_text_like_tool(self._tool_mode) and not self._palm_rejection:
+            event.ignore()
+            return
+        if self._should_erase_mouse(event):
+            self._handle_mouse_eraser_at(local_pos, event)
             return
         event.ignore()
 
@@ -827,6 +841,8 @@ class CropInkImageStack(QWidget):
         self._show_text = True
         self._tool_mode = TOOL_NONE
         self._before_ink_draw: Callable[[], None] | None = None
+        self._forwarding_stylus_mouse = False
+        self._forwarding_mouse_to_text = False
         lay = QVBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
@@ -953,6 +969,11 @@ class CropInkImageStack(QWidget):
         return self.ink_overlay.mapFromGlobal(gp)
 
     def _forward_mouse_to_text_layer(self, source: QWidget, event: QMouseEvent) -> bool:
+        # イレイザー転送中の再入や ink↔text の往復を防ぐ
+        if self._forwarding_stylus_mouse or self._forwarding_mouse_to_text:
+            return False
+        if is_eraser_mouse_event(event):
+            return False
         local = self._map_to_text_layer(source, event.position())
         mapped = QMouseEvent(
             event.type(),
@@ -963,7 +984,11 @@ class CropInkImageStack(QWidget):
             event.modifiers(),
             event.pointingDevice(),
         )
-        QApplication.sendEvent(self.text_layer, mapped)
+        self._forwarding_mouse_to_text = True
+        try:
+            QApplication.sendEvent(self.text_layer, mapped)
+        finally:
+            self._forwarding_mouse_to_text = False
         return True
 
     def _route_stylus_tablet_to_ink(self, watched: QWidget, event: QTabletEvent) -> bool:
@@ -997,17 +1022,20 @@ class CropInkImageStack(QWidget):
 
     def _forward_stylus_mouse_to_ink(self, watched: QWidget, event: QMouseEvent) -> bool:
         """パームリジェクション OFF 時、消しゴム等のスタイラス系マウスを手書きへ転送。"""
+        if self._forwarding_stylus_mouse or self._forwarding_mouse_to_text:
+            return False
         if self._palm_rejection:
             return False
         if not _is_text_like_tool(self._tool_mode):
             return False
-        if watched is self.ink_overlay:
+        # Shiboken のラッパ差で `is` が偽になることがあるため == でも判定
+        if watched is self.ink_overlay or watched == self.ink_overlay:
             return False
         if watched not in (self.container, self.image_label, self.text_layer):
             return False
         if _is_stylus_synthesized_mouse(event):
             return False
-        if not (is_eraser_mouse_event(event)):
+        if not is_eraser_mouse_event(event):
             return False
         et = event.type()
         if et not in (
@@ -1017,16 +1045,12 @@ class CropInkImageStack(QWidget):
         ):
             return False
         local = self._map_to_ink_layer(watched, event.position())
-        mapped = QMouseEvent(
-            et,
-            local,
-            event.globalPosition(),
-            event.button(),
-            event.buttons(),
-            event.modifiers(),
-            event.pointingDevice(),
-        )
-        QApplication.sendEvent(self.ink_overlay, mapped)
+        # sendEvent すると eventFilter 再入で無限再帰するため直接処理する
+        self._forwarding_stylus_mouse = True
+        try:
+            self.ink_overlay.process_mouse_at(event, local)
+        finally:
+            self._forwarding_stylus_mouse = False
         return True
 
     def _placement_pending(self) -> bool:
@@ -1214,8 +1238,8 @@ class CropInkImageStack(QWidget):
         self._sync_layer_order()
 
     def _ink_tool_mode(self) -> str:
-        """手書きレイヤーは UI タブに関わらず描画タブ（パームリジェクション時は TOOL_NONE）と同じモードで動かす。"""
-        if self._palm_rejection and _is_text_like_tool(self._tool_mode):
+        """手書きレイヤーは UI がテキスト系でも描画タブ相当（TOOL_NONE）で動かす。"""
+        if _is_text_like_tool(self._tool_mode):
             return TOOL_NONE
         return self._tool_mode
 
