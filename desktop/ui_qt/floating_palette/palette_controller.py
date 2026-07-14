@@ -632,6 +632,9 @@ class PaletteController:
         """通常グリッドでペンON＋選択ありの操作制限が有効か。"""
         if self._full_sheet_dialog is not None:
             return False
+        # パームリジェクション ON 時は全タイルにスタイラス描画可のため制限しない
+        if self._palm_rejection:
+            return False
         if not self.is_inking_draw_tab():
             return False
         return bool(self._page_draw_selected_ids())
@@ -667,10 +670,14 @@ class PaletteController:
             stack.set_drawing_enabled(False)
             return
         inking = self.is_inking_draw_tab()
-        selected = self._page_draw_selected_ids()
         if not inking:
             stack.set_drawing_enabled(True)
             return
+        # パームリジェクション ON: 選択の有無に関わらず全タイルでスタイラス入力可
+        if self._palm_rejection:
+            stack.set_drawing_enabled(True)
+            return
+        selected = self._page_draw_selected_ids()
         if not selected:
             stack.set_drawing_enabled(False)
             return
