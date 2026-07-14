@@ -672,12 +672,15 @@ class InkOverlayWidget(QWidget):
         t = event.type()
 
         if not self._should_draw_tablet(event):
-            if (
-                self._palm_rejection
-                and t == QEvent.Type.TabletPress
-                and is_finger_tablet_event(event)
-            ):
-                self._emit_click_through()
+            if t == QEvent.Type.TabletPress:
+                if not self._drawing_enabled:
+                    # 描画ゲートOFFでも選択トグル用のクリックを通知
+                    self._emit_click_through()
+                elif (
+                    self._palm_rejection
+                    and is_finger_tablet_event(event)
+                ):
+                    self._emit_click_through()
             event.accept()
             return
 
