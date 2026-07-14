@@ -177,7 +177,8 @@ class StepManualPage(QWidget):
         root.addWidget(work, 1)
 
         # --- 最下部固定オーバーレイ ---
-        root.addWidget(self._build_footer_overlay())
+        self.grade_footer = self._build_footer_overlay()
+        root.addWidget(self.grade_footer)
 
     def _build_mark_mode_switch(self) -> QWidget:
         """判定表示（文字/印字）— 下部固定メニュー用。"""
@@ -836,6 +837,53 @@ class StepManualPage(QWidget):
             return next(iter(self._selected_ids))
         return None
 
+    def palette_draw_selected_ids(self) -> list[int]:
+        return list(self._selected_ids)
+
+    def palette_set_pen_ui_locked(self, locked: bool) -> None:
+        """ペンON＋選択ありのときフッタ（ズーム／判定操作）を無効化。"""
+        footer = getattr(self, "grade_footer", None)
+        if footer is not None:
+            footer.setEnabled(not bool(locked))
+
+    def palette_maximize_write_items(self) -> list[dict[str, Any]]:
+        fid = self._selected_field_id() or ""
+        items: list[dict[str, Any]] = []
+        for it in self._items:
+            rid = int(it.get("result_id") or 0)
+            if rid not in self._selected_ids or not it.get("ok"):
+                continue
+            row = it.get("row") or {}
+            items.append(
+                {
+                    "result_id": rid,
+                    "field_id": fid,
+                    "pil": it["pil"],
+                    "file_name": str(row.get("fileName") or ""),
+                    "student_id": str(row.get("studentId") or ""),
+                    "student_name": str(row.get("name") or row.get("studentName") or ""),
+                    "ink_strokes": list(it.get("ink_strokes") or []),
+                    "sheet_ink_strokes": list(it.get("sheet_ink_strokes") or []),
+                    "text_annotations": list(it.get("text_annotations") or []),
+                }
+            )
+        items.sort(
+            key=lambda x: (
+                str(x.get("file_name") or "").lower(),
+                int(x.get("result_id") or 0),
+            )
+        )
+        return items
+
+    def palette_save_ink_strokes(
+        self, result_id: int, field_id: str, strokes: list
+    ) -> None:
+        del field_id
+        self._save_ink_strokes(result_id, strokes)
+
+    def palette_refresh_after_maximize_write(self) -> None:
+        self._render_grid()
+
     def palette_test_id(self) -> str | None:
         tid = getattr(self.app, "active_test_id", None)
         return str(tid) if tid else None
@@ -1204,6 +1252,9 @@ class StepManualPage(QWidget):
                 0,
                 0,
             )
+            ctrl = getattr(self.app, "palette_controller", None)
+            if ctrl is not None:
+                ctrl.notify_draw_selection_changed()
             return
         zoom = max(30, min(400, self.crop_controls.zoom_value())) / 100.0
         cols = 4
@@ -1220,6 +1271,7 @@ class StepManualPage(QWidget):
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:
             ctrl.ensure_palette_visible()
+            ctrl.notify_draw_selection_changed()
 
     def _judgment_stroke_color(self, judgment: str) -> str | None:
         mark = (self._feedback_style or {}).get("mark") or {}
@@ -1361,8 +1413,13 @@ class StepManualPage(QWidget):
             if self._palette_active_key:
                 self._apply_palette_to_image(result_id)
             return
+        if ctrl is not None and ctrl.is_pen_draw_lock_active():
+            # ペンON＋選択あり: 選択の変更・未選択タップを無視
+            return
         if result_id in self._selected_ids:
             self._selected_ids.discard(result_id)
         else:
             self._selected_ids.add(result_id)
         self._render_grid()
+        if ctrl is not None:
+            ctrl.notify_draw_selection_changed()

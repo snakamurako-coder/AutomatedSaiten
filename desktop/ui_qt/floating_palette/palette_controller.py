@@ -138,6 +138,9 @@ class PaletteController:
         self.tool_window.full_sheet_grade_requested.connect(
             self._on_full_sheet_grade_requested
         )
+        self.tool_window.maximize_write_requested.connect(
+            self._on_maximize_write_requested
+        )
         preview = self.tool_window.phrase_preview
         preview.content_changed.connect(
             lambda: self._persist_phrase_from_preview(reload_list=False)
@@ -413,6 +416,7 @@ class PaletteController:
         self._sync_stack_phrase_template(stack)
         stack.set_tool_mode(self._tool)
         stack.set_brush(color, width, alpha)
+        self._apply_drawing_gate_to_stack(stack)
 
     def _sync_stack_phrase_template(self, stack: CropInkImageStack) -> None:
         if self._tool == TOOL_PHRASE and self._pending_phrase_template:
@@ -614,6 +618,76 @@ class PaletteController:
             self._sync_stack_phrase_template(stack)
             stack.set_tool_mode(self._tool)
             stack.set_brush(color, width, alpha)
+        self._sync_pen_draw_gate()
+
+    def is_inking_draw_tab(self) -> bool:
+        """描画タブでペン相当（パームON時の常時描画／ペン・消しゴムON）か。"""
+        if self.tool_window.current_input_mode() != MODE_DRAW:
+            return False
+        if self._palm_rejection:
+            return self._tool in (TOOL_NONE, TOOL_PEN, TOOL_ERASER)
+        return self._tool in (TOOL_PEN, TOOL_ERASER)
+
+    def is_pen_draw_lock_active(self) -> bool:
+        """通常グリッドでペンON＋選択ありの操作制限が有効か。"""
+        if self._full_sheet_dialog is not None:
+            return False
+        if not self.is_inking_draw_tab():
+            return False
+        return bool(self._page_draw_selected_ids())
+
+    def _page_draw_selected_ids(self) -> set[int]:
+        if self._page is None:
+            return set()
+        fn = getattr(self._page, "palette_draw_selected_ids", None)
+        if not callable(fn):
+            return set()
+        try:
+            ids = fn() or []
+        except Exception:
+            return set()
+        out: set[int] = set()
+        for x in ids:
+            try:
+                out.add(int(x))
+            except (TypeError, ValueError):
+                continue
+        return out
+
+    def notify_draw_selection_changed(self) -> None:
+        """ページ側の選択変更後に呼ぶ。"""
+        self._sync_pen_draw_gate()
+
+    def _apply_drawing_gate_to_stack(self, stack: CropInkImageStack) -> None:
+        if self._full_sheet_stack is not None and stack is self._full_sheet_stack:
+            stack.set_drawing_enabled(True)
+            return
+        if self._full_sheet_dialog is not None:
+            # モーダル中のページ側スタックは描画しない
+            stack.set_drawing_enabled(False)
+            return
+        inking = self.is_inking_draw_tab()
+        selected = self._page_draw_selected_ids()
+        if not inking:
+            stack.set_drawing_enabled(True)
+            return
+        if not selected:
+            stack.set_drawing_enabled(False)
+            return
+        stack.set_drawing_enabled(int(stack.result_id) in selected)
+
+    def _sync_pen_draw_gate(self) -> None:
+        for stack in self._stacks():
+            self._apply_drawing_gate_to_stack(stack)
+        lock = self.is_pen_draw_lock_active()
+        page = self._page
+        if page is not None:
+            fn = getattr(page, "palette_set_pen_ui_locked", None)
+            if callable(fn):
+                try:
+                    fn(lock)
+                except Exception:
+                    pass
 
     def _on_tool_changed(self, tool: str) -> None:
         prev = self._tool
@@ -774,6 +848,69 @@ class PaletteController:
     def _on_input_mode_changed(self, mode: str) -> None:
         if str(mode or "") != MODE_PHRASE:
             self._end_phrase_edit()
+        self._sync_pen_draw_gate()
+
+    def _on_maximize_write_requested(self) -> None:
+        from ui_qt import helpers as h
+        from ui_qt.maximize_write_dialog import MaximizeWriteDialog
+
+        if self._full_sheet_dialog is not None:
+            return
+        if self._page is None:
+            h.warn(self._main, "最大化書き込み", "対象の画面がありません。")
+            return
+        items_fn = getattr(self._page, "palette_maximize_write_items", None)
+        items = items_fn() if callable(items_fn) else []
+        if not items:
+            h.warn(
+                self._main,
+                "最大化書き込み",
+                "書き込む画像を選択してください。",
+            )
+            return
+
+        def on_strokes(result_id: int, field_id: str, strokes: list) -> None:
+            save_fn = getattr(self._page, "palette_save_ink_strokes", None)
+            if callable(save_fn):
+                save_fn(result_id, field_id, strokes)
+            else:
+                # フォールバック: ページの内部保存
+                page = self._page
+                if page is not None and hasattr(page, "_save_ink_strokes"):
+                    page._save_ink_strokes(result_id, strokes)  # type: ignore[attr-defined]
+
+        def on_annotations(result_id: int, field_id: str, ann: list) -> None:
+            page = self._page
+            if page is not None:
+                page.palette_save_annotations(result_id, field_id, ann)
+
+        self.tool_window.set_maximize_write_enabled(False)
+        self.set_settings_overlay_active(True)
+        dlg = MaximizeWriteDialog(
+            self._main,
+            items=items,
+            palette_controller=self,
+            on_strokes_changed=on_strokes,
+            on_annotations_changed=on_annotations,
+        )
+        try:
+            dlg.raise_()
+            dlg.activateWindow()
+            dlg.exec()
+        finally:
+            self.unbind_full_sheet_dialog(dlg)
+            self.tool_window.set_maximize_write_enabled(True)
+            self.set_settings_overlay_active(False)
+            self._refresh_crop_grid_annotations()
+            if self._page is not None:
+                refresh = getattr(self._page, "palette_refresh_after_maximize_write", None)
+                if callable(refresh):
+                    refresh()
+                elif hasattr(self._page, "_render_grid"):
+                    self._page._render_grid()  # type: ignore[attr-defined]
+                elif hasattr(self._page, "_render_crop_grid"):
+                    self._page._render_crop_grid()  # type: ignore[attr-defined]
+            self._sync_pen_draw_gate()
 
     def _on_char_format_changed(self, changes: dict[str, Any]) -> None:
         if self._editing_phrase_id:
@@ -1449,3 +1586,4 @@ class PaletteController:
     def register_stack(self, stack: CropInkImageStack) -> None:
         """新規タイル生成後に呼ぶ。"""
         self._bind_stack(stack)
+        self._apply_drawing_gate_to_stack(stack)

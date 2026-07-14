@@ -58,6 +58,7 @@ class ToolPaletteWindow(QWidget):
     clear_ink_requested = Signal()
     clear_text_boxes_requested = Signal()
     full_sheet_grade_requested = Signal()
+    maximize_write_requested = Signal()
     undo_requested = Signal()
     redo_requested = Signal()
 
@@ -227,6 +228,14 @@ class ToolPaletteWindow(QWidget):
         for i, btn in enumerate((self._pen_btn, self._eraser_btn)):
             self._draw_tool_group.addButton(btn, i)
             tools_row.addWidget(btn, 1)
+        self._maximize_write_btn = QPushButton("最大化書き込み")
+        self._maximize_write_btn.setObjectName("PaletteMaximizeWriteBtn")
+        self._maximize_write_btn.setCheckable(False)
+        self._maximize_write_btn.setToolTip(
+            "選択中の画像を最大化して書き込む（ズーム・送り・パーム領域あり）"
+        )
+        self._maximize_write_btn.clicked.connect(self.maximize_write_requested.emit)
+        tools_row.addWidget(self._maximize_write_btn, 1)
         draw_lay.addLayout(tools_row)
 
         self._draw_hint = QLabel("スタイラスで手書き（パームリジェクション ON 時は常時描画）")
@@ -1096,6 +1105,18 @@ class ToolPaletteWindow(QWidget):
             float(self._width_ctrl.value()),
             float(self._alpha_ctrl.value()) / 100.0,
         )
+
+    def set_maximize_write_enabled(self, enabled: bool) -> None:
+        btn = getattr(self, "_maximize_write_btn", None)
+        if btn is None:
+            return
+        btn.setEnabled(bool(enabled))
+        if enabled:
+            btn.setStyleSheet("")
+        else:
+            btn.setStyleSheet(
+                "QPushButton:disabled { color: #9ca3af; background: #e5e7eb; }"
+            )
 
     def current_tool(self) -> str:
         if self._input_mode == MODE_TEXT:

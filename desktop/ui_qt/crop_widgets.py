@@ -224,3 +224,26 @@ class CropDisplayControls(QWidget):
         self.show_id_check.toggled.connect(lambda _c: callback())
         self.show_file_check.toggled.connect(lambda _c: callback())
         self.show_ocr_check.toggled.connect(lambda _c: callback())
+
+
+def fit_zoom_pct(
+    native_w: int,
+    native_h: int,
+    view_w: int,
+    view_h: int,
+    mode: str,
+    *,
+    min_pct: int = 10,
+    max_pct: int = 400,
+) -> int:
+    """画像をビューに合わせるズーム％（width / height / contain）。"""
+    if native_w <= 0 or native_h <= 0 or view_w <= 0 or view_h <= 0:
+        return 100
+    m = str(mode or "contain").strip().lower()
+    if m == "width":
+        pct = view_w / native_w * 100.0
+    elif m == "height":
+        pct = view_h / native_h * 100.0
+    else:
+        pct = min(view_w / native_w, view_h / native_h) * 100.0
+    return max(int(min_pct), min(int(max_pct), int(round(pct))))

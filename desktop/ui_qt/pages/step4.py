@@ -102,6 +102,7 @@ class Step4Page(QWidget):
         self._outlier_flat_rows: list[dict[str, Any]] = []
         self._crop_grid_results: list[dict[str, Any]] = []
         self._ink_stacks: list[CropInkImageStack] = []
+        self._draw_selected_ids: set[int] = set()
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer = QVBoxLayout(self)
@@ -526,6 +527,16 @@ class Step4Page(QWidget):
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:
             ctrl.set_active_result_id(result_id)
+        if ctrl is not None and ctrl.is_inking_draw_tab():
+            # 描画タブ＋ペン系: みなし切替ではなく描画用選択のトグル
+            # （描画ゲートは選択中のみ set_drawing_enabled）
+            if result_id in self._draw_selected_ids:
+                self._draw_selected_ids.discard(result_id)
+            else:
+                self._draw_selected_ids.add(result_id)
+            self._render_crop_grid()
+            ctrl.notify_draw_selection_changed()
+            return
         self._toggle_deemed(fid, ans)
 
     def _toggle_incorrect(self, fid: str, ans: str) -> None:
@@ -629,6 +640,7 @@ class Step4Page(QWidget):
         self._outlier_groups = []
         self._outlier_flat_rows = []
         self._crop_grid_results = []
+        self._draw_selected_ids.clear()
         self._load_field_state()
         self._aggregate()
         self._render_outlier_table()
@@ -1214,6 +1226,55 @@ class Step4Page(QWidget):
     def palette_field_id(self) -> str:
         return self._selected_field_id() or ""
 
+    def palette_draw_selected_ids(self) -> list[int]:
+        return list(self._draw_selected_ids)
+
+    def palette_set_pen_ui_locked(self, locked: bool) -> None:
+        """ペンON＋描画選択ありのときズーム行を無効化（外れ値表より上は可）。"""
+        controls = getattr(self, "crop_controls", None)
+        if controls is not None:
+            controls.setEnabled(not bool(locked))
+
+    def palette_maximize_write_items(self) -> list[dict[str, Any]]:
+        fid = self._selected_field_id() or ""
+        items: list[dict[str, Any]] = []
+        for it in self._crop_grid_results:
+            if not it.get("ok"):
+                continue
+            row = it.get("row") or {}
+            rid = int(row.get("rowIndex") or 0)
+            if rid not in self._draw_selected_ids:
+                continue
+            items.append(
+                {
+                    "result_id": rid,
+                    "field_id": fid,
+                    "pil": it["pil"],
+                    "file_name": str(row.get("fileName") or ""),
+                    "student_id": str(row.get("studentId") or ""),
+                    "student_name": str(row.get("name") or row.get("studentName") or ""),
+                    "ink_strokes": list(it.get("ink_strokes") or []),
+                    "sheet_ink_strokes": list(it.get("sheet_ink_strokes") or []),
+                    "text_annotations": list(it.get("text_annotations") or []),
+                }
+            )
+        items.sort(
+            key=lambda x: (
+                str(x.get("file_name") or "").lower(),
+                int(x.get("result_id") or 0),
+            )
+        )
+        return items
+
+    def palette_save_ink_strokes(
+        self, result_id: int, field_id: str, strokes: list
+    ) -> None:
+        del field_id
+        self._save_ink_strokes(result_id, strokes)
+
+    def palette_refresh_after_maximize_write(self) -> None:
+        self._render_crop_grid()
+
     def palette_test_id(self) -> str | None:
         tid = getattr(self.app, "active_test_id", None)
         return str(tid) if tid else None
@@ -1324,11 +1385,12 @@ class Step4Page(QWidget):
             item = self.crop_grid.takeAt(0)
             if item.widget():
                 item.widget().deleteLater()
+        self._ink_stacks = []
 
     def _render_crop_grid(self) -> None:
         self._clear_crop_grid()
-        self._ink_stacks = []
         if not self._crop_grid_results:
+            self._draw_selected_ids.clear()
             self.crop_grid.addWidget(
                 h.muted_label("「選択を画像表示」または外れ値一覧の「1枚」で回答欄画像を表示します"),
                 0,
@@ -1337,7 +1399,15 @@ class Step4Page(QWidget):
             ctrl = getattr(self.app, "palette_controller", None)
             if ctrl is not None:
                 ctrl.ensure_palette_visible()
+                ctrl.notify_draw_selection_changed()
             return
+
+        visible_ids = {
+            int((item.get("row") or {}).get("rowIndex") or 0)
+            for item in self._crop_grid_results
+            if item.get("ok")
+        }
+        self._draw_selected_ids &= visible_ids
 
         fid = self._selected_field_id() or ""
         zoom = max(30, min(400, self.crop_controls.zoom_value())) / 100.0
@@ -1351,6 +1421,7 @@ class Step4Page(QWidget):
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:
             ctrl.ensure_palette_visible()
+            ctrl.notify_draw_selection_changed()
 
     def _make_crop_tile(self, item: dict[str, Any], fid: str, zoom: float) -> QWidget:
         tile = QFrame()
@@ -1378,9 +1449,20 @@ class Step4Page(QWidget):
         row = item["row"]
         ans = row.get("answer_text") or ""
         deemed = self._is_deemed(fid, ans)
-        border = COLORS["selection"] if deemed else COLORS["border"]
-        bg = COLORS["selection_soft"] if deemed else COLORS["surface"]
-        border_w = 3 if deemed else 2
+        row_index = int(row.get("rowIndex") or 0)
+        draw_sel = row_index in self._draw_selected_ids
+        if draw_sel:
+            border = COLORS["selection"]
+            bg = COLORS["selection_soft"]
+            border_w = 3
+        elif deemed:
+            border = COLORS["selection"]
+            bg = COLORS["selection_soft"]
+            border_w = 3
+        else:
+            border = COLORS["border"]
+            bg = COLORS["surface"]
+            border_w = 2
         tile.setStyleSheet(
             f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
             f" border-radius: 6px; }}"
@@ -1388,7 +1470,6 @@ class Step4Page(QWidget):
         tile.setCursor(Qt.PointingHandCursor)
 
         pil = item["pil"]
-        row_index = int(row.get("rowIndex") or 0)
         placement_meta = {
             "resultId": row_index,
             "fieldId": fid,

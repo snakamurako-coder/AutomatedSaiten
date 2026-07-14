@@ -42,6 +42,8 @@ DEFAULT_CONFIG: dict = {
     "speech_pause_seconds": 1.8,
     "stylus_palm_rejection": True,
     "stylus_eraser_mode": "pixel",
+    # 最大化書き込み: パーム領域グラバーの水平位置
+    "maximize_write_palm_grabber_side": "left",
     "faint_check_enabled": True,
     "faint_min_sigma": 12.0,
     "faint_min_p95_p5": 35.0,
