@@ -44,6 +44,10 @@ DEFAULT_CONFIG: dict = {
     "stylus_eraser_mode": "pixel",
     # 最大化書き込み: パーム領域グラバーの水平位置
     "maximize_write_palm_grabber_side": "left",
+    # 最大化書き込み: 前回のフィット倍率方式（width / height / contain）
+    "maximize_write_fit_mode": "contain",
+    # 最大化書き込み: 画像の縦位置（top / center / bottom）
+    "maximize_write_vertical_align": "center",
     "faint_check_enabled": True,
     "faint_min_sigma": 12.0,
     "faint_min_p95_p5": 35.0,

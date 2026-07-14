@@ -5,8 +5,8 @@ from __future__ import annotations
 import copy
 from typing import Any, Callable
 
-from PySide6.QtCore import Qt, QRect
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QResizeEvent
+from PySide6.QtCore import Qt, QRect, QTimer
+from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent, QResizeEvent, QShowEvent
 from PySide6.QtWidgets import (
     QButtonGroup,
     QComboBox,
@@ -22,11 +22,19 @@ from PySide6.QtWidgets import (
 from ui_qt.crop_widgets import ZoomControls, fit_zoom_pct
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.stylus_prefs import (
+    FIT_MODE_CONTAIN,
+    FIT_MODES,
     PALM_GRABBER_CENTER,
     PALM_GRABBER_LEFT,
     PALM_GRABBER_RIGHT,
+    VERTICAL_ALIGN_BOTTOM,
+    VERTICAL_ALIGN_CENTER,
+    VERTICAL_ALIGN_TOP,
+    VERTICAL_ALIGNS,
     load_stylus_prefs,
+    save_maximize_write_fit_mode,
     save_maximize_write_palm_grabber_side,
+    save_maximize_write_vertical_align,
 )
 from ui_qt.style import COLORS
 
@@ -140,15 +148,33 @@ class PalmBlanket(QWidget):
 class _CanvasHost(QWidget):
     """スクロール全面＋最前面パーム毛布。"""
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        vertical_align: str = VERTICAL_ALIGN_CENTER,
+    ) -> None:
         super().__init__(parent)
         self.scroll = QScrollArea(self)
         self.scroll.setWidgetResizable(False)
-        self.scroll.setAlignment(Qt.AlignmentFlag.AlignCenter)
         side = load_stylus_prefs().get(
             "maximize_write_palm_grabber_side", PALM_GRABBER_LEFT
         )
         self.blanket = PalmBlanket(self, grabber_side=str(side))
+        self.set_vertical_align(vertical_align)
+
+    def set_vertical_align(self, align: str) -> None:
+        a = str(align or VERTICAL_ALIGN_CENTER).strip().lower()
+        if a not in VERTICAL_ALIGNS:
+            a = VERTICAL_ALIGN_CENTER
+        h = Qt.AlignmentFlag.AlignHCenter
+        if a == VERTICAL_ALIGN_TOP:
+            v = Qt.AlignmentFlag.AlignTop
+        elif a == VERTICAL_ALIGN_BOTTOM:
+            v = Qt.AlignmentFlag.AlignBottom
+        else:
+            v = Qt.AlignmentFlag.AlignVCenter
+        self.scroll.setAlignment(h | v)
 
     def resizeEvent(self, event: QResizeEvent) -> None:  # noqa: N802
         super().resizeEvent(event)
@@ -170,7 +196,6 @@ class MaximizeWriteDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("最大化書き込み")
-        self.resize(1100, 760)
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.setWindowFlags(
             self.windowFlags()
@@ -180,14 +205,26 @@ class MaximizeWriteDialog(QDialog):
             | Qt.WindowType.WindowCloseButtonHint
         )
 
+        prefs = load_stylus_prefs()
+        saved_fit = str(prefs.get("maximize_write_fit_mode") or FIT_MODE_CONTAIN)
+        if saved_fit not in FIT_MODES:
+            saved_fit = FIT_MODE_CONTAIN
+        saved_v_align = str(
+            prefs.get("maximize_write_vertical_align") or VERTICAL_ALIGN_CENTER
+        )
+        if saved_v_align not in VERTICAL_ALIGNS:
+            saved_v_align = VERTICAL_ALIGN_CENTER
+
         self._queue = list(items)
         self._index = 0
         self._palette_controller = palette_controller
         self._on_strokes_changed = on_strokes_changed
         self._on_annotations_changed = on_annotations_changed
         self._stack: CropInkImageStack | None = None
-        self._fit_mode: str | None = None
+        self._fit_mode: str | None = saved_fit
+        self._vertical_align = saved_v_align
         self._suppress_fit_clear = False
+        self._initial_layout_done = False
 
         root = QVBoxLayout(self)
         root.setSpacing(6)
@@ -214,7 +251,19 @@ class MaximizeWriteDialog(QDialog):
 
         self._file_label = QLabel("")
         self._file_label.setStyleSheet(f"color: {COLORS['text_secondary']};")
-        toolbar.addWidget(self._file_label, 1)
+        toolbar.addWidget(self._file_label)
+
+        self._v_align_combo = QComboBox()
+        self._v_align_combo.setToolTip("表示領域内での画像の縦位置")
+        self._v_align_combo.addItem("上寄せ", VERTICAL_ALIGN_TOP)
+        self._v_align_combo.addItem("中央", VERTICAL_ALIGN_CENTER)
+        self._v_align_combo.addItem("下寄せ", VERTICAL_ALIGN_BOTTOM)
+        v_idx = max(0, self._v_align_combo.findData(saved_v_align))
+        self._v_align_combo.setCurrentIndex(v_idx)
+        self._v_align_combo.currentIndexChanged.connect(self._on_vertical_align_changed)
+        toolbar.addWidget(self._v_align_combo)
+
+        toolbar.addStretch(1)
 
         self._zoom = ZoomControls(
             min_pct=10, max_pct=400, value=100, slider_max_width=120
