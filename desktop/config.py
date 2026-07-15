@@ -48,6 +48,10 @@ DEFAULT_CONFIG: dict = {
     "maximize_write_fit_mode": "contain",
     # 最大化書き込み: 画像の縦位置（top / center / bottom）
     "maximize_write_vertical_align": "center",
+    # ⑩ Excel成績出力の詳細設定
+    "excel_export_hist_bin_pct": 10,
+    "excel_export_rank_overall_limit": 48,
+    "excel_export_rank_class_limit": 16,
     "faint_check_enabled": True,
     "faint_min_sigma": 12.0,
     "faint_min_p95_p5": 35.0,
@@ -248,3 +252,11 @@ def test_feedback(test_id: str) -> Path:
 def test_results_excel_path(test_id: str) -> Path:
     """OCR／採点結果 Excel の既定パス（⑩個票フォルダのすぐ上＝同じテスト配下）。"""
     return test_dir(test_id) / "採点結果.xlsx"
+
+
+def test_grade_list_excel_path(test_id: str, test_name: str = "") -> Path:
+    """⑩ 成績一覧 Excel の既定パス。"""
+    safe = "".join(
+        c for c in str(test_name or "").strip() if c not in '\\/:*?"<>|'
+    ).strip() or "無題"
+    return test_dir(test_id) / f"成績一覧_{safe}.xlsx"

@@ -1,4 +1,4 @@
-"""⑩ 個票出力ページ（合計欄配置・書式設定・プレビュー・一括生成）。"""
+"""⑩ 個票・成績一覧出力ページ（合計欄・個票生成・成績Excel）。"""
 
 from __future__ import annotations
 
@@ -10,6 +10,7 @@ from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
     QDoubleSpinBox,
+    QFileDialog,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -35,7 +36,7 @@ from models.output_repo import (
     save_output_slots,
 )
 from models.test_repo import get_test_info
-from config import test_feedback
+from config import test_feedback, test_grade_list_excel_path
 from services.feedback_exporter import (
     is_pdf_export_format,
     rasterize_feedback_preview,
@@ -45,8 +46,10 @@ from services.feedback_renderer import (
     _load_rows_with_extras,
     batch_generate_feedback,
 )
+from services.grade_excel_exporter import export_grade_excel
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import ZoomControls
+from ui_qt.excel_export_settings_dialog import ExcelExportSettingsDialog
 from ui_qt.helpers import ProgressBridge, pil_to_qpixmap
 from ui_qt.layout_helpers import CollapsibleSection, make_expanding
 from ui_qt.region_editor import AnswerRegionEditor
@@ -119,17 +122,19 @@ class Step10Page(QWidget):
         root.setContentsMargins(0, 0, 8, 0)
         root.setSpacing(8)
 
-        root.addWidget(h.title_label("⑩ 個票出力"))
+        root.addWidget(h.title_label("⑩ 個票・成績一覧出力"))
         root.addWidget(
             h.muted_label(
                 "補正済み解答画像に判定マーク（○/△/×）・小問得点・合計欄・手書き・テキスト注釈を合成した個票を生成します。"
                 "手書き・テキストを含む場合は PDF 出力を推奨します。"
+                "成績一覧は Excel で別途出力できます。"
             )
         )
         root.addWidget(self._build_slots_box())
         root.addWidget(self._build_style_section())
         root.addWidget(self._build_preview_box())
         root.addWidget(self._build_batch_box())
+        root.addWidget(self._build_excel_box())
         root.addStretch()
 
     # ---------- 合計欄の配置 ----------
@@ -313,6 +318,29 @@ class Step10Page(QWidget):
         self.batch_status = h.caption_label("")
         lay.addWidget(self.batch_status)
         self._last_output_dir: str | None = None
+        return box
+
+    def _build_excel_box(self) -> QGroupBox:
+        box = QGroupBox("成績一覧（Excel）")
+        lay = QVBoxLayout(box)
+        lay.addWidget(
+            h.caption_label(
+                "採点結果・各問判定・テスト分析・ランキング・成績一覧表の5シートを出力します。"
+                "名簿・未受験は⑦の設定を反映します。"
+            )
+        )
+        ctrl = QHBoxLayout()
+        self.excel_btn = h.button(
+            "成績一覧をExcel出力", self._on_excel_export, variant="primary"
+        )
+        ctrl.addWidget(self.excel_btn)
+        ctrl.addWidget(
+            h.button("エクセル出力詳細設定", self._on_excel_settings)
+        )
+        ctrl.addStretch()
+        lay.addLayout(ctrl)
+        self.excel_status = h.caption_label("")
+        lay.addWidget(self.excel_status)
         return box
 
     # ---------- 再読込 ----------
@@ -648,3 +676,47 @@ class Step10Page(QWidget):
         if not self.app.require_active_test():
             return
         h.open_in_file_manager(test_feedback(self.app.active_test_id), parent=self)
+
+    # ---------- Excel ----------
+
+    def _on_excel_settings(self) -> None:
+        dlg = ExcelExportSettingsDialog(self)
+        dlg.exec()
+
+    def _on_excel_export(self) -> None:
+        if not self.app.require_active_test():
+            return
+        test_id = self.app.active_test_id
+        try:
+            info = get_test_info(test_id)
+            test_name = str(info.get("testName") or "")
+        except Exception:
+            test_name = ""
+        default_path = str(test_grade_list_excel_path(test_id, test_name))
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "成績一覧 Excel の保存先",
+            default_path,
+            "Excel ブック (*.xlsx)",
+        )
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        self.excel_btn.setEnabled(False)
+        self.excel_status.setText("Excel を生成中…")
+
+        def task():
+            return str(export_grade_excel(test_id, path))
+
+        def done(result: str | None, err: Exception | None) -> None:
+            self.excel_btn.setEnabled(True)
+            if err:
+                self.excel_status.setText("")
+                h.error(self, "Excel出力エラー", str(err))
+                return
+            out = result or path
+            self.excel_status.setText(f"保存しました: {out}")
+            h.info(self, "Excel出力完了", f"保存しました:\n{out}")
+
+        h.run_in_thread(self, task, done)
