@@ -127,6 +127,15 @@ def import_roster_with_mapping(
     return save_roster_rows(roster_name, parsed)
 
 
+def _student_id_sort_key(row: dict[str, Any]) -> tuple:
+    """4桁ID昇順用（数値として解釈できるものは数値順）。"""
+    s = str(row.get("studentId") or "").strip()
+    try:
+        return (0, float(s), s)
+    except ValueError:
+        return (1, 0.0, s.lower())
+
+
 def _roster_sort_key(row: dict[str, Any]) -> tuple:
     def num(v: str) -> tuple[int, Any]:
         s = str(v or "").strip()
@@ -242,9 +251,19 @@ def get_roster_assignment_preview(
 
 
 def assign_ids_from_roster(
-    test_id: str, roster_name: str, absent_students: list[dict[str, str]]
+    test_id: str,
+    roster_name: str,
+    absent_students: list[dict[str, str]],
+    *,
+    file_order: str = "asc",
 ) -> dict[str, Any]:
-    """補正画像（結果行）をファイル名順、名簿を組・番号順に並べて 1:1 で割り当てる。"""
+    """結果行をファイル名順、名簿を生徒ID昇順に並べて 1:1 で割り当てる。
+
+    file_order:
+      - \"asc\"  … ファイル名昇順（表スキャン、既定）
+      - \"desc\" … ファイル名降順（裏スキャン用）
+    名簿側は常に生徒4桁ID昇順。
+    """
     status = get_id_assignment_status(test_id)
     if status["skipAssignment"]:
         return {"assigned": 0, "skipped": True, "message": "IDマーク欄から取得済みのためスキップしました。"}
@@ -259,12 +278,13 @@ def assign_ids_from_roster(
             for r in roster
             if r["studentId"] not in absent_ids and r["name"] not in absent_names
         ),
-        key=_roster_sort_key,
+        key=_student_id_sort_key,
     )
 
+    order = "DESC" if str(file_order or "").strip().lower() == "desc" else "ASC"
     with connect() as conn:
         rows = conn.execute(
-            "SELECT id, file_name FROM results WHERE test_id = ? ORDER BY file_name",
+            f"SELECT id, file_name FROM results WHERE test_id = ? ORDER BY file_name {order}",
             (test_id,),
         ).fetchall()
         if len(rows) != len(attendees):
@@ -282,7 +302,11 @@ def assign_ids_from_roster(
 
     save_selected_roster_name(test_id, roster_name)
     save_roster_absent_state(test_id, roster_name, absent_students or [])
-    return {"assigned": len(attendees), "skipped": False}
+    return {
+        "assigned": len(attendees),
+        "skipped": False,
+        "fileOrder": "desc" if order == "DESC" else "asc",
+    }
 
 
 def update_student_identity(

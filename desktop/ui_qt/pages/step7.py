@@ -40,6 +40,7 @@ from models.roster_repo import (
 )
 from ui_qt import helpers as h
 from ui_qt.layout_helpers import make_expanding
+from ui_qt.style import COLORS
 
 
 class RosterImportDialog(QDialog):
@@ -161,6 +162,41 @@ class Step7Page(QWidget):
         ctrl.addStretch()
         lay.addLayout(ctrl)
 
+        order_row = QHBoxLayout()
+        order_row.setSpacing(6)
+        order_row.addWidget(h.caption_label("紐づけ順"))
+        self._file_order_lbl_asc = QLabel("ファイル名昇順")
+        self._file_order_lbl_desc = QLabel("ファイル名降順")
+        self.file_order_switch = QCheckBox()
+        self.file_order_switch.setObjectName("RosterFileOrderSwitch")
+        self.file_order_switch.setChecked(False)
+        self.file_order_switch.setCursor(Qt.PointingHandCursor)
+        self.file_order_switch.setToolTip(
+            "OFF（既定）: 生徒ID昇順 ↔ ファイル名昇順（表スキャン向け）\n"
+            "ON: 生徒ID昇順 ↔ ファイル名降順（裏スキャンでIDが逆順になる場合）"
+        )
+        self.file_order_switch.setStyleSheet(
+            f"""
+            QCheckBox#RosterFileOrderSwitch {{
+                spacing: 0px;
+            }}
+            QCheckBox#RosterFileOrderSwitch::indicator {{
+                width: 40px; height: 22px; border-radius: 11px;
+                border: 1px solid {COLORS["border_strong"]}; background: #e5e7eb;
+            }}
+            QCheckBox#RosterFileOrderSwitch::indicator:checked {{
+                background: {COLORS["accent"]}; border-color: {COLORS["accent_hover"]};
+            }}
+            """
+        )
+        self.file_order_switch.toggled.connect(self._on_file_order_toggled)
+        order_row.addWidget(self._file_order_lbl_asc)
+        order_row.addWidget(self.file_order_switch)
+        order_row.addWidget(self._file_order_lbl_desc)
+        order_row.addStretch()
+        lay.addLayout(order_row)
+        self._update_file_order_labels()
+
         self.assign_summary_label = h.caption_label("")
         lay.addWidget(self.assign_summary_label)
 
@@ -246,9 +282,27 @@ class Step7Page(QWidget):
         else:
             msg = (
                 f"解答 {st['resultCount']} 件中 ID 入力済み {st['withIdCount']} 件。"
-                "名簿を選択し、未受験者を除外してから割り当ててください（ファイル名順 ↔ 名簿の組・番号順で 1:1 対応）。"
+                "名簿を選択し、未受験者を除外してから割り当ててください"
+                "（生徒ID昇順 ↔ ファイル名昇順または降順で 1:1 対応）。"
             )
         self.assign_status_label.setText(msg)
+
+    def _on_file_order_toggled(self, _checked: bool) -> None:
+        self._update_file_order_labels()
+
+    def _update_file_order_labels(self) -> None:
+        desc = self.file_order_switch.isChecked()
+        self._file_order_lbl_asc.setStyleSheet(
+            f"font-weight: {'400' if desc else '700'};"
+            f" color: {COLORS['text_muted'] if desc else COLORS['text']};"
+        )
+        self._file_order_lbl_desc.setStyleSheet(
+            f"font-weight: {'700' if desc else '400'};"
+            f" color: {COLORS['text'] if desc else COLORS['text_muted']};"
+        )
+
+    def _assign_file_order(self) -> str:
+        return "desc" if self.file_order_switch.isChecked() else "asc"
 
     # ---------- 名簿操作 ----------
 
@@ -339,11 +393,25 @@ class Step7Page(QWidget):
             )
             return
         try:
-            res = assign_ids_from_roster(self.app.active_test_id, name, absent)
+            res = assign_ids_from_roster(
+                self.app.active_test_id,
+                name,
+                absent,
+                file_order=self._assign_file_order(),
+            )
             if res.get("skipped"):
                 h.info(self, "スキップ", res.get("message", ""))
             else:
-                h.info(self, "割当完了", f"{res['assigned']} 名の ID・氏名を割り当てました。")
+                order_label = (
+                    "ファイル名降順"
+                    if res.get("fileOrder") == "desc"
+                    else "ファイル名昇順"
+                )
+                h.info(
+                    self,
+                    "割当完了",
+                    f"{res['assigned']} 名の ID・氏名を割り当てました（生徒ID昇順 × {order_label}）。",
+                )
             self._update_assign_status()
         except Exception as e:
             h.error(self, "割当エラー", str(e))

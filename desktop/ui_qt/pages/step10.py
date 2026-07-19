@@ -317,6 +317,36 @@ class Step10Page(QWidget):
         lay.addLayout(ctrl)
         self.batch_status = h.caption_label("")
         lay.addWidget(self.batch_status)
+
+        lay.addWidget(
+            h.caption_label(
+                "表裏一体印刷: 表側・裏側の採点済みテストを生徒IDで突き合わせ、"
+                "奇数ページ＝表・偶数ページ＝裏の PDF を出力します。"
+            )
+        )
+        duplex_row1 = QHBoxLayout()
+        duplex_row1.addWidget(QLabel("表側テスト"))
+        self.duplex_front_combo = QComboBox()
+        self.duplex_front_combo.setMinimumWidth(220)
+        duplex_row1.addWidget(self.duplex_front_combo, 1)
+        duplex_row1.addWidget(QLabel("裏側テスト"))
+        self.duplex_back_combo = QComboBox()
+        self.duplex_back_combo.setMinimumWidth(220)
+        duplex_row1.addWidget(self.duplex_back_combo, 1)
+        lay.addLayout(duplex_row1)
+
+        duplex_row2 = QHBoxLayout()
+        duplex_row2.addWidget(QLabel("表裏出力"))
+        self.duplex_mode_combo = QComboBox()
+        self.duplex_mode_combo.addItem("全員分を1つのPDF", "combined")
+        self.duplex_mode_combo.addItem("生徒ごとに2ページPDF", "per_student")
+        duplex_row2.addWidget(self.duplex_mode_combo, 1)
+        self.duplex_btn = h.button(
+            "表裏一体PDFを生成", self._on_duplex_batch, variant="primary"
+        )
+        duplex_row2.addWidget(self.duplex_btn)
+        lay.addLayout(duplex_row2)
+
         self._last_output_dir: str | None = None
         return box
 

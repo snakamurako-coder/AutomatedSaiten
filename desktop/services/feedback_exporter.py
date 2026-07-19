@@ -107,6 +107,16 @@ def gather_row_render_data(
     }
 
 
+def build_row_pdf_document(
+    test_id: str,
+    row: dict[str, Any],
+    *,
+    shared: dict[str, Any] | None = None,
+) -> fitz.Document:
+    """1生徒分の個票 PDF ドキュメント（表裏一体印刷などから利用）。"""
+    return _build_row_pdf_document(test_id, row, shared=shared)
+
+
 def _build_row_pdf_document(
     test_id: str,
     row: dict[str, Any],
