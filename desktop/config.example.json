@@ -1,7 +1,7 @@
 {
   "vision_api_key": "",
   "openai_api_key": "",
-  "openai_ocr_model": "gpt-4o",
+  "openai_ocr_model": "gpt-4o-mini",
   "ocr_engine": "openai",
   "default_orientation": "landscape",
   "gemini_api_key": "",

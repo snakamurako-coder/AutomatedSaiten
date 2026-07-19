@@ -35,7 +35,7 @@ def load_config() -> dict:
 DEFAULT_CONFIG: dict = {
     "vision_api_key": "",
     "openai_api_key": "",
-    "openai_ocr_model": "gpt-4o",
+    "openai_ocr_model": "gpt-4o-mini",
     "ocr_engine": "openai",
     "default_orientation": "landscape",
     # ⓪ 起動時: auto=前回テストを読み出す / blank=未選択

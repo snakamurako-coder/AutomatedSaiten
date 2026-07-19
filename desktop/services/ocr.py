@@ -25,7 +25,7 @@ _MIN_TEST_JPEG = base64.b64decode(
 
 OCR_ENGINE_VISION = "vision"
 OCR_ENGINE_OPENAI = "openai"
-DEFAULT_OPENAI_OCR_MODEL = "gpt-4o"
+DEFAULT_OPENAI_OCR_MODEL = "gpt-4o-mini"
 
 
 def normalize_ocr_lang(lang: str | None) -> str:
