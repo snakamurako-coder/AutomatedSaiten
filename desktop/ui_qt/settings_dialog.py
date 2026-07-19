@@ -425,6 +425,17 @@ class SettingsDialog(QDialog):
         self.orientation_combo.setCurrentText(cfg.get("default_orientation") or "landscape")
         form.addRow("用紙向き（デフォルト）", self.orientation_combo)
 
+        startup_row = QVBoxLayout()
+        self.startup_test_auto = QRadioButton("前回のテストを自動で読み出す")
+        self.startup_test_blank = QRadioButton("空欄（未選択）で開始")
+        if (cfg.get("startup_test_load") or "auto") == "blank":
+            self.startup_test_blank.setChecked(True)
+        else:
+            self.startup_test_auto.setChecked(True)
+        startup_row.addWidget(self.startup_test_auto)
+        startup_row.addWidget(self.startup_test_blank)
+        form.addRow("⓪ テスト作成（起動時）", startup_row)
+
         lay.addLayout(form)
         lay.addStretch()
         self._tabs.addTab(page, "その他")
@@ -506,6 +517,7 @@ class SettingsDialog(QDialog):
             "vision_api_key": self.vision_edit.text().strip(),
             "ocr_engine": "vision" if self.engine_vision.isChecked() else "tesseract",
             "default_orientation": self.orientation_combo.currentText(),
+            "startup_test_load": "blank" if self.startup_test_blank.isChecked() else "auto",
             "tesseract_cmd": self.tesseract_edit.text().strip(),
             "gemini_api_key": self.gemini_edit.text().strip(),
             "speech_input_mode": speech_mode,

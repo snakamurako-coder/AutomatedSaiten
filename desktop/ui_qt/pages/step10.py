@@ -46,6 +46,11 @@ from services.feedback_renderer import (
     _load_rows_with_extras,
     batch_generate_feedback,
 )
+from services.duplex_feedback_exporter import (
+    DuplexMatchError,
+    batch_export_duplex_feedback,
+    list_duplex_candidate_tests,
+)
 from services.grade_excel_exporter import export_grade_excel
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import ZoomControls
@@ -436,6 +441,47 @@ class Step10Page(QWidget):
             label = f"{r.get('studentId') or '-'} / {r.get('name') or '-'} / {r.get('fileName')}"
             self.preview_row_combo.addItem(label)
 
+        self._populate_duplex_combos(test_id)
+
+    def _duplex_combo_label(self, t: dict[str, Any]) -> str:
+        name = str(t.get("testName") or "無題")
+        rc = t.get("resultCount")
+        vc = t.get("validIdCount")
+        extra = f"（ID {vc}/{rc}）" if rc is not None and vc is not None else ""
+        active = " ★" if t.get("isActive") else ""
+        return f"{name}{extra}{active}"
+
+    def _populate_duplex_combos(self, active_test_id: str) -> None:
+        candidates = list_duplex_candidate_tests()
+        if not candidates:
+            self.duplex_front_combo.clear()
+            self.duplex_back_combo.clear()
+            self.duplex_btn.setEnabled(False)
+            return
+        self.duplex_btn.setEnabled(True)
+
+        def fill_combo(combo: QComboBox, select_id: str | None) -> None:
+            combo.blockSignals(True)
+            combo.clear()
+            for t in candidates:
+                combo.addItem(self._duplex_combo_label(t), str(t.get("testSsId") or ""))
+            if select_id:
+                idx = combo.findData(select_id)
+                if idx >= 0:
+                    combo.setCurrentIndex(idx)
+            combo.blockSignals(False)
+
+        fill_combo(self.duplex_front_combo, active_test_id)
+        back_default = None
+        for t in candidates:
+            tid = str(t.get("testSsId") or "")
+            if tid and tid != active_test_id:
+                back_default = tid
+                break
+        if back_default is None and len(candidates) > 1:
+            back_default = str(candidates[1].get("testSsId") or "")
+        fill_combo(self.duplex_back_combo, back_default)
+
     # ---------- 合計欄 ----------
 
     def _select_slot_key(self, key: str) -> None:
@@ -645,6 +691,7 @@ class Step10Page(QWidget):
         test_id = self.app.active_test_id
         export_format = str(self.export_format_combo.currentData() or "pdf")
         self.batch_btn.setEnabled(False)
+        self.duplex_btn.setEnabled(False)
         self.batch_progress.setValue(0)
         self.batch_status.setText("個票を生成中…")
 
@@ -668,6 +715,7 @@ class Step10Page(QWidget):
 
     def _on_batch_done(self, result: dict[str, Any] | None, err: Exception | None) -> None:
         self.batch_btn.setEnabled(True)
+        self.duplex_btn.setEnabled(True)
         if err:
             self.batch_status.setText("")
             h.error(self, "一括生成エラー", str(err))
@@ -698,6 +746,78 @@ class Step10Page(QWidget):
             )
         self.batch_status.setText(msg.replace("\n", " — "))
         h.info(self, "一括生成完了", msg)
+
+    def _on_duplex_batch(self) -> None:
+        if not self.app.require_active_test():
+            return
+        front_id = str(self.duplex_front_combo.currentData() or "").strip()
+        back_id = str(self.duplex_back_combo.currentData() or "").strip()
+        mode = str(self.duplex_mode_combo.currentData() or "combined")
+        if not front_id or not back_id:
+            h.warn(self, "表裏一体印刷", "表側・裏側のテストを選択してください。")
+            return
+        if front_id == back_id:
+            h.warn(self, "表裏一体印刷", "表側と裏側は異なるテストを選んでください。")
+            return
+
+        self.batch_btn.setEnabled(False)
+        self.duplex_btn.setEnabled(False)
+        self.batch_progress.setValue(0)
+        self.batch_status.setText("表裏一体PDFを生成中…")
+
+        bridge = ProgressBridge(self)
+        bridge.updated.connect(self._on_batch_progress)
+
+        def task():
+            def on_progress(current: int, total: int, name: str) -> None:
+                bridge.updated.emit(current, total, name)
+
+            return batch_export_duplex_feedback(
+                front_id,
+                back_id,
+                mode=mode,  # type: ignore[arg-type]
+                on_progress=on_progress,
+            )
+
+        h.run_in_thread(self, task, self._on_duplex_batch_done)
+
+    def _on_duplex_batch_done(
+        self, result: dict[str, Any] | None, err: Exception | None
+    ) -> None:
+        self.batch_btn.setEnabled(True)
+        self.duplex_btn.setEnabled(True)
+        if err:
+            self.batch_status.setText("")
+            title = "表裏一体印刷エラー"
+            if isinstance(err, DuplexMatchError):
+                h.error(self, title, str(err))
+            else:
+                h.error(self, title, str(err))
+            return
+        assert result is not None
+        out_dir = str(result.get("outputDir") or "")
+        if out_dir:
+            self._last_output_dir = out_dir
+        mode = result.get("mode") or "combined"
+        if mode == "combined":
+            msg = (
+                f"表裏一体 / {result.get('savedStudents', 0)} 名 / "
+                f"{result.get('pageCount', 0)} ページ / "
+                f"スキップ {len(result.get('skipped') or [])} 件 / "
+                f"エラー {len(result.get('errors') or [])} 件\n"
+                f"ファイル: {result.get('combinedFile') or out_dir}"
+            )
+        else:
+            files = result.get("perStudentFiles") or []
+            msg = (
+                f"表裏個別 / {result.get('savedStudents', 0)} 名 / "
+                f"{len(files)} ファイル / "
+                f"スキップ {len(result.get('skipped') or [])} 件 / "
+                f"エラー {len(result.get('errors') or [])} 件\n"
+                f"保存先: {out_dir}"
+            )
+        self.batch_status.setText(msg.replace("\n", " — "))
+        h.info(self, "表裏一体印刷完了", msg)
 
     def _on_open_output_folder(self) -> None:
         if self._last_output_dir:

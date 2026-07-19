@@ -15,7 +15,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.test_repo import create_test, list_tests, set_active_test
+from models.test_repo import (
+    create_test,
+    get_test_info,
+    list_tests,
+    set_active_test,
+    update_test,
+)
 from services.answer_sheet_template import (
     SHEET_TEMPLATE_A4_LANDSCAPE,
     SHEET_TEMPLATE_A4_PORTRAIT,
@@ -29,6 +35,8 @@ class Step0Page(QWidget):
         super().__init__()
         self.app = app
         self._tests: list[dict[str, Any]] = []
+        self._loaded_test_id: str | None = None
+        self._form_snapshot: tuple[str, str, str] = ("", "", "")
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -39,7 +47,7 @@ class Step0Page(QWidget):
         body.setSpacing(14)
         root.addLayout(body)
 
-        form_box = QGroupBox("新規テスト")
+        form_box = QGroupBox("テスト情報")
         form = QFormLayout(form_box)
         form.setSpacing(8)
         self.name_edit = QLineEdit()
@@ -50,7 +58,8 @@ class Step0Page(QWidget):
         form.addRow("テスト名 *", self.name_edit)
         form.addRow("科目名", self.subject_edit)
         form.addRow("実施日時", self.datetime_edit)
-        form.addRow(h.button("テストを作成", self._on_create, variant="primary"))
+        self._action_btn = h.button("テストを作成", self._on_action, variant="primary")
+        form.addRow(self._action_btn)
         form_box.setFixedWidth(360)
         body.addWidget(form_box, 0)
 
@@ -97,24 +106,84 @@ class Step0Page(QWidget):
     def refresh(self) -> None:
         self._tests = list_tests()
         self.test_list.clear()
+        active_test: dict[str, Any] | None = None
         for t in self._tests:
             mark = "● " if t.get("isActive") else "　 "
             self.test_list.addItem(f"{mark}{t['testName']}  [{t['status']}] step={t['currentStep']}")
-        if self._tests:
-            active = next((t for t in self._tests if t.get("isActive")), self._tests[0])
-            self.app.active_test_id = active["testSsId"]
-            self.active_label.setText(f"選択中: {active['testName']}")
+            if t.get("isActive"):
+                active_test = t
+
+        if active_test:
+            self.app.active_test_id = active_test["testSsId"]
+            self.active_label.setText(f"選択中: {active_test['testName']}")
+            self._load_form_for_test_id(active_test["testSsId"])
         else:
             self.app.active_test_id = None
             self.active_label.setText("選択中: （なし）")
+            self._clear_form()
 
-    def _on_create(self) -> None:
+        self._sync_action_button()
+
+    def _capture_form_snapshot(self) -> None:
+        self._form_snapshot = (
+            self.name_edit.text(),
+            self.subject_edit.text(),
+            self.datetime_edit.text(),
+        )
+
+    def _form_has_changes(self) -> bool:
+        current = (
+            self.name_edit.text(),
+            self.subject_edit.text(),
+            self.datetime_edit.text(),
+        )
+        return current != self._form_snapshot
+
+    def _load_form_for_test_id(self, test_id: str) -> None:
+        try:
+            info = get_test_info(test_id)
+        except ValueError:
+            self._clear_form()
+            return
+        self._loaded_test_id = test_id
+        self.name_edit.setText(info.get("testName") or "")
+        self.subject_edit.setText(info.get("subject") or "")
+        self.datetime_edit.setText(info.get("datetime") or "")
+        self._capture_form_snapshot()
+
+    def _clear_form(self) -> None:
+        self._loaded_test_id = None
+        self.name_edit.clear()
+        self.subject_edit.clear()
+        self.datetime_edit.clear()
+        self._capture_form_snapshot()
+
+    def _sync_action_button(self) -> None:
+        if self._loaded_test_id:
+            self._action_btn.setText("上書きする")
+        else:
+            self._action_btn.setText("テストを作成")
+
+    def _on_action(self) -> None:
         name = self.name_edit.text().strip()
         if not name:
             h.error(self, "入力エラー", "テスト名を入力してください。")
             return
+        subject = self.subject_edit.text()
+        datetime_str = self.datetime_edit.text()
+        if self._loaded_test_id:
+            if not self._form_has_changes():
+                h.info(self, "変更なし", "テスト情報に変更がありません。")
+                return
+            try:
+                update_test(self._loaded_test_id, name, subject, datetime_str)
+                h.info(self, "上書き完了", f"テスト「{name}」を更新しました。")
+                self.refresh()
+            except Exception as e:
+                h.error(self, "エラー", str(e))
+            return
         try:
-            res = create_test(name, self.subject_edit.text(), self.datetime_edit.text())
+            res = create_test(name, subject, datetime_str)
             self.app.active_test_id = res["testSsId"]
             h.info(self, "作成完了", f"テスト「{name}」を作成しました。")
             self.refresh()

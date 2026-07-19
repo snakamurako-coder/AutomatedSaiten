@@ -46,6 +46,7 @@ class MainWindow(QMainWindow):
 
         init_db()
         self.active_test_id: str | None = None
+        self._apply_startup_test_load()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -342,9 +343,17 @@ class MainWindow(QMainWindow):
             return
         self.palette_controller.detach()
 
+    def _apply_startup_test_load(self) -> None:
+        """詳細設定の起動時テスト読み出しモードを反映する。"""
+        from config import load_config
+        from models.test_repo import clear_active_test
+
+        if load_config().get("startup_test_load", "auto") == "blank":
+            clear_active_test()
+            self.active_test_id = None
+
     def _sync_active_test(self) -> None:
         """DB のアクティブテストをメモリに同期する。"""
         with connect() as conn:
             tid = get_active_test_id(conn)
-        if tid:
-            self.active_test_id = tid
+        self.active_test_id = tid

@@ -117,6 +117,53 @@ def set_active_test(test_id: str) -> None:
         conn.commit()
 
 
+def clear_active_test() -> None:
+    """アクティブテストの選択を解除する（テストデータ自体は削除しない）。"""
+    init_db()
+    with connect() as conn:
+        conn.execute("DELETE FROM app_state WHERE key = 'active_test_id'")
+        conn.commit()
+
+
+def update_test(
+    test_id: str,
+    test_name: str,
+    subject: str = "",
+    datetime_str: str = "",
+) -> None:
+    """既存テストのテスト名・科目名・実施日時を更新する。"""
+    init_db()
+    test_name = (test_name or "").strip()
+    if not test_name:
+        raise ValueError("テスト名は必須です。")
+    saved_at = _now()
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM tests WHERE id = ?", (test_id,)).fetchone()
+        if not row:
+            raise ValueError("テストが見つかりません。")
+        conn.execute(
+            """
+            UPDATE tests
+            SET test_name = ?, subject = ?, datetime = ?, last_saved_at = ?
+            WHERE id = ?
+            """,
+            (test_name, subject or "", datetime_str or "", saved_at, test_id),
+        )
+        for key, val in {
+            "テスト名": test_name,
+            "科目名": subject or "",
+            "実施日時": datetime_str or "",
+        }.items():
+            conn.execute(
+                """
+                INSERT INTO test_info(test_id, key, value) VALUES (?, ?, ?)
+                ON CONFLICT(test_id, key) DO UPDATE SET value = excluded.value
+                """,
+                (test_id, key, val),
+            )
+        conn.commit()
+
+
 def get_test_info(test_id: str | None = None) -> dict[str, Any]:
     init_db()
     with connect() as conn:

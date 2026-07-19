@@ -36,6 +36,8 @@ DEFAULT_CONFIG: dict = {
     "vision_api_key": "",
     "ocr_engine": "tesseract",
     "default_orientation": "landscape",
+    # ⓪ 起動時: auto=前回テストを読み出す / blank=未選択
+    "startup_test_load": "auto",
     "tesseract_cmd": "",
     "gemini_api_key": "",
     "speech_input_mode": "app",
