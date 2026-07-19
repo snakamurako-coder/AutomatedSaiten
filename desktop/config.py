@@ -248,6 +248,11 @@ def test_model(test_id: str) -> Path:
     return test_dir(test_id) / "model"
 
 
+def test_model_source(test_id: str) -> Path:
+    """模範解答の原稿（ドロップ元ファイル）を格納するフォルダ。"""
+    return test_model(test_id) / "source"
+
+
 def test_feedback(test_id: str) -> Path:
     return test_dir(test_id) / FEEDBACK_FOLDER_NAME
 

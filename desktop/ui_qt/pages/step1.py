@@ -5,7 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -19,8 +20,10 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import load_config, save_config
+from config import load_config, save_config, test_inbox, test_model_source
 from models.test_repo import (
+    archive_model_answer_source,
+    copy_student_sheet_to_inbox,
     get_answer_fields,
     get_test_info,
     get_use_id_mark,
@@ -35,6 +38,91 @@ from ui_qt.region_editor import AnswerRegionEditor
 from ui_qt.style import COLORS
 
 
+class StudentSheetDropZone(QFrame):
+    """生徒回答用紙のドラッグ＆ドロップ領域。"""
+
+    file_dropped = Signal(str)
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._source_path: str | None = None
+        self.setAcceptDrops(True)
+        self.setFixedWidth(280)
+        self.setMinimumHeight(92)
+        self._apply_idle_style()
+
+        lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(4)
+        self.title_label = QLabel("生徒回答用紙")
+        self.title_label.setStyleSheet(
+            f"border: none; font-weight: 700; color: {COLORS['text']}; font-size: 12px;"
+        )
+        self.hint_label = QLabel("PDF / JPG / PNG を\nここにドロップ")
+        self.hint_label.setWordWrap(True)
+        self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.hint_label.setStyleSheet(
+            f"border: none; color: {COLORS['text_secondary']}; font-size: 11px;"
+        )
+        lay.addWidget(self.title_label)
+        lay.addWidget(self.hint_label, 1)
+
+    def source_path(self) -> str | None:
+        return self._source_path
+
+    def set_source_path(self, path: str | None) -> None:
+        self._source_path = (path or "").strip() or None
+        if self._source_path:
+            self.hint_label.setText(Path(self._source_path).name)
+            self._apply_active_style()
+        else:
+            self.hint_label.setText("PDF / JPG / PNG を\nここにドロップ")
+            self._apply_idle_style()
+
+    def clear(self) -> None:
+        self.set_source_path(None)
+
+    def _apply_idle_style(self) -> None:
+        self.setStyleSheet(
+            f"StudentSheetDropZone {{ background: {COLORS['surface']};"
+            f" border: 2px dashed {COLORS['border']}; border-radius: 8px; }}"
+        )
+
+    def _apply_active_style(self) -> None:
+        self.setStyleSheet(
+            f"StudentSheetDropZone {{ background: #f0fdf4;"
+            f" border: 2px solid #16a34a; border-radius: 8px; }}"
+        )
+
+    def dragEnterEvent(self, event: QDragEnterEvent) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+            self.setStyleSheet(
+                f"StudentSheetDropZone {{ background: #eff6ff;"
+                f" border: 2px dashed {COLORS['accent']}; border-radius: 8px; }}"
+            )
+
+    def dragLeaveEvent(self, event) -> None:  # noqa: N802
+        if self._source_path:
+            self._apply_active_style()
+        else:
+            self._apply_idle_style()
+
+    def dropEvent(self, event: QDropEvent) -> None:  # noqa: N802
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        files = [p for p in paths if p and is_supported_input_path(p)]
+        if not files:
+            h.warn(self, "ドロップ", "PDF / JPG / PNG ファイルをドロップしてください。")
+            if self._source_path:
+                self._apply_active_style()
+            else:
+                self._apply_idle_style()
+            return
+        self.set_source_path(files[0])
+        self.file_dropped.emit(files[0])
+        event.acceptProposedAction()
+
+
 class Step1Page(QWidget):
     def __init__(self, app: Any) -> None:
         super().__init__()
@@ -45,13 +133,39 @@ class Step1Page(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
-        root.addWidget(h.title_label("① 回答欄設定（模範解答）"))
-        root.addWidget(
+
+        header = QHBoxLayout()
+        header.setSpacing(12)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title_col.addWidget(h.title_label("① 回答欄設定（模範解答）"))
+        title_col.addWidget(
             h.muted_label(
                 "PDF / JPG / PNG をドロップするか「画像を開く」で模範解答を読み込み、"
                 "画像上をドラッグして記述欄を指定します。"
             )
         )
+        header.addLayout(title_col, 1)
+
+        student_col = QVBoxLayout()
+        student_col.setSpacing(6)
+        self.student_drop = StudentSheetDropZone()
+        self.student_drop.file_dropped.connect(self._on_student_sheet_dropped)
+        student_col.addWidget(self.student_drop)
+        self.copy_student_btn = h.button(
+            "生徒回答用紙のコピーを作業フォルダに作成",
+            self._on_copy_student_sheet_to_inbox,
+        )
+        self.copy_student_btn.setEnabled(False)
+        student_col.addWidget(self.copy_student_btn)
+        student_col.addWidget(
+            h.open_folder_button(self._on_open_inbox_folder, text="作業フォルダを開く")
+        )
+        student_col.addWidget(
+            h.open_folder_button(self._on_open_model_source_folder, text="模範解答原稿フォルダを開く")
+        )
+        header.addLayout(student_col, 0)
+        root.addLayout(header)
 
         toolbar = QHBoxLayout()
         toolbar.setSpacing(8)
@@ -119,6 +233,44 @@ class Step1Page(QWidget):
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
 
+    def _on_student_sheet_dropped(self, path: str) -> None:
+        self.copy_student_btn.setEnabled(True)
+        self._set_status(f"生徒回答用紙を読み込みました: {Path(path).name}")
+
+    def _on_copy_student_sheet_to_inbox(self) -> None:
+        if not self.app.require_active_test():
+            return
+        source = self.student_drop.source_path()
+        if not source:
+            h.warn(self, "未選択", "先に生徒回答用紙をドロップしてください。")
+            return
+        try:
+            dest = copy_student_sheet_to_inbox(self.app.active_test_id, source)
+            inbox = test_inbox(self.app.active_test_id)
+            self._set_status(f"作業フォルダにコピーしました: {Path(dest).name}")
+            h.info(
+                self,
+                "コピー完了",
+                f"作業フォルダ（inbox）に保存しました:\n{dest}\n\n"
+                f"フォルダ: {inbox}",
+            )
+        except Exception as e:
+            h.error(self, "コピー失敗", str(e))
+
+    def _on_open_inbox_folder(self) -> None:
+        if not self.app.require_active_test():
+            return
+        folder = test_inbox(self.app.active_test_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        h.open_in_file_manager(folder, parent=self)
+
+    def _on_open_model_source_folder(self) -> None:
+        if not self.app.require_active_test():
+            return
+        folder = test_model_source(self.app.active_test_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        h.open_in_file_manager(folder, parent=self)
+
     # --- D&D ---
 
     def dragEnterEvent(self, event) -> None:  # noqa: N802
@@ -166,20 +318,23 @@ class Step1Page(QWidget):
             hh, ww = warped.shape[:2]
             keep = existing_fields if ref_w == ww and ref_h == hh and existing_fields else []
             save_model_answer_image(test_id, warped)
-            return warped, keep
+            archived = archive_model_answer_source(test_id, path)
+            return warped, keep, archived
 
         def done(result, err):
             if err:
                 self._set_status("")
                 h.error(self, "読込エラー", str(err))
                 return
-            warped, keep = result
+            warped, keep, archived = result
             self.editor.set_image(warped)
             if keep:
                 self.editor.set_regions(keep)
             self._field_rows = self.editor.get_regions()
             hh, ww = warped.shape[:2]
-            self._set_status(f"模範解答を読み込みました（{ww}×{hh}）— 画像上をドラッグして記述欄を追加")
+            self._set_status(
+                f"模範解答を読み込みました（{ww}×{hh}）— 原稿も保存済み — 画像上をドラッグして記述欄を追加"
+            )
             self._refresh_field_panel()
 
         h.run_in_thread(self, task, done)
@@ -187,6 +342,8 @@ class Step1Page(QWidget):
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
+        self.student_drop.clear()
+        self.copy_student_btn.setEnabled(False)
         self._field_rows = get_answer_fields(self.app.active_test_id)
         info = get_test_info(self.app.active_test_id)
         self.use_id_mark_check.setChecked(bool(info.get("useIdMark", True)))

@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import json
 import re
+import shutil
 import uuid
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Callable
 
 from config import (
@@ -14,6 +16,7 @@ from config import (
     test_feedback,
     test_inbox,
     test_model,
+    test_model_source,
     test_warped,
 )
 from constants import TEST_INFO_KEYS
@@ -31,6 +34,7 @@ def _ensure_test_dirs(test_id: str) -> str:
         test_warped(test_id),
         test_archive(test_id),
         test_model(test_id),
+        test_model_source(test_id),
         test_feedback(test_id),
     ):
         path.mkdir(parents=True, exist_ok=True)
@@ -280,6 +284,39 @@ def save_model_answer_image(test_id: str, warped_bgr: Any) -> str:
         _set_test_info(conn, test_id, "基準画像高さ", str(h))
         conn.commit()
     return resolved
+
+
+def archive_model_answer_source(test_id: str, source_path: str | Path) -> str:
+    """模範解答として読み込んだ原稿ファイルを model/source に保存する。"""
+    source = Path(source_path)
+    if not source.is_file():
+        raise ValueError(f"原稿ファイルが見つかりません: {source}")
+    _ensure_test_dirs(test_id)
+    dest_dir = test_model_source(test_id)
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    ext = source.suffix.lower() or ".jpg"
+    fname = f"模範解答_原稿_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+    dest = dest_dir / fname
+    shutil.copy2(source, dest)
+    return str(dest.resolve())
+
+
+def copy_student_sheet_to_inbox(test_id: str, source_path: str | Path) -> str:
+    """生徒回答用紙を inbox（作業フォルダ）にコピーする。"""
+    source = Path(source_path)
+    if not source.is_file():
+        raise ValueError(f"ファイルが見つかりません: {source}")
+    _ensure_test_dirs(test_id)
+    inbox = test_inbox(test_id)
+    inbox.mkdir(parents=True, exist_ok=True)
+    ext = source.suffix.lower() or ".jpg"
+    dest = inbox / f"生徒回答用紙{ext}"
+    if dest.exists():
+        dest = inbox / f"生徒回答用紙_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
+    shutil.copy2(source, dest)
+    resolved_inbox = str(inbox.resolve())
+    save_student_folder(test_id, resolved_inbox)
+    return str(dest.resolve())
 
 
 def get_answer_fields_conn(conn, test_id: str) -> list[dict[str, Any]]:
