@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import threading
 import tkinter as tk
-from tkinter import filedialog, messagebox, ttk
+from tkinter import messagebox, ttk
 from typing import Callable
 
 from config import CONFIG_PATH, load_config, save_config
 from services.gemini_rubric import test_gemini_api_key
-from services.ocr import test_vision_api_key
+from services.ocr import test_openai_api_key, test_vision_api_key
 from ui.theme import apply_theme
 
 
@@ -26,10 +26,13 @@ class SettingsDialog(tk.Toplevel):
         self._on_saved = on_saved
         self._loaded = load_config()
 
-        self.ocr_engine_var = tk.StringVar(value=self._loaded.get("ocr_engine") or "tesseract")
+        engine = str(self._loaded.get("ocr_engine") or "openai").strip().lower()
+        if engine == "tesseract":
+            engine = "openai"
+        self.ocr_engine_var = tk.StringVar(value=engine)
         self.vision_key_var = tk.StringVar(value=self._loaded.get("vision_api_key") or "")
+        self.openai_key_var = tk.StringVar(value=self._loaded.get("openai_api_key") or "")
         self.gemini_key_var = tk.StringVar(value=self._loaded.get("gemini_api_key") or "")
-        self.tesseract_cmd_var = tk.StringVar(value=self._loaded.get("tesseract_cmd") or "")
         self.orientation_var = tk.StringVar(value=self._loaded.get("default_orientation") or "landscape")
         self.palm_rejection_var = tk.BooleanVar(
             value=bool(self._loaded.get("stylus_palm_rejection", True))
@@ -72,9 +75,9 @@ class SettingsDialog(tk.Toplevel):
         engine_row.grid(row=0, column=1, sticky="w", pady=2)
         ttk.Radiobutton(
             engine_row,
-            text="Tesseract（ローカル・無料）",
+            text="OpenAI API（クラウド・手書き向け）",
             variable=self.ocr_engine_var,
-            value="tesseract",
+            value="openai",
         ).pack(anchor="w")
         ttk.Radiobutton(
             engine_row,
@@ -83,35 +86,29 @@ class SettingsDialog(tk.Toplevel):
             value="vision",
         ).pack(anchor="w")
 
-        ttk.Label(ocr_frame, text="Tesseract 実行ファイル").grid(row=1, column=0, sticky="w", pady=2)
-        tess_row = ttk.Frame(ocr_frame)
-        tess_row.grid(row=1, column=1, sticky="ew", pady=2)
-        ocr_frame.columnconfigure(1, weight=1)
-        ttk.Entry(tess_row, textvariable=self.tesseract_cmd_var, width=42).pack(
-            side="left", fill="x", expand=True
-        )
-        ttk.Button(tess_row, text="参照…", command=self._browse_tesseract).pack(side="left", padx=4)
-        ttk.Label(
-            ocr_frame,
-            text="未指定の場合は PATH 上の tesseract を使用します。",
-            style="Caption.TLabel",
-        ).grid(row=2, column=1, sticky="w")
-
         api_frame = ttk.LabelFrame(body, text="API キー", padding=8)
         api_frame.pack(fill="x", pady=(0, 8))
         api_frame.columnconfigure(1, weight=1)
 
-        ttk.Label(api_frame, text="Vision API キー").grid(row=0, column=0, sticky="w", pady=4)
+        ttk.Label(api_frame, text="OpenAI API キー").grid(row=0, column=0, sticky="w", pady=4)
+        openai_row = ttk.Frame(api_frame)
+        openai_row.grid(row=0, column=1, sticky="ew", pady=4)
+        ttk.Entry(openai_row, textvariable=self.openai_key_var, show="•", width=42).pack(
+            side="left", fill="x", expand=True
+        )
+        ttk.Button(openai_row, text="接続確認", command=self._test_openai).pack(side="left", padx=4)
+
+        ttk.Label(api_frame, text="Vision API キー").grid(row=1, column=0, sticky="w", pady=4)
         vision_row = ttk.Frame(api_frame)
-        vision_row.grid(row=0, column=1, sticky="ew", pady=4)
+        vision_row.grid(row=1, column=1, sticky="ew", pady=4)
         ttk.Entry(vision_row, textvariable=self.vision_key_var, show="•", width=42).pack(
             side="left", fill="x", expand=True
         )
         ttk.Button(vision_row, text="接続確認", command=self._test_vision).pack(side="left", padx=4)
 
-        ttk.Label(api_frame, text="Gemini API キー").grid(row=1, column=0, sticky="w", pady=4)
+        ttk.Label(api_frame, text="Gemini API キー").grid(row=2, column=0, sticky="w", pady=4)
         gemini_row = ttk.Frame(api_frame)
-        gemini_row.grid(row=1, column=1, sticky="ew", pady=4)
+        gemini_row.grid(row=2, column=1, sticky="ew", pady=4)
         ttk.Entry(gemini_row, textvariable=self.gemini_key_var, show="•", width=42).pack(
             side="left", fill="x", expand=True
         )
@@ -119,9 +116,9 @@ class SettingsDialog(tk.Toplevel):
 
         ttk.Label(
             api_frame,
-            text="Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。",
+            text="OpenAI / Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。",
             style="Caption.TLabel",
-        ).grid(row=2, column=1, sticky="w")
+        ).grid(row=3, column=1, sticky="w")
 
         stylus_frame = ttk.LabelFrame(body, text="スタイラス", padding=8)
         stylus_frame.pack(fill="x", pady=(0, 8))
@@ -153,26 +150,20 @@ class SettingsDialog(tk.Toplevel):
         )
         ttk.Button(btn_row, text="キャンセル", command=self._on_cancel).pack(side="right")
 
-    def _browse_tesseract(self) -> None:
-        path = filedialog.askopenfilename(
-            title="Tesseract 実行ファイルを選択",
-            filetypes=[("実行ファイル", "*.exe"), ("すべて", "*.*")],
-        )
-        if path:
-            self.tesseract_cmd_var.set(path)
-
     def _collect_config(self) -> dict:
-        engine = (self.ocr_engine_var.get() or "tesseract").strip().lower()
-        if engine not in ("tesseract", "vision"):
-            engine = "tesseract"
+        engine = (self.ocr_engine_var.get() or "openai").strip().lower()
+        if engine == "tesseract":
+            engine = "openai"
+        if engine not in ("openai", "vision"):
+            engine = "openai"
         orientation = (self.orientation_var.get() or "landscape").strip().lower()
         if orientation not in ("landscape", "portrait"):
             orientation = "landscape"
         return {
             "vision_api_key": self.vision_key_var.get().strip(),
+            "openai_api_key": self.openai_key_var.get().strip(),
             "ocr_engine": engine,
             "default_orientation": orientation,
-            "tesseract_cmd": self.tesseract_cmd_var.get().strip(),
             "gemini_api_key": self.gemini_key_var.get().strip(),
         }
 
@@ -184,6 +175,13 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showwarning(
                 "設定エラー",
                 "OCR エンジンが Vision API の場合、Vision API キーを入力してください。",
+                parent=self,
+            )
+            return
+        if cfg["ocr_engine"] == "openai" and not cfg["openai_api_key"]:
+            messagebox.showwarning(
+                "設定エラー",
+                "OCR エンジンが OpenAI API の場合、OpenAI API キーを入力してください。",
                 parent=self,
             )
             return
@@ -219,6 +217,13 @@ class SettingsDialog(tk.Toplevel):
             messagebox.showerror(f"{label} — 失敗", message, parent=self)
         else:
             messagebox.showinfo(f"{label} — OK", message, parent=self)
+
+    def _test_openai(self) -> None:
+        key = self.openai_key_var.get().strip()
+        if not key:
+            messagebox.showwarning("未入力", "OpenAI API キーを入力してください。", parent=self)
+            return
+        self._run_api_test("OpenAI API", lambda: test_openai_api_key(key))
 
     def _test_vision(self) -> None:
         key = self.vision_key_var.get().strip()

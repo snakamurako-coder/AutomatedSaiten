@@ -34,7 +34,7 @@ from ui_qt.speech.speech_prefs import (
     load_speech_pause_seconds,
 )
 from services.gemini_rubric import test_gemini_api_key
-from services.ocr import test_vision_api_key
+from services.ocr import test_openai_api_key, test_vision_api_key
 from ui_qt import helpers as h
 from ui_qt.floating_palette.palette_prefs import (
     TEXT_BOX_DEFAULT_STYLE_BUILTIN,
@@ -124,22 +124,18 @@ class SettingsDialog(QDialog):
         ocr_form.setSpacing(10)
 
         engine_row = QVBoxLayout()
-        self.engine_tesseract = QRadioButton("Tesseract（ローカル・無料）")
+        self.engine_openai = QRadioButton("OpenAI API（クラウド・手書き向け）")
         self.engine_vision = QRadioButton("Google Vision API（クラウド）")
-        if (cfg.get("ocr_engine") or "tesseract") == "vision":
+        engine = str(cfg.get("ocr_engine") or "openai").strip().lower()
+        if engine == "tesseract":
+            engine = "openai"
+        if engine == "vision":
             self.engine_vision.setChecked(True)
         else:
-            self.engine_tesseract.setChecked(True)
-        engine_row.addWidget(self.engine_tesseract)
+            self.engine_openai.setChecked(True)
+        engine_row.addWidget(self.engine_openai)
         engine_row.addWidget(self.engine_vision)
         ocr_form.addRow("OCR エンジン", engine_row)
-
-        tess_row = QHBoxLayout()
-        self.tesseract_edit = QLineEdit(cfg.get("tesseract_cmd") or "")
-        tess_row.addWidget(self.tesseract_edit, 1)
-        tess_row.addWidget(h.button("参照…", self._browse_tesseract))
-        ocr_form.addRow("Tesseract 実行ファイル", tess_row)
-        ocr_form.addRow("", h.caption_label("未指定の場合は PATH 上の tesseract を使用します。"))
         lay.addLayout(ocr_form)
 
         lay.addWidget(h.caption_label("API キー"))
@@ -160,13 +156,20 @@ class SettingsDialog(QDialog):
         vision_row.addWidget(h.button("接続確認", self._test_vision))
         api_form.addRow("Vision API キー", vision_row)
 
+        openai_row = QHBoxLayout()
+        self.openai_edit = QLineEdit(cfg.get("openai_api_key") or "")
+        self.openai_edit.setEchoMode(QLineEdit.Password)
+        openai_row.addWidget(self.openai_edit, 1)
+        openai_row.addWidget(h.button("接続確認", self._test_openai))
+        api_form.addRow("OpenAI API キー", openai_row)
+
         gemini_row = QHBoxLayout()
         self.gemini_edit = QLineEdit(cfg.get("gemini_api_key") or "")
         self.gemini_edit.setEchoMode(QLineEdit.Password)
         gemini_row.addWidget(self.gemini_edit, 1)
         gemini_row.addWidget(h.button("接続確認", self._test_gemini))
         api_form.addRow("Gemini API キー", gemini_row)
-        api_form.addRow("", h.caption_label("Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。"))
+        api_form.addRow("", h.caption_label("OpenAI / Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。"))
         api_form.addRow(
             "",
             h.caption_label(
@@ -502,12 +505,12 @@ class SettingsDialog(QDialog):
             max(0, self._default_bg.findData(str(style.get("templateId") or "A").upper()))
         )
 
-    def _browse_tesseract(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Tesseract 実行ファイルを選択", "", "実行ファイル (*.exe);;すべて (*.*)"
-        )
-        if path:
-            self.tesseract_edit.setText(path)
+    def _test_openai(self) -> None:
+        key = self.openai_edit.text().strip()
+        if not key:
+            self.status_label.setText("未入力: OpenAI API キーを入力してください。")
+            return
+        self._run_api_test("OpenAI API", lambda: test_openai_api_key(key))
 
     def _collect(self) -> dict:
         speech_mode = SPEECH_MODE_APP
@@ -515,10 +518,10 @@ class SettingsDialog(QDialog):
             speech_mode = SPEECH_MODE_WINDOWS
         return {
             "vision_api_key": self.vision_edit.text().strip(),
-            "ocr_engine": "vision" if self.engine_vision.isChecked() else "tesseract",
+            "openai_api_key": self.openai_edit.text().strip(),
+            "ocr_engine": "vision" if self.engine_vision.isChecked() else "openai",
             "default_orientation": self.orientation_combo.currentText(),
             "startup_test_load": "blank" if self.startup_test_blank.isChecked() else "auto",
-            "tesseract_cmd": self.tesseract_edit.text().strip(),
             "gemini_api_key": self.gemini_edit.text().strip(),
             "speech_input_mode": speech_mode,
             "speech_pause_seconds": clamp_speech_pause_seconds(self.speech_pause_spin.value()),
@@ -535,6 +538,11 @@ class SettingsDialog(QDialog):
         if cfg["ocr_engine"] == "vision" and not cfg["vision_api_key"]:
             self.status_label.setText(
                 "設定エラー: OCR エンジンが Vision API の場合、Vision API キーを入力してください。"
+            )
+            return False
+        if cfg["ocr_engine"] == "openai" and not cfg["openai_api_key"]:
+            self.status_label.setText(
+                "設定エラー: OCR エンジンが OpenAI API の場合、OpenAI API キーを入力してください。"
             )
             return False
         try:

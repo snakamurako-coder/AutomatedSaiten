@@ -34,11 +34,12 @@ def load_config() -> dict:
 
 DEFAULT_CONFIG: dict = {
     "vision_api_key": "",
-    "ocr_engine": "tesseract",
+    "openai_api_key": "",
+    "openai_ocr_model": "gpt-4o",
+    "ocr_engine": "openai",
     "default_orientation": "landscape",
     # ⓪ 起動時: auto=前回テストを読み出す / blank=未選択
     "startup_test_load": "auto",
-    "tesseract_cmd": "",
     "gemini_api_key": "",
     "speech_input_mode": "app",
     "speech_pause_seconds": 1.8,
