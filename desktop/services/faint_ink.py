@@ -78,32 +78,6 @@ def is_faint(
     return bool(failed_criteria(metrics, th))
 
 
-def format_ok_summary(
-    metrics: dict[str, float],
-    thresholds: dict[str, float | bool] | None = None,
-    *,
-    display_name: str = "",
-) -> str:
-    """基準を満たした記述欄の指標サマリ（一覧表示用）。"""
-    th = thresholds if thresholds is not None else faint_thresholds_from_config()
-    prefix = f"{display_name}: " if display_name else ""
-    return (
-        f"{prefix}問題なし "
-        f"(σ={metrics.get('sigma', 0)}≥{th['min_sigma']}, "
-        f"P95−P5={metrics.get('p95_p5', 0)}≥{th['min_p95_p5']}, "
-        f"Δ={metrics.get('bg_delta', 0)}≥{th['min_bg_delta']})"
-    )
-
-
-def faint_entry_is_faint(entry: dict[str, Any] | None) -> bool:
-    """薄字記録が「要確認」かどうか（旧形式は要確認のみ保存されていた）。"""
-    if not entry:
-        return False
-    if "isFaint" in entry:
-        return bool(entry["isFaint"])
-    return bool(entry.get("failedCriteria") or entry.get("reason"))
-
-
 def format_fail_reason(
     metrics: dict[str, float],
     failed: list[str],

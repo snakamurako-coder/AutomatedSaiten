@@ -1070,7 +1070,7 @@ def _step3_faint_key(test_id: str) -> str:
 
 
 def get_step3_faint(test_id: str) -> dict[str, dict[str, Any]]:
-    """normalize_file_name → {fileName, isFaint, reason, fieldId, metrics, failedCriteria}"""
+    """normalize_file_name → {fileName, reason, fieldId, metrics, failedCriteria}"""
     with connect() as conn:
         row = conn.execute(
             "SELECT value FROM app_state WHERE key = ?", (_step3_faint_key(test_id),)
@@ -1088,7 +1088,6 @@ def get_step3_faint(test_id: str) -> dict[str, dict[str, Any]]:
         if key:
             out[key] = {
                 "fileName": name,
-                "isFaint": bool(item.get("isFaint", True)),
                 "reason": str(item.get("reason") or ""),
                 "fieldId": str(item.get("fieldId") or ""),
                 "metrics": dict(item.get("metrics") or {}),
@@ -1117,7 +1116,6 @@ def set_step3_faint_entry(test_id: str, entry: dict[str, Any]) -> None:
         return
     faint[key] = {
         "fileName": name,
-        "isFaint": bool(entry.get("isFaint", True)),
         "reason": str(entry.get("reason") or ""),
         "fieldId": str(entry.get("fieldId") or ""),
         "metrics": dict(entry.get("metrics") or {}),

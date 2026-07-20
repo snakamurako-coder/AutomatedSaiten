@@ -132,7 +132,6 @@ def build_ocr_work_queue(test_id: str, inbox_path: str) -> dict[str, Any]:
 def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
     """フォルダ・DB・失敗記録を統合したファイル一覧（③ UI 用）。"""
     from models.test_repo import get_result_preview, get_step3_failed, get_step3_faint
-    from services.faint_ink import faint_entry_is_faint
 
     inbox = _resolve_inbox(test_id, inbox_path)
     archive = test_archive(test_id)
@@ -193,14 +192,9 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
             fail_text = (fail or {}).get("error", "")
             fail_stage = (fail or {}).get("stage", "")
         elif key in faint_map and not in_db:
-            if faint_entry_is_faint(faint):
-                status = "要確認（薄い）"
-                fail_text = (faint or {}).get("reason", "")
-                fail_stage = "faint"
-            else:
-                status = "検査済"
-                fail_text = (faint or {}).get("reason", "")
-                fail_stage = "faint_ok"
+            status = "要確認（薄い）"
+            fail_text = (faint or {}).get("reason", "")
+            fail_stage = "faint"
         elif warped and fmeta:
             status = "補正済"
             fail_text = ""
@@ -236,7 +230,7 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
                 "studentId": (result or {}).get("studentId") or "",
                 "texts": (result or {}).get("textMapping") or {},
                 "db": "済" if in_db else "—",
-                "hint": "（補正済）" if status == "補正済" else ("（薄字OK）" if status == "検査済" else ""),
+                "hint": "（補正済）" if status == "補正済" else "",
                 "inArchive": bool(fmeta.get("inArchive")),
                 "queueItem": queue_item,
                 "faint": faint or None,
@@ -257,7 +251,6 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
         "processed": sum(1 for r in rows if r["status"] == "反映済"),
         "failed": sum(1 for r in rows if r["status"] == "失敗"),
         "faint": sum(1 for r in rows if r["status"] == "要確認（薄い）"),
-        "faintOk": sum(1 for r in rows if r["status"] == "検査済"),
         "inInbox": sum(1 for r in rows if not r.get("inArchive") and r["status"] != "反映済"),
     }
     return {"rows": rows, "stats": stats}
