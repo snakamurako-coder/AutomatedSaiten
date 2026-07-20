@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QInputDialog,
@@ -57,7 +56,7 @@ from services.feedback_renderer import composite_mark_on_image
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
-from ui_qt.layout_helpers import make_expanding
+from ui_qt.layout_helpers import CropTileColumnPanel, make_expanding
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.style import COLORS
 
@@ -168,10 +167,7 @@ class StepManualPage(QWidget):
             f" background: {COLORS['surface']}; }}"
         )
         make_expanding(self.crop_scroll)
-        self.crop_panel = QWidget()
-        self.crop_grid = QGridLayout(self.crop_panel)
-        self.crop_grid.setContentsMargins(6, 6, 6, 6)
-        self.crop_grid.setSpacing(6)
+        self.crop_panel = CropTileColumnPanel(columns=4, margins=(6, 6, 6, 6), spacing=6)
         self.crop_scroll.setWidget(self.crop_panel)
         work_lay.addWidget(self.crop_scroll, 1)
         root.addWidget(work, 1)
@@ -780,7 +776,7 @@ class StepManualPage(QWidget):
             for r in results
         ]
         self._clear_grid()
-        self.crop_grid.addWidget(h.muted_label(f"画像を読み込み中…（{len(rows)}枚）"), 0, 0)
+        self.crop_panel.set_message(f"画像を読み込み中…（{len(rows)}枚）")
         self.status_label.setText(f"{len(rows)} 件を読み込み中…")
 
         def done(crop_results, err):
@@ -1220,10 +1216,7 @@ class StepManualPage(QWidget):
     # --- グリッド ---
 
     def _clear_grid(self) -> None:
-        while self.crop_grid.count():
-            item = self.crop_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self.crop_panel.clear_tiles()
 
     def _render_grid(self) -> None:
         self._clear_grid()
@@ -1261,27 +1254,17 @@ class StepManualPage(QWidget):
         if self._items:
             self._update_status_summary()
         if not page_items:
-            self.crop_grid.addWidget(
-                h.muted_label("表示する画像がありません。フィルタまたは記述欄を確認してください。"),
-                0,
-                0,
+            self.crop_panel.set_message(
+                "表示する画像がありません。フィルタまたは記述欄を確認してください。"
             )
             ctrl = getattr(self.app, "palette_controller", None)
             if ctrl is not None:
                 ctrl.notify_draw_selection_changed()
             return
         zoom = max(30, min(400, self.crop_controls.zoom_value())) / 100.0
-        cols = 4
-        col_idx = 0
-        row_idx = 0
-        for item in page_items:
+        for idx, item in enumerate(page_items):
             tile = self._make_tile(item, zoom)
-            self.crop_grid.addWidget(tile, row_idx, col_idx, Qt.AlignTop | Qt.AlignLeft)
-            col_idx += 1
-            if col_idx >= cols:
-                col_idx = 0
-                row_idx += 1
-        self.crop_grid.setColumnStretch(cols, 1)
+            self.crop_panel.add_tile(tile, idx)
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:
             ctrl.ensure_palette_visible()

@@ -11,7 +11,6 @@ from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QFrame,
-    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
@@ -74,6 +73,7 @@ from ui_qt.uniform_feedback_dialog import UniformFeedbackDialog
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.layout_helpers import (
     CollapsibleSection,
+    CropTileColumnPanel,
     main_table_frame,
     make_expanding,
     viewport_work_height,
@@ -400,11 +400,7 @@ class Step8Page(QWidget):
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
-        self.crop_panel = QWidget()
-        self.crop_panel.setStyleSheet("background: transparent;")
-        self.crop_grid = QGridLayout(self.crop_panel)
-        self.crop_grid.setContentsMargins(8, 8, 8, 8)
-        self.crop_grid.setSpacing(8)
+        self.crop_panel = CropTileColumnPanel(columns=4, margins=(8, 8, 8, 8), spacing=8)
         self.crop_scroll.setWidget(self.crop_panel)
         lay.addWidget(self.crop_scroll)
         return box
@@ -1168,7 +1164,7 @@ class Step8Page(QWidget):
             return
 
         self._clear_crop_grid()
-        self.crop_grid.addWidget(h.muted_label(f"画像を読み込み中…（{len(rows)}枚）"), 0, 0)
+        self.crop_panel.set_message(f"画像を読み込み中…（{len(rows)}枚）")
 
         def done(results, err):
             if err:
@@ -1381,20 +1377,15 @@ class Step8Page(QWidget):
     # ==================== 画像タイル ====================
 
     def _clear_crop_grid(self) -> None:
-        while self.crop_grid.count():
-            item = self.crop_grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+        self.crop_panel.clear_tiles()
         self._ink_stacks = []
 
     def _render_crop_grid(self) -> None:
         self._clear_crop_grid()
         if not self._crop_grid_results:
             self._draw_selected_ids.clear()
-            self.crop_grid.addWidget(
-                h.muted_label("「選択を画像表示」または外れ値一覧の「1枚」で回答欄画像を表示します"),
-                0,
-                0,
+            self.crop_panel.set_message(
+                "「選択を画像表示」または外れ値一覧の「1枚」で回答欄画像を表示します"
             )
             ctrl = getattr(self.app, "palette_controller", None)
             if ctrl is not None:
@@ -1411,13 +1402,9 @@ class Step8Page(QWidget):
 
         fid = self._selected_field_id() or ""
         zoom = max(30, min(400, self.crop_controls.zoom_value())) / 100.0
-        cols = 4
         for idx, item in enumerate(self._crop_grid_results):
-            r, c = divmod(idx, cols)
             tile = self._make_crop_tile(item, fid, zoom)
-            self.crop_grid.addWidget(tile, r, c, Qt.AlignTop | Qt.AlignLeft)
-        # 余白を埋めるダミー
-        self.crop_grid.setColumnStretch(cols, 1)
+            self.crop_panel.add_tile(tile, idx)
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:
             ctrl.ensure_palette_visible()
