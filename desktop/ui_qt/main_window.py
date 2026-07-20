@@ -347,24 +347,24 @@ class MainWindow(QMainWindow):
         elif step_id == 0:
             page.refresh()  # type: ignore[attr-defined]
         self._sync_palette(step_id)
-        self.palette_controller.set_delete_hotkey_enabled(step_id != 1)
+        self.palette_controller.set_delete_hotkey_enabled(self._current_step_id not in (1, 8))
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if (
-            self._current_step_id == 1
+            self._current_step_id in (1, 8)
             and event.type() == QEvent.Type.KeyPress
             and isinstance(event, QKeyEvent)
             and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
-            and not self._step1_delete_hotkey_blocked()
+            and not self._region_delete_hotkey_blocked()
         ):
-            page = self.pages.get(1)
+            page = self.pages.get(self._current_step_id)
             if page is not None and hasattr(page, "handle_delete_key"):
                 page.handle_delete_key()  # type: ignore[attr-defined]
                 return True
         return super().eventFilter(obj, event)
 
     @staticmethod
-    def _step1_delete_hotkey_blocked() -> bool:
+    def _region_delete_hotkey_blocked() -> bool:
         fw = QApplication.focusWidget()
         if fw is None:
             return False

@@ -77,6 +77,11 @@ class Step8Page(QWidget):
         self.thresh_slider.setFixedWidth(120)
         self.thresh_slider.valueChanged.connect(self._on_detect_thresh_changed)
         toolbar.addWidget(self.thresh_slider)
+        self.delete_btn = h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft")
+        self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.delete_btn.setAutoDefault(False)
+        self.delete_btn.setDefault(False)
+        toolbar.addWidget(self.delete_btn)
         toolbar.addWidget(h.button("やり直し", self._on_reset, variant="danger-soft"))
         toolbar.addWidget(h.button("本人欄を保存", self._on_save, variant="primary"))
         toolbar.addWidget(h.button("再読込", self.refresh))
@@ -97,6 +102,17 @@ class Step8Page(QWidget):
 
         self.status_label = h.caption_label("")
         root.addWidget(self.status_label)
+
+    def handle_delete_key(self) -> None:
+        """Del — キャンバスの選択欄を直接削除。"""
+        canvas = self.editor._canvas
+        if canvas.selected_idx < 0:
+            return
+        canvas._delete_selected_region()
+        self._update_type_buttons()
+
+    def _on_delete_selected(self) -> None:
+        self.handle_delete_key()
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)

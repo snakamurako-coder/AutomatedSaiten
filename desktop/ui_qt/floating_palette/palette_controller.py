@@ -223,7 +223,7 @@ class PaletteController:
         return tool
 
     def set_delete_hotkey_enabled(self, enabled: bool) -> None:
-        """①回答欄設定など、MainWindow 側で Del を処理するステップでは無効化する。"""
+        """①・⑧など、MainWindow 側で Del を処理するステップでは無効化する。"""
         for shortcut in self._delete_hotkeys:
             shortcut.setEnabled(bool(enabled))
 
