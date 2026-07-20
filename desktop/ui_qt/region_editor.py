@@ -61,6 +61,8 @@ class _EditorCanvas(QWidget):
         # （⑧本人欄=欄種別、⑩出力欄=slotKey で使用）
         self.pending_label: str | None = None
         self.replace_same_label = False
+        self.click_detect_mode = False
+        self.detect_threshold = 128
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
         self.setMinimumSize(480, 360)
@@ -234,9 +236,29 @@ class _EditorCanvas(QWidget):
             self.update()
             self.changed.emit()
             return
+        if self.click_detect_mode and not self.pending_label:
+            self._try_detect_region_at(px, py)
+            return
         self.selected_idx = -1
         self._drag = {"type": "create", "start_x": px, "start_y": py}
         self.update()
+
+    def _try_detect_region_at(self, px: float, py: float) -> None:
+        from services.region_detect import detect_region_at_point
+
+        try:
+            x, y, w, h = detect_region_at_point(
+                self._image_bgr,
+                px,
+                py,
+                thresh=self.detect_threshold,
+                min_size=self.MIN_SIZE,
+            )
+        except ValueError as e:
+            self.status.emit(str(e))
+            return
+        self._add_region(float(x), float(y), float(w), float(h))
+        self.status.emit(f"記述欄を検出しました（{w}×{h}）")
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         px, py = self._to_image(event.position())
@@ -258,6 +280,9 @@ class _EditorCanvas(QWidget):
 
     def _update_hover_cursor(self, px: float, py: float) -> None:
         if self._image_bgr is None:
+            return
+        if self.click_detect_mode and self._hit_region(px, py) < 0:
+            self.setCursor(Qt.PointingHandCursor)
             return
         if self.selected_idx >= 0:
             handle = self._hit_handle(self.regions[self.selected_idx], px, py)
@@ -453,6 +478,13 @@ class AnswerRegionEditor(QScrollArea):
         """次にドラッグで作る矩形の ID を指定する（⑧欄種別 / ⑩slotKey 用）。"""
         self._canvas.pending_label = label
         self._canvas.replace_same_label = replace_same
+
+    def set_click_detect_mode(self, enabled: bool) -> None:
+        self._canvas.click_detect_mode = enabled
+        self._canvas.update()
+
+    def set_detect_threshold(self, thresh: int) -> None:
+        self._canvas.detect_threshold = max(0, min(255, int(thresh)))
 
     def clear_all_regions(self) -> None:
         self._canvas.regions = []

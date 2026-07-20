@@ -155,18 +155,36 @@ class Step2Page(QWidget):
             self._points_map[fid] = pts
         return True
 
+    def _selected_rows(self) -> list[int]:
+        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
+        if rows:
+            return rows
+        current = self.table.currentRow()
+        return [current] if current >= 0 else []
+
     def _on_apply(self) -> None:
-        row = self.table.currentRow()
-        if row < 0:
+        rows = self._selected_rows()
+        if not rows:
+            h.warn(self, "未選択", "配点を適用する行（青く選択したセル）を選んでください。")
             return
         try:
             pts = int(self.points_edit.text() or 0)
         except ValueError:
             h.error(self, "入力エラー", "配点は整数で入力してください。")
             return
-        fid = self.table.item(row, 0).text()
-        self._points_map[fid] = pts
-        self.table.item(row, 2).setText(str(pts))
+        applied = 0
+        for row in rows:
+            fid_item = self.table.item(row, 0)
+            pts_item = self.table.item(row, 2)
+            if fid_item is None or pts_item is None:
+                continue
+            fid = fid_item.text()
+            self._points_map[fid] = pts
+            pts_item.setText(str(pts))
+            applied += 1
+        if applied == 0:
+            h.warn(self, "適用不可", "選択行に配点列がありません。")
+            return
         self._update_total_label()
 
     def _on_save(self) -> None:

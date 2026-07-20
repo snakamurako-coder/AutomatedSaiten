@@ -139,7 +139,7 @@ class Step1Page(QWidget):
         title_col.addWidget(
             h.muted_label(
                 "PDF / JPG / PNG をドロップするか「画像を開く」で模範解答を読み込み、"
-                "画像上をドラッグして記述欄を指定します。"
+                "記述欄はドラッグ指定または「クリックで欄検出」で追加します。"
             )
         )
         header.addLayout(title_col, 1)
@@ -179,7 +179,16 @@ class Step1Page(QWidget):
         self.thresh_slider.setRange(0, 255)
         self.thresh_slider.setValue(128)
         self.thresh_slider.setFixedWidth(120)
+        self.thresh_slider.valueChanged.connect(self._on_detect_thresh_changed)
         toolbar.addWidget(self.thresh_slider)
+        self.click_detect_check = QCheckBox("クリックで欄検出")
+        self.click_detect_check.setToolTip(
+            "オン: 解答欄の内側をクリックすると枠を自動検出。"
+            "オフ: 従来どおりドラッグで矩形を指定。"
+            "検出精度は「二値化」しきい値で調整できます。"
+        )
+        self.click_detect_check.toggled.connect(self._on_click_detect_toggled)
+        toolbar.addWidget(self.click_detect_check)
         toolbar.addWidget(h.button("画像を開く", self._on_open_file))
         toolbar.addWidget(h.button("記述欄を保存", self._on_save_fields, variant="primary"))
         toolbar.addWidget(h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft"))
@@ -195,6 +204,7 @@ class Step1Page(QWidget):
             on_change=self._refresh_field_panel,
             on_status=self._set_status,
         )
+        self.editor.set_detect_threshold(int(self.thresh_slider.value()))
         body.addWidget(self.editor, 1)
 
         side = QFrame()
@@ -226,6 +236,16 @@ class Step1Page(QWidget):
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
+
+    def _on_click_detect_toggled(self, checked: bool) -> None:
+        self.editor.set_click_detect_mode(checked)
+        if checked:
+            self._set_status("クリックで欄検出モード — 解答欄の内側をクリックしてください。")
+        else:
+            self._set_status("ドラッグで記述欄を指定できます。")
+
+    def _on_detect_thresh_changed(self, value: int) -> None:
+        self.editor.set_detect_threshold(value)
 
     def _on_student_files_dropped(self, paths: list[str]) -> None:
         if not self.app.require_active_test():
@@ -379,7 +399,9 @@ class Step1Page(QWidget):
 
         if not self._field_rows:
             self.field_panel_layout.addWidget(
-                h.muted_label("画像上をドラッグして\n記述欄を追加")
+                h.muted_label(
+                    "「クリックで欄検出」または\n画像上をドラッグして\n記述欄を追加"
+                )
             )
             self.field_panel_layout.addStretch()
             return
