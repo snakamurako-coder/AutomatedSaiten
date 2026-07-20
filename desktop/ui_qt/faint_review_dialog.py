@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
 from config import (
     delete_enhance_preset,
     list_enhance_presets,
+    load_config,
     save_enhance_preset,
     test_warped,
 )
@@ -170,6 +171,18 @@ class FaintReviewDialog(QDialog):
         self._bg_whiten.setToolTip("用紙の地色を白に寄せる強度（0=なし）")
         self._bg_whiten.valueChanged.connect(lambda _v: self._refresh_preview())
         controls.addWidget(self._bg_whiten)
+        default_gamma = int(round(float(load_config().get("faint_gamma_default", 2.5)) * 10))
+        self._gamma = SliderSpinControls(
+            label="ガンマ γ",
+            min_val=10,
+            max_val=40,
+            value=max(10, min(40, default_gamma)),
+            label_width=72,
+            spin_width=64,
+        )
+        self._gamma.setToolTip("1.0〜4.0（×10 表示）。γ>1 で薄い字を暗く強調")
+        self._gamma.valueChanged.connect(lambda _v: self._refresh_preview())
+        controls.addWidget(self._gamma)
         self._contrast = SliderSpinControls(
             label="コントラスト",
             min_val=50,
@@ -216,7 +229,7 @@ class FaintReviewDialog(QDialog):
         btns.addWidget(close_btn)
         root.addLayout(btns)
 
-        self._reload_presets(select_name="生画像")
+        self._reload_presets(select_name="ガンマ強調")
         self._apply_selected_preset()
         self._load_current()
 
@@ -243,13 +256,21 @@ class FaintReviewDialog(QDialog):
                 return p
         return None
 
-    def _set_sliders(self, *, contrast: int, clahe: int, bg_whiten: int) -> None:
-        for w in (self._contrast, self._clahe, self._bg_whiten):
+    def _set_sliders(
+        self,
+        *,
+        contrast: int,
+        clahe: int,
+        bg_whiten: int,
+        gamma: int = 10,
+    ) -> None:
+        for w in (self._contrast, self._clahe, self._bg_whiten, self._gamma):
             w.blockSignals(True)
         self._contrast.set_value(int(contrast))
         self._clahe.set_value(int(clahe))
         self._bg_whiten.set_value(int(bg_whiten))
-        for w in (self._contrast, self._clahe, self._bg_whiten):
+        self._gamma.set_value(int(gamma))
+        for w in (self._contrast, self._clahe, self._bg_whiten, self._gamma):
             w.blockSignals(False)
         self._refresh_preview()
 
@@ -264,6 +285,7 @@ class FaintReviewDialog(QDialog):
             contrast=int(p["contrast"]),
             clahe=int(p["clahe"]),
             bg_whiten=int(p["bg_whiten"]),
+            gamma=int(p.get("gamma", 10)),
         )
 
     def _save_current_as_preset(self) -> None:
@@ -288,6 +310,7 @@ class FaintReviewDialog(QDialog):
                 contrast=self._contrast.value(),
                 clahe=self._clahe.value(),
                 bg_whiten=self._bg_whiten.value(),
+                gamma=self._gamma.value(),
             )
         except ValueError as e:
             QMessageBox.warning(self, "登録不可", str(e))
@@ -319,23 +342,25 @@ class FaintReviewDialog(QDialog):
         except ValueError as e:
             QMessageBox.warning(self, "削除不可", str(e))
             return
-        self._reload_presets(select_name="生画像")
+        self._reload_presets(select_name="ガンマ強調")
 
-    def _current_enhance_params(self) -> tuple[float, float, float]:
+    def _current_enhance_params(self) -> tuple[float, float, float, float]:
         return (
             self._contrast.value() / 100.0,
             self._clahe.value() / 10.0,
             self._bg_whiten.value() / 100.0,
+            self._gamma.value() / 10.0,
         )
 
     def _enhance_image(self, src_bgr: np.ndarray) -> np.ndarray:
-        contrast, clahe, bg = self._current_enhance_params()
+        contrast, clahe, bg, gamma = self._current_enhance_params()
         return enhance_bgr(
             src_bgr,
             contrast=contrast,
             brightness=0.0,
             clahe_clip=clahe,
             bg_whiten=bg,
+            gamma=gamma,
         )
 
     def _entry_warped_path(self, entry: dict[str, Any]) -> Path:
@@ -463,9 +488,9 @@ class FaintReviewDialog(QDialog):
         lines = [reason] if reason else []
         if metrics:
             lines.append(
-                f"計測: σ={metrics.get('sigma', '—')} / "
-                f"P95−P5={metrics.get('p95_p5', '—')} / "
-                f"Δ={metrics.get('bg_delta', '—')}"
+                f"計測: C={metrics.get('weber_c', '—')} / "
+                f"μ_bg={metrics.get('mu_bg', '—')} / "
+                f"μ_text={metrics.get('mu_text', '—')}"
             )
         self._reason.setText("\n".join(lines) if lines else "計測理由なし")
         path = str(

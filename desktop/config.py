@@ -57,11 +57,10 @@ DEFAULT_CONFIG: dict = {
     "excel_export_rank_overall_limit": 48,
     "excel_export_rank_class_limit": 16,
     "faint_check_enabled": True,
-    "faint_min_sigma": 12.0,
-    "faint_min_p95_p5": 35.0,
-    "faint_min_bg_delta": 18.0,
+    "faint_min_weber_contrast": 0.4,
+    "faint_gamma_default": 2.5,
     # 目視・強調ダイアログのユーザー定義プリセット
-    # [{name, contrast, clahe, bg_whiten}]  ※値はスライダー整数
+    # [{name, contrast, clahe, bg_whiten, gamma}]  ※gamma は ×10（25 = γ2.5）
     "enhance_presets": [],
     "floating_palette": {
         "x": 0,
@@ -79,14 +78,15 @@ DEFAULT_CONFIG: dict = {
 
 
 def faint_thresholds_from_config(cfg: dict | None = None) -> dict[str, float | bool]:
-    """薄い字判定のしきい値（未満で要確認）。"""
+    """薄い字判定のしきい値（Weber Contrast C が未満で要確認）。"""
     c = cfg if cfg is not None else load_config()
     return {
         "enabled": bool(c.get("faint_check_enabled", True)),
-        "min_sigma": float(c.get("faint_min_sigma", DEFAULT_CONFIG["faint_min_sigma"])),
-        "min_p95_p5": float(c.get("faint_min_p95_p5", DEFAULT_CONFIG["faint_min_p95_p5"])),
-        "min_bg_delta": float(
-            c.get("faint_min_bg_delta", DEFAULT_CONFIG["faint_min_bg_delta"])
+        "min_weber_contrast": float(
+            c.get(
+                "faint_min_weber_contrast",
+                DEFAULT_CONFIG["faint_min_weber_contrast"],
+            )
         ),
     }
 
@@ -97,16 +97,18 @@ def default_field_ocr_lang(cfg: dict | None = None) -> str:
     return "ja" if lang.lower() == "ja" else "en"
 
 
-# 内蔵プリセット（スライダー整数: contrast 50–220, clahe -50–80, bg_whiten 0–100）
+# 内蔵プリセット（contrast 50–220, clahe -50–80, bg_whiten 0–100, gamma 10–40 = ×10）
 BUILTIN_ENHANCE_PRESETS: list[dict] = [
-    {"name": "生画像", "contrast": 100, "clahe": 0, "bg_whiten": 0, "builtin": True},
-    {"name": "薄い字", "contrast": 145, "clahe": 30, "bg_whiten": 0, "builtin": True},
-    {"name": "地色除去", "contrast": 120, "clahe": 15, "bg_whiten": 70, "builtin": True},
+    {"name": "生画像", "contrast": 100, "clahe": 0, "bg_whiten": 0, "gamma": 10, "builtin": True},
+    {"name": "ガンマ強調", "contrast": 100, "clahe": 0, "bg_whiten": 0, "gamma": 25, "builtin": True},
+    {"name": "薄い字", "contrast": 145, "clahe": 30, "bg_whiten": 0, "gamma": 10, "builtin": True},
+    {"name": "地色除去", "contrast": 120, "clahe": 15, "bg_whiten": 70, "gamma": 10, "builtin": True},
     {
         "name": "地色＋薄い字",
         "contrast": 140,
         "clahe": 25,
         "bg_whiten": 55,
+        "gamma": 10,
         "builtin": True,
     },
 ]
@@ -120,6 +122,7 @@ def _normalize_enhance_preset(raw: dict, *, builtin: bool = False) -> dict | Non
         contrast = int(raw.get("contrast", 135))
         clahe = int(raw.get("clahe", 25))
         bg = int(raw.get("bg_whiten", 0))
+        gamma = int(raw.get("gamma", 10))
     except (TypeError, ValueError):
         return None
     return {
@@ -127,6 +130,7 @@ def _normalize_enhance_preset(raw: dict, *, builtin: bool = False) -> dict | Non
         "contrast": max(50, min(220, contrast)),
         "clahe": max(-50, min(80, clahe)),
         "bg_whiten": max(0, min(100, bg)),
+        "gamma": max(10, min(40, gamma)),
         "builtin": builtin,
     }
 
@@ -155,6 +159,7 @@ def save_enhance_preset(
     contrast: int,
     clahe: int,
     bg_whiten: int,
+    gamma: int = 10,
 ) -> list[dict]:
     """ユーザープリセットを追加または同名更新。保存後の全一覧を返す。"""
     preset = _normalize_enhance_preset(
@@ -163,6 +168,7 @@ def save_enhance_preset(
             "contrast": contrast,
             "clahe": clahe,
             "bg_whiten": bg_whiten,
+            "gamma": gamma,
         },
         builtin=False,
     )
@@ -186,6 +192,7 @@ def save_enhance_preset(
                 "contrast": preset["contrast"],
                 "clahe": preset["clahe"],
                 "bg_whiten": preset["bg_whiten"],
+                "gamma": preset["gamma"],
             }
             replaced = True
             break
@@ -196,6 +203,7 @@ def save_enhance_preset(
                 "contrast": preset["contrast"],
                 "clahe": preset["clahe"],
                 "bg_whiten": preset["bg_whiten"],
+                "gamma": preset["gamma"],
             }
         )
     cfg["enhance_presets"] = rows
@@ -221,6 +229,7 @@ def delete_enhance_preset(name: str) -> list[dict]:
             "contrast": p["contrast"],
             "clahe": p["clahe"],
             "bg_whiten": p["bg_whiten"],
+            "gamma": p["gamma"],
         }
         for p in (_normalize_enhance_preset(r, builtin=False) for r in rows)
         if p

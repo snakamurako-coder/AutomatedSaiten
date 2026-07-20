@@ -201,7 +201,7 @@ class SettingsDialog(QDialog):
     def _build_criteria_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page(
             "⑥薄字補正の「薄い字を検査」で使う判断基準です。"
-            "記述欄クロップの指標がいずれか1つでも基準未満なら「要確認（薄い）」になります。"
+            "記述欄クロップの Weber Contrast C が基準未満なら「要確認（薄い）」になります。"
             "しきい値は実運用で調整してください。"
         )
         self.faint_enabled = QCheckBox("薄い字の事前検査を有効にする")
@@ -212,34 +212,21 @@ class SettingsDialog(QDialog):
         form.setContentsMargins(0, 0, 0, 0)
         form.setSpacing(10)
 
-        self.faint_sigma = QDoubleSpinBox()
-        self.faint_sigma.setRange(0.0, 80.0)
-        self.faint_sigma.setDecimals(1)
-        self.faint_sigma.setSingleStep(0.5)
-        self.faint_sigma.setValue(float(cfg.get("faint_min_sigma", 12.0)))
-        self.faint_sigma.setToolTip("輝度の標準偏差。この値未満なら薄い疑い")
-        form.addRow("最小 σ（標準偏差）", self.faint_sigma)
-
-        self.faint_p95 = QDoubleSpinBox()
-        self.faint_p95.setRange(0.0, 255.0)
-        self.faint_p95.setDecimals(1)
-        self.faint_p95.setSingleStep(1.0)
-        self.faint_p95.setValue(float(cfg.get("faint_min_p95_p5", 35.0)))
-        self.faint_p95.setToolTip("輝度の 95%点 − 5%点。この値未満なら薄い疑い")
-        form.addRow("最小 P95−P5", self.faint_p95)
-
-        self.faint_bg_delta = QDoubleSpinBox()
-        self.faint_bg_delta.setRange(0.0, 255.0)
-        self.faint_bg_delta.setDecimals(1)
-        self.faint_bg_delta.setSingleStep(1.0)
-        self.faint_bg_delta.setValue(float(cfg.get("faint_min_bg_delta", 18.0)))
-        self.faint_bg_delta.setToolTip("背景輝度（P90）− 字側輝度（P10）。この値未満なら薄い疑い")
-        form.addRow("最小 背景との輝度差 Δ", self.faint_bg_delta)
+        self.faint_weber = QDoubleSpinBox()
+        self.faint_weber.setRange(0.0, 1.0)
+        self.faint_weber.setDecimals(2)
+        self.faint_weber.setSingleStep(0.05)
+        self.faint_weber.setValue(float(cfg.get("faint_min_weber_contrast", 0.4)))
+        self.faint_weber.setToolTip(
+            "Weber Contrast C = (μ_bg − μ_text) / μ_bg。"
+            "この値未満なら薄い疑い（0 に近いほど薄い、1 に近いほど濃い）"
+        )
+        form.addRow("最小 Weber Contrast C", self.faint_weber)
 
         lay.addLayout(form)
         lay.addWidget(
             h.caption_label(
-                "指標はいずれも「この値未満で要確認」。値が大きいほど厳しい判定になります。"
+                "C がこの値未満で要確認。値を大きくするほど厳しい判定になります。"
             )
         )
         lay.addStretch()
@@ -543,9 +530,7 @@ class SettingsDialog(QDialog):
             "speech_input_mode": speech_mode,
             "speech_pause_seconds": clamp_speech_pause_seconds(self.speech_pause_spin.value()),
             "faint_check_enabled": self.faint_enabled.isChecked(),
-            "faint_min_sigma": float(self.faint_sigma.value()),
-            "faint_min_p95_p5": float(self.faint_p95.value()),
-            "faint_min_bg_delta": float(self.faint_bg_delta.value()),
+            "faint_min_weber_contrast": float(self.faint_weber.value()),
         }
 
     def _persist_settings(self) -> bool:
