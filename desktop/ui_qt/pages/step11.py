@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QPlainTextEdit,
     QSizePolicy,
     QTableWidget,
@@ -31,7 +32,9 @@ from models.roster_repo import (
     get_roster_rows,
     get_selected_roster_name,
     import_external_scores,
+    import_roster_absent_from_test,
     import_roster_with_mapping,
+    list_roster_absent_import_sources,
     list_roster_names,
     parse_external_scores_csv,
     parse_roster_tsv,
@@ -124,6 +127,52 @@ class RosterImportDialog(QDialog):
             h.error(self, "エラー", str(e))
 
 
+class RosterImportFromTestDialog(QDialog):
+    """他テストから名簿・未受験者設定を選んでインポートする。"""
+
+    def __init__(self, parent: QWidget, sources: list[dict[str, Any]]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("名簿・未受験者のインポート")
+        self.resize(640, 360)
+        self._sources = sources
+        self.selected_test_id: str | None = None
+
+        root = QVBoxLayout(self)
+        root.addWidget(
+            h.muted_label(
+                "名簿と未受験者（☑）が保存されているテストを選ぶと、"
+                "「名簿を表示し未受験者を入力」と同じ状態を反映します。"
+            )
+        )
+        self.list = QListWidget()
+        for s in sources:
+            item_text = (
+                f"{s['testName']} — 名簿「{s['rosterName']}」"
+                f"（{s['rosterCount']} 名 / 未受験 {s['absentCount']} 名）"
+            )
+            if s.get("savedAt"):
+                item_text += f"  [{s['savedAt']}]"
+            self.list.addItem(item_text)
+        if sources:
+            self.list.setCurrentRow(0)
+        self.list.itemDoubleClicked.connect(lambda _item: self._accept_selection())
+        root.addWidget(self.list, 1)
+
+        btns = QHBoxLayout()
+        btns.addStretch()
+        btns.addWidget(h.button("キャンセル", self.reject))
+        btns.addWidget(h.button("反映", self._accept_selection, variant="primary"))
+        root.addLayout(btns)
+
+    def _accept_selection(self) -> None:
+        row = self.list.currentRow()
+        if row < 0 or row >= len(self._sources):
+            h.warn(self, "未選択", "インポート元のテストを選んでください。")
+            return
+        self.selected_test_id = str(self._sources[row]["testId"])
+        self.accept()
+
+
 class Step11Page(QWidget):
     def __init__(self, app: Any) -> None:
         super().__init__()
@@ -135,7 +184,20 @@ class Step11Page(QWidget):
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
-        root.addWidget(h.title_label("⑪ 合計・外部得点"))
+
+        title_row = QHBoxLayout()
+        title_row.addWidget(h.title_label("⑪ 合計点・外部得点"))
+        title_row.addStretch()
+        self.import_roster_btn = h.button(
+            "名簿と未受験者が一致するテストからインポート（反映）",
+            self._on_import_roster_from_test,
+        )
+        self.import_roster_btn.setToolTip(
+            "他テストで保存済みの名簿選択・未受験☑を取り込みます。"
+            "（IDマーク欄から ID 取得済みの場合は不要）"
+        )
+        title_row.addWidget(self.import_roster_btn)
+        root.addLayout(title_row)
 
         root.addWidget(self._build_roster_box(), 2)
         root.addWidget(self._build_score_box(), 1)
@@ -269,6 +331,20 @@ class Step11Page(QWidget):
             self.external_edit.setPlainText(
                 "\n".join(f"{e['studentId']},{e['score']},{e['source']}" for e in ext)
             )
+        self._update_roster_import_button()
+
+    def _update_roster_import_button(self) -> None:
+        if not getattr(self, "import_roster_btn", None):
+            return
+        if not self.app.active_test_id:
+            self.import_roster_btn.setVisible(True)
+            self.import_roster_btn.setEnabled(False)
+            return
+        st = get_id_assignment_status(self.app.active_test_id)
+        skip = bool(st.get("skipAssignment"))
+        self.import_roster_btn.setVisible(not skip)
+        if not skip:
+            self.import_roster_btn.setEnabled(True)
 
     def _update_assign_status(self) -> None:
         st = get_id_assignment_status(self.app.active_test_id)
@@ -286,6 +362,7 @@ class Step11Page(QWidget):
                 "（生徒ID昇順 ↔ ファイル名昇順または降順で 1:1 対応）。"
             )
         self.assign_status_label.setText(msg)
+        self._update_roster_import_button()
 
     def _on_file_order_toggled(self, _checked: bool) -> None:
         self._update_file_order_labels()
@@ -327,6 +404,60 @@ class Step11Page(QWidget):
         self.roster_table.setVisible(True)
         self.assign_btn.setEnabled(True)
         self._update_assign_summary()
+
+    def _apply_imported_roster_state(
+        self, roster_name: str, absent_students: list[dict[str, str]]
+    ) -> None:
+        self.roster_combo.blockSignals(True)
+        self.roster_combo.setCurrentText(roster_name)
+        self.roster_combo.blockSignals(False)
+        self._absent_keys = {
+            f"id:{a.get('studentId')}" if a.get("studentId") else f"name:{a.get('name')}"
+            for a in absent_students
+        }
+        self._roster_rows = get_roster_rows(roster_name)
+        self._render_roster_table()
+        self.roster_table.setVisible(True)
+        self.assign_btn.setEnabled(True)
+        self._update_assign_summary()
+
+    def _on_import_roster_from_test(self) -> None:
+        if not self.app.require_active_test():
+            return
+        test_id = self.app.active_test_id
+        st = get_id_assignment_status(test_id)
+        if st.get("skipAssignment"):
+            h.info(
+                self,
+                "不要",
+                "IDマーク欄から ID を取得済みのため、名簿・未受験者のインポートは不要です。",
+            )
+            return
+        sources = list_roster_absent_import_sources(test_id)
+        if not sources:
+            h.warn(
+                self,
+                "インポート元なし",
+                "名簿と未受験者が保存された他テストがありません。",
+            )
+            return
+        dlg = RosterImportFromTestDialog(self, sources)
+        if dlg.exec() != QDialog.Accepted or not dlg.selected_test_id:
+            return
+        try:
+            res = import_roster_absent_from_test(test_id, dlg.selected_test_id)
+            absent_state = get_roster_absent_state(test_id)
+            self._apply_imported_roster_state(
+                res["rosterName"],
+                list(absent_state.get("absentStudents") or []),
+            )
+            h.info(
+                self,
+                "反映完了",
+                f"名簿「{res['rosterName']}」と未受験 {res['absentCount']} 名を反映しました。",
+            )
+        except Exception as e:
+            h.error(self, "インポートエラー", str(e))
 
     def _render_roster_table(self) -> None:
         t = self.roster_table

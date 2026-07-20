@@ -194,6 +194,73 @@ def get_selected_roster_name(test_id: str) -> str:
     return (row["value"] if row else "") or ""
 
 
+def list_roster_absent_import_sources(exclude_test_id: str) -> list[dict[str, Any]]:
+    """名簿・未受験者が保存済みの他テスト一覧（インポート元候補）。"""
+    init_db()
+    valid_rosters = set(list_roster_names())
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, test_name, last_saved_at, created_at
+            FROM tests
+            WHERE id != ?
+            ORDER BY COALESCE(NULLIF(last_saved_at, ''), created_at) DESC
+            """,
+            (exclude_test_id,),
+        ).fetchall()
+    sources: list[dict[str, Any]] = []
+    for row in rows:
+        test_id = str(row["id"])
+        roster_name = get_selected_roster_name(test_id).strip()
+        if not roster_name or roster_name not in valid_rosters:
+            continue
+        absent_state = get_roster_absent_state(test_id)
+        absent_roster = str(absent_state.get("rosterName") or "").strip()
+        if absent_roster and absent_roster != roster_name:
+            continue
+        absent_students = list(absent_state.get("absentStudents") or [])
+        if not absent_roster and not absent_students and not absent_state.get("savedAt"):
+            continue
+        roster_count = len(get_roster_rows(roster_name))
+        if roster_count <= 0:
+            continue
+        sources.append(
+            {
+                "testId": test_id,
+                "testName": row["test_name"] or test_id,
+                "rosterName": roster_name,
+                "absentCount": len(absent_students),
+                "rosterCount": roster_count,
+                "savedAt": absent_state.get("savedAt") or "",
+            }
+        )
+    return sources
+
+
+def import_roster_absent_from_test(target_test_id: str, source_test_id: str) -> dict[str, Any]:
+    """他テストの選択名簿・未受験者設定を現在テストへコピーする。"""
+    if target_test_id == source_test_id:
+        raise ValueError("同じテストからはインポートできません。")
+    roster_name = get_selected_roster_name(source_test_id).strip()
+    if not roster_name:
+        raise ValueError("コピー元に選択名簿がありません。")
+    roster_rows = get_roster_rows(roster_name)
+    if not roster_rows:
+        raise ValueError(f"名簿「{roster_name}」が見つかりません。")
+    absent_state = get_roster_absent_state(source_test_id)
+    source_roster = str(absent_state.get("rosterName") or "").strip()
+    if source_roster and source_roster != roster_name:
+        raise ValueError("コピー元の名簿と未受験者設定が一致しません。")
+    absent_students = list(absent_state.get("absentStudents") or [])
+    save_selected_roster_name(target_test_id, roster_name)
+    save_roster_absent_state(target_test_id, roster_name, absent_students)
+    return {
+        "rosterName": roster_name,
+        "absentCount": len(absent_students),
+        "rosterCount": len(roster_rows),
+    }
+
+
 # ==================== ID・氏名割当 ====================
 
 def get_id_assignment_status(test_id: str) -> dict[str, Any]:

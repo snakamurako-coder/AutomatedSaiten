@@ -539,7 +539,6 @@ class StepManualPage(QWidget):
         self.palette_btn_row = QHBoxLayout()
         self.palette_btn_row.setSpacing(4)
         lay.addLayout(self.palette_btn_row)
-        lay.addWidget(h.button("全選択", self._select_all_visible))
         lay.addStretch()
         return box
 
