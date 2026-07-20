@@ -187,7 +187,7 @@ class MainWindow(QMainWindow):
         auto_title.setAlignment(Qt.AlignCenter)
         auto_lay.addWidget(auto_title)
         for step in STEPS:
-            if step["id"] in (5, 6, 7):
+            if step["id"] in (5, 6, 7, 8, 9):
                 self._add_nav_button(auto_lay, step, compact=True)
 
         manual_panel = QFrame()
@@ -206,7 +206,7 @@ class MainWindow(QMainWindow):
         manual_btn.setCheckable(True)
         manual_btn.setEnabled(MANUAL_GRADING_STEP_ID in DESKTOP_READY_STEPS)
         manual_btn.setCursor(Qt.PointingHandCursor)
-        manual_btn.setToolTip("⑤⑥⑦ の代替 — 画像を見ながら ○△× を付ける")
+        manual_btn.setToolTip("⑤〜⑨ の代替 — 画像を見ながら ○△× を付ける")
         manual_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         manual_btn.clicked.connect(
             lambda _c=False: self.load_step(MANUAL_GRADING_STEP_ID)
@@ -225,7 +225,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(merge_lbl)
 
         for step in STEPS:
-            if step["id"] >= 8:
+            if step["id"] >= 10:
                 self._add_nav_button(lay, step)
 
         lay.addSpacing(10)
