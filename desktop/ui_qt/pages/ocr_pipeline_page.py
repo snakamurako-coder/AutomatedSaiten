@@ -1,4 +1,4 @@
-"""⑤トリミング / ⑥薄字補正 / ⑦OCR実行 — 共通パイプライン UI。"""
+"""⑤トリミング / （⑥ 薄字補正・任意） / ⑦OCR実行 — 共通パイプライン UI。"""
 
 from __future__ import annotations
 
@@ -82,17 +82,18 @@ _PHASE_META: dict[int, dict[str, str]] = {
         "action_hint": "「チェックしたファイルを自動トリミング」",
     },
     6: {
-        "title": "⑥ 薄字補正",
+        "title": "（⑥ 薄字補正）任意",
         "desc": (
-            "⑤で作成した補正画像に対して薄い字を検査し、必要なら「目視・強調」でコントラスト等を調整します。"
-            "OCR は⑦で実行してください。"
+            "任意 — ⑤で作成した補正画像に対して薄い字を検査し、"
+            "必要なら「目視・強調」でコントラスト等を調整します。"
+            "スキップしても⑦ OCR は実行できます。"
         ),
-        "action_hint": "「薄い字を検査」または「チェックしたファイルを薄字補正」",
+        "action_hint": "「薄い字を検査」または「チェックしたファイルを薄字補正」（任意）",
     },
     7: {
         "title": "⑦ OCR実行",
         "desc": (
-            "⑥までの補正画像を OCR し、採点結果を DB に保存します。"
+            "⑤（および任意の⑥）の補正画像を OCR し、採点結果を DB に保存します。"
             "②で「IDマーク欄あり」のとき、補正画像から生徒IDを OMR で読み取ります。"
         ),
         "action_hint": "「チェックしたファイルを OCR」",
@@ -127,7 +128,7 @@ class OcrPipelinePage(QWidget):
         root.addWidget(self._desc)
 
         folder_row = QHBoxLayout()
-        folder_row.addWidget(QLabel("解答フォルダ（テスト専用）"))
+        folder_row.addWidget(QLabel("回答フォルダ（テスト専用）"))
         self.inbox_edit = QLineEdit()
         self.inbox_edit.setReadOnly(True)
         folder_row.addWidget(self.inbox_edit, 1)
@@ -301,7 +302,7 @@ class OcrPipelinePage(QWidget):
             self._clear_view()
         if not self._scanned:
             hint = (
-                "「フォルダを再認識」で解答画像の一覧を表示してから、処理するファイルを選んでください。"
+                "「フォルダを再認識」で回答画像の一覧を表示してから、処理するファイルを選んでください。"
                 if self._phase == 5
                 else "⑤トリミングで「フォルダを再認識」を実行してから、このステップで処理してください。"
             )
@@ -343,7 +344,7 @@ class OcrPipelinePage(QWidget):
             return
         folder = self._inbox_path()
         if not folder:
-            h.error(self, "エラー", "解答フォルダを指定してください。")
+            h.error(self, "エラー", "回答フォルダを指定してください。")
             return
         test_id = self.app.active_test_id
         self._fields = get_answer_fields(test_id)
@@ -665,7 +666,7 @@ class OcrPipelinePage(QWidget):
             h.warn(
                 self,
                 "選択なし",
-                "チェックした行に原画像パスがありません。解答フォルダ内のファイルを選んでください。",
+                "チェックした行に原画像パスがありません。回答フォルダ内のファイルを選んでください。",
             )
             return
         test_id = self.app.active_test_id
@@ -788,7 +789,7 @@ class OcrPipelinePage(QWidget):
             5: (
                 "⑤をリセット",
                 "補正画像・失敗／薄い字の記録・OCR結果を消去し、\n"
-                "「元画像」フォルダの原本を解答フォルダへ戻します。\n\n"
+                "「元画像」フォルダの原本を回答フォルダへ戻します。\n\n"
                 "①〜④の内容は保持されます。続行しますか？",
                 reset_step5_trim_data,
             ),
@@ -800,7 +801,8 @@ class OcrPipelinePage(QWidget):
             ),
             7: (
                 "⑦をリセット",
-                "OCR 結果（採点結果 DB）のみ削除します。\n"
+                "OCR 結果（採点結果 DB）をすべて削除します。\n"
+                "手動採点で付けた判定・得点も消えます。\n"
                 "⑤⑥の補正画像・薄字記録は保持されます。続行しますか？",
                 reset_step7_ocr_data,
             ),
@@ -988,7 +990,7 @@ class OcrPipelinePage(QWidget):
                 self,
                 "対象なし",
                 "チェックした行に原画像パスがありません。\n"
-                "解答フォルダまたは元画像フォルダにファイルがある行を選んでください。",
+                "回答フォルダまたは元画像フォルダにファイルがある行を選んでください。",
             )
             return
         orientation, thresh = self._warp_dialog_settings()

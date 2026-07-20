@@ -197,7 +197,7 @@ def apply_deemed_scoring_to_field(
         if str(s).strip() and str(s).strip() != canonical
     }
     if not source_set:
-        raise ValueError("みなし対象の解答を1件以上選択してください。")
+        raise ValueError("みなし対象の回答を1件以上選択してください。")
 
     save_deemed_scoring_draft(test_id, field_id, canonical, list(source_set))
 

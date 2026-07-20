@@ -84,7 +84,7 @@ function onOpen() {
     .addItem('Webアプリを開く', 'openWebAppFromMenu')
     .addItem('ハブを登録', 'registerHubSpreadsheet')
     .addItem('テスト一覧を再同期', 'syncHubTestListFromMenu')
-    .addItem('解答用紙ひな形を再作成', 'recreateAnswerSheetTemplatesFromMenu')
+    .addItem('回答用紙ひな形を再作成', 'recreateAnswerSheetTemplatesFromMenu')
     .addItem('古いWARP設定を削除', 'cleanupWarpScriptProperties')
     .addToUi();
 }
@@ -211,7 +211,7 @@ function getTestImageRootFolder() {
 }
 
 function getOrCreateTestImageFolder(ss) {
-  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var folderId = getTestInfoValue(ss, '生徒回答フォルダID');
   if (folderId) {
     try {
       return DriveApp.getFolderById(folderId);
@@ -220,7 +220,7 @@ function getOrCreateTestImageFolder(ss) {
   var testName = getTestInfoValue(ss, 'テスト名') || ss.getName();
   var root = getTestImageRootFolder();
   var sub = root.createFolder(testName + '_' + ss.getId().substring(0, 8));
-  setTestInfoValue(ss, '生徒解答フォルダID', sub.getId());
+  setTestInfoValue(ss, '生徒回答フォルダID', sub.getId());
   return sub;
 }
 
@@ -269,7 +269,7 @@ var TEMPLATE_GRID_OFFSET_COL = 2;
 
 var TEST_INFO_KEYS = [
   'テスト名', '科目名', '実施日時', '作成日時',
-  '模範解答画像FileID', '生徒解答フォルダID',
+  '模範解答画像FileID', '生徒回答フォルダID',
   '基準画像幅', '基準画像高さ', 'ステータス',
   '現在ステップ', '最終保存日時', '選択名簿名', 'IDマーク欄使用', '未受験者'
 ];
@@ -370,7 +370,7 @@ function initOcrReplacementsSheet(sheet) {
 function ensureDeemedScoringSheet(ss) {
   if (!ss.getSheetByName(SHEET_DEEMED_SCORING)) {
     var sheet = ss.insertSheet(SHEET_DEEMED_SCORING);
-    sheet.appendRow(['記述欄ID', '正答例', '元解答', '適用日時']);
+    sheet.appendRow(['記述欄ID', '正答例', '元回答', '適用日時']);
     sheet.setFrozenRows(1);
   }
 }
@@ -378,7 +378,7 @@ function ensureDeemedScoringSheet(ss) {
 function ensureDeemedDraftSheet(ss) {
   if (!ss.getSheetByName(SHEET_DEEMED_DRAFT)) {
     var sheet = ss.insertSheet(SHEET_DEEMED_DRAFT);
-    sheet.appendRow(['記述欄ID', '正答例', '元解答']);
+    sheet.appendRow(['記述欄ID', '正答例', '元回答']);
     sheet.setFrozenRows(1);
   }
 }
@@ -421,7 +421,7 @@ function initPointsSheet(sheet) {
 
 function initCriteriaSheet(sheet) {
   if (sheet.getLastRow() > 0) return;
-  sheet.appendRow(['記述欄ID', '解答パターン', '判定', '付与得点', '備考']);
+  sheet.appendRow(['記述欄ID', '回答パターン', '判定', '付与得点', '備考']);
   sheet.setFrozenRows(1);
 }
 
@@ -599,6 +599,13 @@ function getTestInfoValue(ss, key) {
   for (var i = 0; i < data.length; i++) {
     if (data[i][0] === key) return data[i][1] != null ? String(data[i][1]) : '';
   }
+  if (key === '生徒回答フォルダID') {
+    for (var j = 0; j < data.length; j++) {
+      if (data[j][0] === '生徒解答フォルダID') {
+        return data[j][1] != null ? String(data[j][1]) : '';
+      }
+    }
+  }
   return '';
 }
 
@@ -649,7 +656,7 @@ function createTest(testName, subject, dateTime) {
   setTestInfoValue(ss, 'IDマーク欄使用', 'true');
 
   var folder = getOrCreateTestImageFolder(ss);
-  setTestInfoValue(ss, '生徒解答フォルダID', folder.getId());
+  setTestInfoValue(ss, '生徒回答フォルダID', folder.getId());
 
   syncScriptContainerContextFromFileId_(hubSs.getId());
   moveFileToScriptProjectFolder_(ss.getId());
@@ -1010,7 +1017,7 @@ function getOcrResultPreview_(ss) {
 }
 
 function getBatchRestoreSnapshot_(ss) {
-  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var folderId = getTestInfoValue(ss, '生徒回答フォルダID');
   var processedIds = Object.keys(getProcessedFileIds(ss));
   var processedNames = Object.keys(getProcessedFileNames(ss));
   var workQueue = buildOcrWorkQueue_(ss);
@@ -1129,7 +1136,7 @@ function saveStepProgress(stepNum, clientPayload) {
   } else if (stepNum === 2 && clientPayload && clientPayload.points) {
     savePoints(clientPayload.points);
   } else if (stepNum === 3 && clientPayload && clientPayload.folderId) {
-    setTestInfoValue(ss, '生徒解答フォルダID', clientPayload.folderId);
+    setTestInfoValue(ss, '生徒回答フォルダID', clientPayload.folderId);
   } else if (stepNum === 7 && clientPayload) {
     if (clientPayload.rosterName != null) {
       setTestInfoValue(ss, '選択名簿名', clientPayload.rosterName || '');
@@ -1175,7 +1182,7 @@ function updateHubTestStatus(testSsId, status) {
 
 function saveStudentFolderId(folderId) {
   var ss = getActiveTestSs();
-  setTestInfoValue(ss, '生徒解答フォルダID', folderId);
+  setTestInfoValue(ss, '生徒回答フォルダID', folderId);
   return true;
 }
 
@@ -1541,12 +1548,12 @@ function listWarpedFilesInFolderDirect_(folderId) {
 }
 
 function listWarpedFilesInFolderDirect(folderId) {
-  return listWarpedFilesInFolderDirect_(folderId || getTestInfoValue(getActiveTestSs(), '生徒解答フォルダID'));
+  return listWarpedFilesInFolderDirect_(folderId || getTestInfoValue(getActiveTestSs(), '生徒回答フォルダID'));
 }
 
 function getWarpedFileCountForRosterAssign_(ss) {
   ss = ss || getActiveTestSs();
-  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var folderId = getTestInfoValue(ss, '生徒回答フォルダID');
   if (!folderId) return { count: 0, files: [], folderId: '' };
   try {
     var files = listWarpedFilesInFolderDirect_(folderId);
@@ -1977,7 +1984,7 @@ function findSourceFileByName_(studentFolderId, fileName) {
 
 function buildOcrWorkQueue_(ss) {
   ss = ss || getActiveTestSs();
-  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var folderId = getTestInfoValue(ss, '生徒回答フォルダID');
   var processedNames = getProcessedFileNames(ss);
   var itemsByName = {};
 
@@ -2146,7 +2153,7 @@ function getStudentWarpedImagesMeta() {
 // ========== OcrService.gs ==========
 
 /**
- * Vision API OCR・生徒解答処理
+ * Vision API OCR・生徒回答処理
  */
 
 function callVisionAPI(imageBytes, languageHints) {
@@ -2452,7 +2459,7 @@ function flushResultRows(rows) {
     updateTestStatus('テキスト化中');
     touchTestProgress_(ss, 3);
   }
-  var studentFolderId = getTestInfoValue(ss, '生徒解答フォルダID');
+  var studentFolderId = getTestInfoValue(ss, '生徒回答フォルダID');
   var rowsToArchive = writtenRows.concat(skippedRows);
   var movedToArchive = moveResultRowsToOriginalArchive_(rowsToArchive, studentFolderId);
   return {
@@ -2483,7 +2490,7 @@ function processStudentPaper(fileMeta, studentId, warpedBase64, skipIfExists, fi
       warpedFileId: ocrResult.warpedFileId
     }, ocrResult.studentId, ocrResult.textMapping);
 
-    var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
+    var folderId = getTestInfoValue(ss, '生徒回答フォルダID');
     moveSourceFileToOriginalArchive_(ocrResult.fileId, ocrResult.fileName, folderId);
 
     return {
@@ -2869,7 +2876,7 @@ function saveDeemedScoringDraft(fieldId, canonical, sources) {
   ensureDeemedDraftSheet(ss);
   var sheet = ss.getSheetByName(SHEET_DEEMED_DRAFT);
   var data = sheet.getDataRange().getValues();
-  var kept = data.length > 1 ? [data[0]] : [['記述欄ID', '正答例', '元解答']];
+  var kept = data.length > 1 ? [data[0]] : [['記述欄ID', '正答例', '元回答']];
 
   for (var i = 1; i < data.length; i++) {
     if (String(data[i][0] || '').trim() !== fieldId) kept.push(data[i]);
@@ -2898,7 +2905,7 @@ function applyDeemedScoringToField(fieldId, canonical, sources) {
     if (s && s !== canonical) sourceSet[s] = true;
   });
   var sourceList = Object.keys(sourceSet);
-  if (!sourceList.length) throw new Error('みなし対象の解答を1件以上選択してください。');
+  if (!sourceList.length) throw new Error('みなし対象の回答を1件以上選択してください。');
 
   saveDeemedScoringDraft(fieldId, canonical, sourceList);
 
@@ -2915,7 +2922,7 @@ function applyDeemedScoringToField(fieldId, canonical, sources) {
 
   var draftSheet = ss.getSheetByName(SHEET_DEEMED_DRAFT);
   var draftData = draftSheet.getDataRange().getValues();
-  var keptDraft = draftData.length > 1 ? [draftData[0]] : [['記述欄ID', '正答例', '元解答']];
+  var keptDraft = draftData.length > 1 ? [draftData[0]] : [['記述欄ID', '正答例', '元回答']];
   for (var i = 1; i < draftData.length; i++) {
     if (String(draftData[i][0] || '').trim() !== fieldId) keptDraft.push(draftData[i]);
   }
@@ -2937,10 +2944,10 @@ function generateRubricWithGemini(fieldId, uniqueAnswersArray) {
   var url = 'https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=' + apiKey;
   var prompt = {
     system_instruction: {
-      parts: [{ text: 'あなたは厳格かつ公平なテスト採点基準を策定する専門家です。各解答に対し、○（満点）、△（部分点）、×（0点）の判定と付与得点（0〜満点の整数）および根拠をJSONで返してください。解答が「なし」の場合は×・0点としてください。' }]
+      parts: [{ text: 'あなたは厳格かつ公平なテスト採点基準を策定する専門家です。各回答に対し、○（満点）、△（部分点）、×（0点）の判定と付与得点（0〜満点の整数）および根拠をJSONで返してください。回答が「なし」の場合は×・0点としてください。' }]
     },
     contents: [{
-      parts: [{ text: '記述欄ID: ' + fieldId + ', 満点: ' + maxScore + '点。ユニーク解答リスト:\n' + JSON.stringify(uniqueAnswersArray) }]
+      parts: [{ text: '記述欄ID: ' + fieldId + ', 満点: ' + maxScore + '点。ユニーク回答リスト:\n' + JSON.stringify(uniqueAnswersArray) }]
     }],
     generationConfig: {
       responseMimeType: 'application/json',
@@ -3003,7 +3010,7 @@ function saveGradingCriteria(fieldId, confirmedRules, testSsId) {
   });
 
   sheet.clear();
-  sheet.appendRow(['記述欄ID', '解答パターン', '判定', '付与得点', '備考']);
+  sheet.appendRow(['記述欄ID', '回答パターン', '判定', '付与得点', '備考']);
   if (kept.length) {
     sheet.getRange(2, 1, 1 + kept.length, 5).setValues(kept);
   }
@@ -3099,7 +3106,7 @@ function buildSummary(ss, unregisteredCount) {
   var studentCount = data.length;
 
   sheet.appendRow(['全体', '受験者数', studentCount, '']);
-  sheet.appendRow(['全体', '未登録パターン照合数', unregisteredCount || 0, '採点基準に無い解答']);
+  sheet.appendRow(['全体', '未登録パターン照合数', unregisteredCount || 0, '採点基準に無い回答']);
 
   fields.forEach(function(f) {
     var label = f.displayName || f.id;
@@ -3605,7 +3612,7 @@ function buildAnswerSheetTemplate_(sheet, orientation) {
 
   sheet.getRange(1, 1, 1, Math.min(grid.endCol, 40)).merge();
   sheet.getRange(1, 1).setValue(
-    '【解答用紙ひな形 ' + orientLabel + '】このシートを編集して印刷してください。' +
+    '【回答用紙ひな形 ' + orientLabel + '】このシートを編集して印刷してください。' +
     '外枠・マス目・IDマーク欄の位置は Web アプリ Step① の座標系（1マス≈20px）と一致しています。'
   ).setFontSize(9).setWrap(true).setVerticalAlignment('top');
 
@@ -3654,13 +3661,13 @@ function recreateAnswerSheetTemplatesFromMenu() {
   if (!ss) throw new Error('スプレッドシートを開いた状態で実行してください。');
   var ui = SpreadsheetApp.getUi();
   var ans = ui.alert(
-    '解答用紙ひな形を再作成',
+    '回答用紙ひな形を再作成',
     '「' + SHEET_TEMPLATE_A4_LANDSCAPE + '」「' + SHEET_TEMPLATE_A4_PORTRAIT + '」を上書き再作成します。編集内容は失われます。よろしいですか？',
     ui.ButtonSet.YES_NO
   );
   if (ans !== ui.Button.YES) return;
   recreateAnswerSheetTemplates_(ss);
-  ui.alert('解答用紙ひな形シートを再作成しました。');
+  ui.alert('回答用紙ひな形シートを再作成しました。');
 }
 
 function writeHubRosterTemplate_(sheet) {
@@ -3901,8 +3908,8 @@ function assignIdsFromRoster(rosterName, absentStudents) {
     return !absentSet[r.rowIndex];
   }).sort(compareRosterRows_);
 
-  var folderId = getTestInfoValue(ss, '生徒解答フォルダID');
-  if (!folderId) throw new Error('生徒解答フォルダIDが未設定です。Step③でフォルダを指定してください。');
+  var folderId = getTestInfoValue(ss, '生徒回答フォルダID');
+  if (!folderId) throw new Error('生徒回答フォルダIDが未設定です。Step③でフォルダを指定してください。');
 
   sortResultsSheetByFileNameAsc_(ss);
   var warpedInfo = getWarpedFileCountForRosterAssign_(ss);

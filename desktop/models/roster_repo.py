@@ -289,7 +289,7 @@ def assign_ids_from_roster(
         ).fetchall()
         if len(rows) != len(attendees):
             raise ValueError(
-                f"件数が一致しません: 解答 {len(rows)} 件 / 受験予定 {len(attendees)} 名。"
+                f"件数が一致しません: 回答 {len(rows)} 件 / 受験予定 {len(attendees)} 名。"
                 "未受験者の指定を確認してください。"
             )
         for row, student in zip(rows, attendees):

@@ -117,7 +117,7 @@ class Step4OutlierMixin:
 
     def _build_step4_outlier_section(self, parent: ttk.Frame) -> None:
         outlier_frame = ttk.LabelFrame(
-            parent, text="外れ値・少数派解答の確認（回答欄画像）", padding=8
+            parent, text="外れ値・少数派回答の確認（回答欄画像）", padding=8
         )
         outlier_frame.pack(fill="x", pady=6)
         ttk.Label(
@@ -140,7 +140,7 @@ class Step4OutlierMixin:
         self.hide_incorrect_crops_var = tk.BooleanVar(value=True)
         ttk.Checkbutton(
             ctrl,
-            text="不正解対象の解答の画像は表示しない",
+            text="不正解対象の回答の画像は表示しない",
             variable=self.hide_incorrect_crops_var,
             command=self._purge_incorrect_from_crop_grid,
         ).pack(side="left", padx=4)
@@ -176,7 +176,7 @@ class Step4OutlierMixin:
         for c, label, w in [
             ("deemed", "みなし", 44),
             ("incorrect", "不正解", 44),
-            ("answer", "解答", 180),
+            ("answer", "回答", 180),
             ("count", "人数", 40),
             ("show", "表示", 40),
             ("student", "生徒ID", 70),
@@ -221,7 +221,7 @@ class Step4OutlierMixin:
         self._render_outlier_tree()
         messagebox.showinfo(
             "検出完了",
-            f"{len(self._outlier_groups)} 種類の外れ値解答（人数 ≤ {max_count}）",
+            f"{len(self._outlier_groups)} 種類の外れ値回答（人数 ≤ {max_count}）",
         )
 
     def _build_outlier_flat_rows(self) -> None:

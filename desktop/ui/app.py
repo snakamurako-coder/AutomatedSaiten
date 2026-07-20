@@ -581,13 +581,13 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         ttk.Label(f, text="⑤〜⑦ テキスト化パイプライン", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
-            text="生徒解答フォルダ内の PDF / JPG / PNG を自動補正→OCR→SQLite に一括保存します。",
+            text="生徒回答フォルダ内の PDF / JPG / PNG を自動補正→OCR→SQLite に一括保存します。",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(6, 8))
 
         folder_row = ttk.Frame(f)
         folder_row.pack(fill="x", pady=4)
-        ttk.Label(folder_row, text="解答フォルダ").pack(side="left")
+        ttk.Label(folder_row, text="回答フォルダ").pack(side="left")
         self.inbox_path_var = tk.StringVar()
         ttk.Entry(folder_row, textvariable=self.inbox_path_var, width=70).pack(side="left", padx=4)
         ttk.Button(folder_row, text="参照…", command=self._pick_inbox).pack(side="left")
@@ -614,7 +614,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         self.ocr_log.pack(fill="both", expand=True, pady=8)
 
     def _pick_inbox(self) -> None:
-        path = filedialog.askdirectory(title="生徒解答フォルダを選択")
+        path = filedialog.askdirectory(title="生徒回答フォルダを選択")
         if path and self._require_active_test():
             self.inbox_path_var.set(path)
             save_student_folder(self.active_test_id, path)
@@ -642,7 +642,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
             return
         folder = self.inbox_path_var.get().strip()
         if not folder:
-            messagebox.showerror("エラー", "解答フォルダを指定してください。")
+            messagebox.showerror("エラー", "回答フォルダを指定してください。")
             return
 
         self.ocr_run_btn.config(state="disabled")
@@ -731,7 +731,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         ttk.Label(scroll, text="⑧ 採点基準の設定", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             scroll,
-            text="OCR置換・みなし採点で解答を整えてから、判定・得点の基準を設定します。",
+            text="OCR置換・みなし採点で回答を整えてから、判定・得点の基準を設定します。",
             style="Muted.TLabel",
         ).pack(anchor="w", pady=(6, 8))
 
@@ -744,7 +744,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         )
         self.criteria_field_combo.pack(side="left", padx=4)
         self.criteria_field_combo.bind("<<ComboboxSelected>>", lambda _e: self._on_criteria_field_changed())
-        ttk.Button(toolbar, text="解答を集約", command=self._on_aggregate_criteria).pack(
+        ttk.Button(toolbar, text="回答を集約", command=self._on_aggregate_criteria).pack(
             side="left", padx=2
         )
         ttk.Button(toolbar, text="AI原案", command=self._on_gemini_criteria).pack(side="left", padx=2)
@@ -814,7 +814,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         for c, label, w in [
             ("deemed", "みなし", 44),
             ("incorrect", "不正解", 44),
-            ("answer", "解答", 220),
+            ("answer", "回答", 220),
             ("count", "人数", 44),
             ("judgment", "判定", 44),
             ("score", "得点", 44),
@@ -1247,7 +1247,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
             messagebox.showinfo(
                 "採点完了",
                 f"{res['gradedCount']} 件を採点しました。\n"
-                f"採点基準に無い解答: {res['unregisteredCount']} 件（×・0点として処理）",
+                f"採点基準に無い回答: {res['unregisteredCount']} 件（×・0点として処理）",
             )
         except Exception as e:
             messagebox.showerror("採点エラー", str(e))

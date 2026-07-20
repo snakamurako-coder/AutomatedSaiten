@@ -217,7 +217,7 @@ class FaintReviewDialog(QDialog):
         btns.addStretch()
         apply_all_btn = QPushButton("この補正を選択中の全てに反映")
         apply_all_btn.setToolTip(
-            "⑥一覧でチェックしたファイル（未チェック時はこの一覧の全件）に、"
+            "（⑥ 薄字補正）一覧でチェックしたファイル（未チェック時はこの一覧の全件）に、"
             "現在のスライダー設定で強調画像を保存します。"
         )
         apply_all_btn.clicked.connect(self._apply_correction_to_all_selected)
@@ -407,7 +407,7 @@ class FaintReviewDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "反映なし",
-                "⑥一覧でチェックしたファイルが、この目視一覧にありません。",
+                "（⑥ 薄字補正）一覧でチェックしたファイルが、この目視一覧にありません。",
             )
             return
         label = (

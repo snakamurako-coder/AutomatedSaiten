@@ -78,7 +78,7 @@ class Step2Page(QWidget):
         self.use_id_mark_check = QCheckBox("IDマーク欄あり（OMRで生徒ID読取）")
         self.use_id_mark_check.setChecked(True)
         self.use_id_mark_check.setToolTip(
-            "解答用紙ひな形の生徒IDマーク欄を⑦ OCR実行時に OMR で読み取ります。"
+            "回答用紙ひな形の生徒IDマーク欄を⑦ OCR実行時に OMR で読み取ります。"
         )
         toolbar.addWidget(self.use_id_mark_check)
         toolbar.addWidget(QLabel("二値化"))
@@ -164,7 +164,7 @@ class Step2Page(QWidget):
         self.editor.set_click_detect_mode(auto_detect)
         self.editor.focus_canvas()
         if auto_detect:
-            self._set_status("自動認識モード — 解答欄の内側をクリックしてください。")
+            self._set_status("自動認識モード — 回答欄の内側をクリックしてください。")
         else:
             self._set_status("手動設定モード — ドラッグで記述欄を指定できます。")
 

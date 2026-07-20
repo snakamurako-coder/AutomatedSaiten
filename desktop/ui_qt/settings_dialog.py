@@ -200,7 +200,7 @@ class SettingsDialog(QDialog):
 
     def _build_criteria_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page(
-            "⑥薄字補正の「薄い字を検査」で使う判断基準です。"
+            "（⑥ 薄字補正・任意）の「薄い字を検査」で使う判断基準です。"
             "記述欄クロップの Weber Contrast C が基準未満なら「要確認（薄い）」になります。"
             "しきい値は実運用で調整してください。"
         )

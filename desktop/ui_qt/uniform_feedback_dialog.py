@@ -1,4 +1,4 @@
-"""④解答集約向け 一律フィードバック設定ダイアログ。"""
+"""④回答集約向け 一律フィードバック設定ダイアログ。"""
 
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ class UniformFeedbackDialog(QDialog):
         self.setMinimumSize(760, 620)
 
         root = QVBoxLayout(self)
-        root.addWidget(QLabel(f"対象解答: {self._answer_text}"))
+        root.addWidget(QLabel(f"対象回答: {self._answer_text}"))
         root.addWidget(QLabel("※適用直後に対象画像へ反映されます"))
 
         source_box = QGroupBox("文言ソース")

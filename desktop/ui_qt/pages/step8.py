@@ -123,7 +123,7 @@ class Step8Page(QWidget):
 
         root.addWidget(h.title_label("⑧ 採点基準の設定"))
         root.addWidget(
-            h.muted_label("OCR置換・みなし採点で解答を整えてから、判定・得点の基準を設定します。")
+            h.muted_label("OCR置換・みなし採点で回答を整えてから、判定・得点の基準を設定します。")
         )
 
         toolbar = QHBoxLayout()
@@ -132,7 +132,7 @@ class Step8Page(QWidget):
         self.field_combo.setMinimumWidth(240)
         self.field_combo.currentIndexChanged.connect(self._on_field_changed)
         toolbar.addWidget(self.field_combo)
-        toolbar.addWidget(h.button("解答を集約", self._on_aggregate))
+        toolbar.addWidget(h.button("回答を集約", self._on_aggregate))
         toolbar.addWidget(h.button("AI原案", self._on_gemini))
         toolbar.addWidget(h.button("基準を保存", self._on_save_criteria, variant="primary"))
         toolbar.addStretch()
@@ -231,7 +231,7 @@ class Step8Page(QWidget):
             [
                 "みなし",
                 "不正解",
-                "解答",
+                "回答",
                 "人数",
                 "判定",
                 "得点",
@@ -340,7 +340,7 @@ class Step8Page(QWidget):
             self._criteria_rows[row]["score"] = int(score)
 
     def _build_outlier_box(self) -> QGroupBox:
-        box = QGroupBox("外れ値・少数派解答の確認（回答欄画像）")
+        box = QGroupBox("外れ値・少数派回答の確認（回答欄画像）")
         box.setStyleSheet(
             f"QGroupBox {{ background: #f8fafc; border: 1px solid {COLORS['border']}; border-radius: 8px; }}"
         )
@@ -358,7 +358,7 @@ class Step8Page(QWidget):
         self.outlier_max_spin.setValue(2)
         ctrl.addWidget(self.outlier_max_spin)
         ctrl.addWidget(h.button("外れ値を検出", self._on_fetch_outliers))
-        self.hide_incorrect_check = QCheckBox("不正解対象の解答の画像は表示しない")
+        self.hide_incorrect_check = QCheckBox("不正解対象の回答の画像は表示しない")
         self.hide_incorrect_check.setChecked(True)
         self.hide_incorrect_check.toggled.connect(lambda _c: self._purge_incorrect_from_grid())
         ctrl.addWidget(self.hide_incorrect_check)
@@ -378,7 +378,7 @@ class Step8Page(QWidget):
 
         self.outlier_table = QTableWidget(0, 8)
         self.outlier_table.setHorizontalHeaderLabels(
-            ["みなし", "不正解", "解答", "人数", "表示", "生徒ID", "ファイル名", "操作"]
+            ["みなし", "不正解", "回答", "人数", "表示", "生徒ID", "ファイル名", "操作"]
         )
         for i, w in enumerate([52, 52, 220, 48, 48, 90, 200, 60]):
             self.outlier_table.setColumnWidth(i, w)
@@ -1072,7 +1072,7 @@ class Step8Page(QWidget):
         self._build_outlier_flat_rows()
         self._render_outlier_table()
         if not silent:
-            h.info(self, "検出完了", f"{len(self._outlier_groups)} 種類の外れ値解答（人数 ≤ {max_count}）")
+            h.info(self, "検出完了", f"{len(self._outlier_groups)} 種類の外れ値回答（人数 ≤ {max_count}）")
 
     def _build_outlier_flat_rows(self) -> None:
         self._outlier_flat_rows = []

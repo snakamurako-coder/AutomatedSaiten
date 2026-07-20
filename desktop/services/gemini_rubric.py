@@ -38,9 +38,9 @@ def generate_rubric_with_gemini(
                 {
                     "text": (
                         "あなたは厳格かつ公平なテスト採点基準を策定する専門家です。"
-                        "各解答に対し、○（満点）、△（部分点）、×（0点）の判定と"
+                        "各回答に対し、○（満点）、△（部分点）、×（0点）の判定と"
                         "付与得点（0〜満点の整数）および根拠をJSONで返してください。"
-                        "解答が「なし」の場合は×・0点としてください。"
+                        "回答が「なし」の場合は×・0点としてください。"
                     )
                 }
             ]
@@ -51,7 +51,7 @@ def generate_rubric_with_gemini(
                     {
                         "text": (
                             f"記述欄ID: {field_id}, 満点: {max_score}点。"
-                            f"ユニーク解答リスト:\n{json.dumps(unique_answers, ensure_ascii=False)}"
+                            f"ユニーク回答リスト:\n{json.dumps(unique_answers, ensure_ascii=False)}"
                         )
                     }
                 ]

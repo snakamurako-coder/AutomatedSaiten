@@ -87,6 +87,13 @@ QPushButton#NavBranchStep {{
     font-size: 11px;
     min-height: 26px;
 }}
+QPushButton#NavOptionalStep {{
+    color: {COLORS["text_muted"]};
+    font-size: 11px;
+}}
+QPushButton#NavOptionalStep:checked {{
+    color: white;
+}}
 QPushButton#ManualGradingNav {{
     background: white;
     border: 1px solid #93c5fd;

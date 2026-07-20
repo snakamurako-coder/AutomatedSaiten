@@ -11,7 +11,7 @@ from models.test_repo import get_all_results, touch_progress_conn
 
 
 def get_unique_answers(test_id: str, field_id: str) -> list[dict[str, Any]]:
-    """OCR 結果から記述欄ごとのユニーク解答を集約。"""
+    """OCR 結果から記述欄ごとのユニーク回答を集約。"""
     init_db()
     results = get_all_results(test_id)
     answers: list[str] = []
@@ -119,7 +119,7 @@ def save_grading_criteria(
 
 
 def get_deemed_merged_sources(test_id: str, field_id: str) -> set[str]:
-    """みなし採点で正答に統合済みの旧解答（OCR 上の文字列）。"""
+    """みなし採点で正答に統合済みの旧回答（OCR 上の文字列）。"""
     init_db()
     with connect() as conn:
         rows = conn.execute(
@@ -142,7 +142,7 @@ def delete_grading_criteria_answers(
     field_id: str,
     answer_texts: list[str],
 ) -> None:
-    """指定解答の採点基準行を削除（みなし統合後の旧解答除去用）。"""
+    """指定回答の採点基準行を削除（みなし統合後の旧回答除去用）。"""
     init_db()
     answers = [str(a).strip() for a in answer_texts if str(a).strip()]
     if not answers:
@@ -163,7 +163,7 @@ def merge_unique_with_criteria(
     test_id: str,
     field_id: str,
 ) -> list[dict[str, Any]]:
-    """ユニーク解答一覧に保存済み基準をマージ。"""
+    """ユニーク回答一覧に保存済み基準をマージ。"""
     unique = get_unique_answers(test_id, field_id)
     saved = {r["answer_text"]: r for r in get_grading_criteria(test_id, field_id)}
     deemed_sources = get_deemed_merged_sources(test_id, field_id)
@@ -241,7 +241,7 @@ def build_rule_map(test_id: str) -> dict[str, dict[str, dict[str, Any]]]:
 
 
 def get_field_answer_details(test_id: str, field_id: str) -> list[dict[str, Any]]:
-    """記述欄ごとの生徒解答詳細（外れ値検出・画像表示用）。"""
+    """記述欄ごとの生徒回答詳細（外れ値検出・画像表示用）。"""
     init_db()
     details: list[dict[str, Any]] = []
     for row in get_all_results(test_id):

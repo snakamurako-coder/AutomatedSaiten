@@ -1,4 +1,4 @@
-"""解答用紙ひな形 Excel（GAS ハブSS のテンプレート_共通A4横/縦 と同等）。"""
+"""回答用紙ひな形 Excel（GAS ハブSS のテンプレート_共通A4横/縦 と同等）。"""
 
 from __future__ import annotations
 
@@ -149,7 +149,7 @@ def _build_sheet(ws, orientation: str) -> None:
     title = ws.cell(
         1,
         1,
-        f"【解答用紙ひな形 {orient_label}】このシートを編集して印刷してください。"
+        f"【回答用紙ひな形 {orient_label}】このシートを編集して印刷してください。"
         "外枠・マス目・IDマーク欄の位置は ① 回答欄設定の座標系（1マス≈20px）と一致しています。",
     )
     title.font = Font(size=9)
@@ -177,7 +177,7 @@ def _build_sheet(ws, orientation: str) -> None:
 
 
 def export_answer_sheet_templates(output_path: str) -> str:
-    """A4横・A4縦の解答用紙ひな形（生徒IDマーク欄付き）を Excel に出力。
+    """A4横・A4縦の回答用紙ひな形（生徒IDマーク欄付き）を Excel に出力。
 
     GAS の「テンプレート_共通A4横」「テンプレート_共通A4縦」とほぼ同一の書式。
     """

@@ -22,9 +22,9 @@ def _bbox_from_mask(mask: np.ndarray) -> tuple[int, int, int, int]:
 
 def _validate_size(w: int, h: int, img_w: int, img_h: int, *, min_size: int) -> None:
     if w < min_size or h < min_size:
-        raise ValueError("検出した領域が小さすぎます。別の解答欄をクリックしてください。")
+        raise ValueError("検出した領域が小さすぎます。別の回答欄をクリックしてください。")
     if w * h > img_w * img_h * 0.85:
-        raise ValueError("領域が大きすぎます。解答欄の内側をクリックしてください。")
+        raise ValueError("領域が大きすぎます。回答欄の内側をクリックしてください。")
 
 
 def _default_roi_margin(img_w: int, img_h: int) -> int:
@@ -101,7 +101,7 @@ def _contour_region_bbox(
 
     if best is None:
         raise ValueError(
-            "解答欄の枠を検出できませんでした。"
+            "回答欄の枠を検出できませんでした。"
             "欄の内側をクリックするか、二値化しきい値を調整してください。"
         )
     return best[1]

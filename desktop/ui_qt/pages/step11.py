@@ -281,7 +281,7 @@ class Step11Page(QWidget):
             msg = "採点結果がまだありません。⑦ OCR実行を先に行ってください。"
         else:
             msg = (
-                f"解答 {st['resultCount']} 件中 ID 入力済み {st['withIdCount']} 件。"
+                f"回答 {st['resultCount']} 件中 ID 入力済み {st['withIdCount']} 件。"
                 "名簿を選択し、未受験者を除外してから割り当ててください"
                 "（生徒ID昇順 ↔ ファイル名昇順または降順で 1:1 対応）。"
             )
@@ -388,7 +388,7 @@ class Step11Page(QWidget):
             h.error(
                 self,
                 "件数不一致",
-                f"解答 {preview['resultCount']} 件 / 受験予定 {preview['expectedCount']} 名で一致しません。\n"
+                f"回答 {preview['resultCount']} 件 / 受験予定 {preview['expectedCount']} 名で一致しません。\n"
                 "未受験者の指定を確認してください。",
             )
             return

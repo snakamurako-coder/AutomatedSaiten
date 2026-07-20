@@ -172,7 +172,7 @@
             font-size: 3rem; font-weight: 800; color: #2563eb; line-height: 1;
             font-variant-numeric: tabular-nums;
         }
-        /* 解答集約・外れ値リスト: 内容に合わせたコンパクト列幅 */
+        /* 回答集約・外れ値リスト: 内容に合わせたコンパクト列幅 */
         .compact-table {
             width: max-content;
             border-collapse: collapse;
@@ -290,8 +290,8 @@
                 <button type="button" data-busy-label="作成中..." onclick="withBusyButton(event.currentTarget, createNewTest)" class="bg-blue-600 text-white py-2 rounded font-bold text-sm hover:bg-blue-700">テスト用スプレッドシートを作成</button>
             </div>
             <div class="mt-4 border rounded p-3 bg-white space-y-2 max-w-lg">
-                <h3 class="text-sm font-bold">解答用紙ひな形（ハブSS）</h3>
-                <p class="text-xs text-gray-600">コンテナバインドの管理スプレッドシートに <strong>テンプレート_共通A4横</strong> / <strong>テンプレート_共通A4縦</strong> シートがあります。編集して印刷し、生徒用解答用紙としてご利用ください（IDマーク欄・年/組/番見出し付き）。</p>
+                <h3 class="text-sm font-bold">回答用紙ひな形（ハブSS）</h3>
+                <p class="text-xs text-gray-600">コンテナバインドの管理スプレッドシートに <strong>テンプレート_共通A4横</strong> / <strong>テンプレート_共通A4縦</strong> シートがあります。編集して印刷し、生徒用回答用紙としてご利用ください（IDマーク欄・年/組/番見出し付き）。</p>
                 <div id="answer-template-links" class="flex flex-wrap gap-2 text-xs"></div>
                 <button type="button" data-busy-label="準備中..." onclick="withBusyButton(event.currentTarget, ensureAnswerSheetTemplatesUi)" class="bg-indigo-600 text-white px-3 py-1 rounded text-sm">ひな形シートを用意（未作成時のみ）</button>
             </div>
@@ -375,7 +375,7 @@
             <h2 class="font-bold">④ 採点基準の設定</h2>
             <div class="flex flex-wrap gap-2 text-xs items-center">
                 <select id="criteria-field-select" class="border rounded p-2"></select>
-                <button type="button" data-busy-label="集約中..." onclick="withBusyButton(event.currentTarget, fetchUniqueForCriteria)" class="bg-purple-100 text-purple-800 px-3 py-1 rounded font-bold">解答を集約</button>
+                <button type="button" data-busy-label="集約中..." onclick="withBusyButton(event.currentTarget, fetchUniqueForCriteria)" class="bg-purple-100 text-purple-800 px-3 py-1 rounded font-bold">回答を集約</button>
                 <button type="button" data-busy-label="AI生成中..." onclick="withBusyButton(event.currentTarget, askGeminiCriteria)" class="bg-purple-600 text-white px-3 py-1 rounded font-bold">AI原案</button>
                 <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, saveCriteriaToServer)" class="bg-green-600 text-white px-3 py-1 rounded font-bold">基準を保存</button>
             </div>
@@ -405,7 +405,7 @@
             </div>
 
             <div class="border rounded p-3 bg-indigo-50 space-y-2">
-                <div class="text-xs font-bold text-indigo-900">みなし採点（正答例と同じとみなす解答を選択）</div>
+                <div class="text-xs font-bold text-indigo-900">みなし採点（正答例と同じとみなす回答を選択）</div>
                 <p class="text-xs text-indigo-800">正答例を指定し、表または画像から「みなし」にチェック → 適用で <b>採点結果シートのテキスト列</b> を正答例に書き換え、人数を集約します。</p>
                 <div class="flex flex-wrap gap-2 items-center text-xs">
                     <label class="font-semibold">正答例:</label>
@@ -422,7 +422,7 @@
                         <tr>
                             <th class="col-check">みなし</th>
                             <th class="col-check">不正解</th>
-                            <th class="col-answer">解答</th>
+                            <th class="col-answer">回答</th>
                             <th class="col-num">人数</th>
                             <th class="col-judgment">判定</th>
                             <th class="col-score">得点</th>
@@ -436,14 +436,14 @@
             </div>
 
             <div class="border rounded p-3 bg-slate-50 space-y-2">
-                <div class="text-xs font-bold text-slate-800">外れ値・少数派解答の確認（回答欄画像）</div>
-                <p class="text-xs text-slate-600">下表の「みなし」「不正解」は解答集約表と連動します。「不正解」☑の解答は、下のオプションが有効なとき画像を読み込みません。</p>
+                <div class="text-xs font-bold text-slate-800">外れ値・少数派回答の確認（回答欄画像）</div>
+                <p class="text-xs text-slate-600">下表の「みなし」「不正解」は回答集約表と連動します。「不正解」☑の回答は、下のオプションが有効なとき画像を読み込みません。</p>
                 <div class="flex flex-wrap gap-2 items-center text-xs">
                     <label>人数上限 ≤ <input type="number" id="outlier-max-count" value="2" min="1" class="w-12 border rounded p-1 text-center"></label>
                     <button type="button" data-busy-label="検出中..." onclick="withBusyButton(event.currentTarget, fetchOutlierGroups)" class="bg-slate-600 text-white px-2 py-1 rounded">外れ値を検出</button>
                     <label class="flex items-center gap-1 border rounded bg-white px-2 py-1">
                         <input type="checkbox" id="hide-incorrect-crops" checked>
-                        <span>不正解対象の解答の画像は表示しない</span>
+                        <span>不正解対象の回答の画像は表示しない</span>
                     </label>
                     <button type="button" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showNoneAnswerCrops)" class="bg-amber-600 text-white px-2 py-1 rounded font-bold">なし（未回答）の回答を確認する</button>
                     <button type="button" onclick="selectAllOutlierRows(true)" class="bg-white border px-2 py-1 rounded">表示を全選択</button>
@@ -498,7 +498,7 @@
                     <select id="roster-select" class="border rounded p-1 min-w-[160px]" onchange="onRosterSelectChange()">
                         <option value="">-- 名簿を選択 --</option>
                     </select></div>
-                    <label class="flex items-center gap-1"><input type="checkbox" id="use-id-mark-step7" checked onchange="syncIdMarkSetting()"> 解答用紙にIDマーク欄あり</label>
+                    <label class="flex items-center gap-1"><input type="checkbox" id="use-id-mark-step7" checked onchange="syncIdMarkSetting()"> 回答用紙にIDマーク欄あり</label>
                     <button type="button" id="show-roster-absent-btn" data-busy-label="読込中..." onclick="withBusyButton(event.currentTarget, showRosterForAbsentInput)" class="bg-white border border-blue-400 text-blue-800 px-3 py-1 rounded font-bold">名簿を表示し未受験者を入力</button>
                     <button type="button" data-busy-label="割当中..." onclick="withBusyButton(event.currentTarget, assignIdsFromRosterUi)" id="assign-ids-btn" class="bg-blue-700 text-white px-3 py-1 rounded font-bold" disabled title="名簿表示後、未受験☑を設定してから押してください">ID・氏名を割り当て</button>
                 </div>
@@ -531,7 +531,7 @@
                     <button type="button" data-busy-label="取込中..." onclick="withBusyButton(event.currentTarget, importExternalCsv)" class="bg-green-600 text-white px-4 py-2 rounded text-sm">外部得点を取込</button>
                 </div>
             </div>
-            <p class="text-xs text-gray-500">解答用紙への判定・得点描画は <strong>⑩ 個票出力</strong> で行います。</p>
+            <p class="text-xs text-gray-500">回答用紙への判定・得点描画は <strong>⑩ 個票出力</strong> で行います。</p>
             <button type="button" data-busy-label="保存中..." onclick="withBusyButton(event.currentTarget, function(){ return saveCurrentStepProgress(7); })" class="bg-gray-600 text-white px-4 py-2 rounded text-sm">このステップまで保存</button>
         </div>
 
@@ -3859,7 +3859,7 @@ function loadCriteriaUiForField(fieldId) {
         return;
     }
     appState.criteriaList = [];
-    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="8" class="p-2 text-gray-400" style="white-space:normal">「解答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
+    document.getElementById('criteria-tbody').innerHTML = '<tr><td colspan="8" class="p-2 text-gray-400" style="white-space:normal">「回答を集約」で一覧を取得するか、保存済み基準がありません</td></tr>';
 }
 
 function getDeemedCanonicalUi() {
@@ -3979,7 +3979,7 @@ function purgeIncorrectFromCropGrid() {
     if (appState.cropGridResults.length) {
         renderCropGrid(appState.cropGridResults);
     } else if (grid) {
-        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">不正解対象の解答は画像表示から除外しました</p>';
+        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">不正解対象の回答は画像表示から除外しました</p>';
     }
 }
 
@@ -4083,7 +4083,7 @@ function purgeDeemedTargetsFromOutlierUi(appliedSources) {
     if (appState.cropGridResults.length) {
         renderCropGrid(appState.cropGridResults);
     } else if (grid) {
-        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">みなし適用済みの解答は非表示にしました</p>';
+        grid.innerHTML = '<p class="text-xs text-gray-500 col-span-full">みなし適用済みの回答は非表示にしました</p>';
     }
 }
 
@@ -4221,7 +4221,7 @@ function collectOcrReplacementRulesFromUi() {
 function clearOutlierPanel() {
     appState.outlierGroups = [];
     appState.cropGridResults = [];
-    document.getElementById('outlier-groups-list').innerHTML = '<p class="text-gray-400 p-2">「外れ値を検出」で少数派解答を一覧します</p>';
+    document.getElementById('outlier-groups-list').innerHTML = '<p class="text-gray-400 p-2">「外れ値を検出」で少数派回答を一覧します</p>';
     document.getElementById('outlier-crop-grid').innerHTML = '';
 }
 
@@ -4233,7 +4233,7 @@ function renderOutlierGroupsList() {
     }
     var fid = getCriteriaFieldId();
     var html = '<table class="compact-table outlier-table"><thead><tr class="bg-gray-50">' +
-        '<th class="col-check">みなし</th><th class="col-check">不正解</th><th class="col-answer">解答</th><th class="col-num">人数</th>' +
+        '<th class="col-check">みなし</th><th class="col-check">不正解</th><th class="col-answer">回答</th><th class="col-num">人数</th>' +
         '<th class="col-check">表示</th><th class="col-student">生徒</th><th class="col-action"></th></tr></thead><tbody>';
     appState.outlierGroups.forEach(function(group, gi) {
         var rowSpan = group.rows.length;
@@ -4465,7 +4465,7 @@ async function showAnswerPatternCrops(answerText) {
         setStatus('不正解対象のため「' + answerText + '」の画像は表示しません', true);
         return;
     }
-    setStatus('該当解答の画像を取得中...');
+    setStatus('該当回答の画像を取得中...');
     try {
         var rows = await gasRun('getAnswerRowsForPattern', fid, answerText);
         if (!rows.length) { setStatus('該当する回答がありません', true); return; }
@@ -4473,7 +4473,7 @@ async function showAnswerPatternCrops(answerText) {
         if (!rows.length) { setStatus('不正解対象のため画像を表示しません', true); return; }
         selectAllOutlierRows(false);
         await loadAnswerCropsForRows(rows, fid);
-        setStatus(rows.length + ' 枚（解答: ' + answerText + '）');
+        setStatus(rows.length + ' 枚（回答: ' + answerText + '）');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -4496,7 +4496,7 @@ async function fetchOutlierGroups() {
         appState.outlierGroups = await gasRun('getOutlierAnswerGroups', fid, maxCount);
         renderOutlierGroupsList();
         syncIncorrectUiFromState();
-        setStatus(appState.outlierGroups.length + ' 種類の外れ値解答を検出（人数 ≤ ' + maxCount + '）');
+        setStatus(appState.outlierGroups.length + ' 種類の外れ値回答を検出（人数 ≤ ' + maxCount + '）');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -4531,7 +4531,7 @@ async function applyReplacementsAndReaggregate() {
         await fetchOutlierGroups();
         var n = res.replacedCount != null ? res.replacedCount : '—';
         var colMsg = res.textColName ? '（列: ' + res.textColName + '）' : '';
-        setStatus('採点結果シート' + colMsg + ' を更新: ' + n + ' セル、' + appState.criteriaList.length + ' 種類の解答に再集約');
+        setStatus('採点結果シート' + colMsg + ' を更新: ' + n + ' セル、' + appState.criteriaList.length + ' 種類の回答に再集約');
         refreshCurrentTestInCache().catch(function() {});
     } catch (e) { setStatus(e.message || e, true); }
 }
@@ -5093,7 +5093,7 @@ async function ensureAnswerSheetTemplatesUi() {
         var links = await gasRun('ensureAnswerSheetTemplatesForWeb');
         appState.answerSheetTemplates = links;
         renderAnswerTemplateLinks(links);
-        setStatus('解答用紙ひな形シートを確認しました（未作成の場合は自動作成済み）');
+        setStatus('回答用紙ひな形シートを確認しました（未作成の場合は自動作成済み）');
     } catch (e) { setStatus(e.message || e, true); }
 }
 
@@ -5523,13 +5523,13 @@ function getCriteriaRulesMapForField(fieldId) {
 async function fetchUniqueForCriteria() {
     var fid = getCriteriaFieldId();
     try {
-        setStatus('解答を集約中...');
+        setStatus('回答を集約中...');
         var rulesMap = getCriteriaRulesMapForField(fid);
         appState.criteriaList = await gasRun('getUniqueAnswers', fid);
         appState.outlierMaxCount = getOutlierMaxCountUi();
         renderCriteriaTable(null, rulesMap);
         syncDeemedUiFromState();
-        setStatus(appState.criteriaList.length + ' 種類の解答を検出（' +
+        setStatus(appState.criteriaList.length + ' 種類の回答を検出（' +
             appState.criteriaList.reduce(function(s, x) { return s + x.count; }, 0) + ' 件）');
     } catch (e) { setStatus(e.message || e, true); }
 }

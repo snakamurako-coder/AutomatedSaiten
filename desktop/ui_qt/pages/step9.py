@@ -82,7 +82,7 @@ class Step9Page(QWidget):
                 self,
                 "採点完了",
                 f"{res['gradedCount']} 件を採点しました。\n"
-                f"採点基準に無い解答: {res['unregisteredCount']} 件（×・0点として処理）",
+                f"採点基準に無い回答: {res['unregisteredCount']} 件（×・0点として処理）",
             )
         except Exception as e:
             h.error(self, "採点エラー", str(e))

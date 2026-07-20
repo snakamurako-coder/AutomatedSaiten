@@ -24,7 +24,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from constants import DESKTOP_READY_STEPS, MANUAL_GRADING_STEP_ID, STEPS
+from constants import (
+    DESKTOP_READY_STEPS,
+    MANUAL_BOOTSTRAP_STEP_ID,
+    MANUAL_GRADING_STEP_ID,
+    STEPS,
+)
 from models.database import connect, get_active_test_id, init_db
 from services.ocr import check_ocr_config
 from ui_qt import helpers as h
@@ -40,6 +45,7 @@ from ui_qt.pages.step11 import Step11Page
 from ui_qt.pages.step12 import Step12Page
 from ui_qt.pages.step13 import Step13Page
 from ui_qt.pages.step14 import Step14Page
+from ui_qt.pages.step_manual_bootstrap import StepManualBootstrapPage
 from ui_qt.pages.step_manual import StepManualPage
 from ui_qt.floating_palette.palette_controller import PaletteController
 from ui_qt.settings_dialog import open_settings_dialog
@@ -117,7 +123,10 @@ class MainWindow(QMainWindow):
             self.pages[sid] = page
             self.stack.addWidget(page)
         self.stack.addWidget(self.pipeline_page)
-        # 手動採点（STEPS リスト外）
+        if MANUAL_BOOTSTRAP_STEP_ID not in self.pages:
+            bootstrap_page = StepManualBootstrapPage(self)
+            self.pages[MANUAL_BOOTSTRAP_STEP_ID] = bootstrap_page
+            self.stack.addWidget(bootstrap_page)
         if MANUAL_GRADING_STEP_ID not in self.pages:
             page = StepManualPage(self)
             self.pages[MANUAL_GRADING_STEP_ID] = page
@@ -163,7 +172,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[int, QPushButton] = {}
 
         for step in STEPS:
-            if step["id"] <= 4:
+            if step["id"] <= 6:
                 self._add_nav_button(lay, step)
 
         fork_lbl = QLabel("▼ 分岐")
@@ -187,7 +196,7 @@ class MainWindow(QMainWindow):
         auto_title.setAlignment(Qt.AlignCenter)
         auto_lay.addWidget(auto_title)
         for step in STEPS:
-            if step["id"] in (5, 6, 7, 8, 9):
+            if step["id"] in (7, 8, 9):
                 self._add_nav_button(auto_lay, step, compact=True)
 
         manual_panel = QFrame()
@@ -200,13 +209,30 @@ class MainWindow(QMainWindow):
         manual_title.setObjectName("NavManualPathTitle")
         manual_title.setAlignment(Qt.AlignCenter)
         manual_lay.addWidget(manual_title)
+
+        bootstrap_btn = QPushButton("空DB作成")
+        bootstrap_btn.setObjectName("ManualBootstrapNav")
+        set_variant(bootstrap_btn, "nav")
+        bootstrap_btn.setCheckable(True)
+        bootstrap_btn.setEnabled(MANUAL_BOOTSTRAP_STEP_ID in DESKTOP_READY_STEPS)
+        bootstrap_btn.setCursor(Qt.PointingHandCursor)
+        bootstrap_btn.setToolTip(
+            "OCR なしで採点用レコードを作成（⑤ 補正画像を紐付け、テキストは空欄）"
+        )
+        bootstrap_btn.clicked.connect(
+            lambda _c=False: self.load_step(MANUAL_BOOTSTRAP_STEP_ID)
+        )
+        self.nav_group.addButton(bootstrap_btn)
+        self.nav_buttons[MANUAL_BOOTSTRAP_STEP_ID] = bootstrap_btn
+        manual_lay.addWidget(bootstrap_btn)
+
         manual_btn = QPushButton("画像を見ながら\n○△×")
         manual_btn.setObjectName("ManualGradingNav")
         set_variant(manual_btn, "nav")
         manual_btn.setCheckable(True)
         manual_btn.setEnabled(MANUAL_GRADING_STEP_ID in DESKTOP_READY_STEPS)
         manual_btn.setCursor(Qt.PointingHandCursor)
-        manual_btn.setToolTip("⑤〜⑨ の代替 — 画像を見ながら ○△× を付ける")
+        manual_btn.setToolTip("空DB作成後 — 画像を見ながら ○△× を付ける（⑦ の代替）")
         manual_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         manual_btn.clicked.connect(
             lambda _c=False: self.load_step(MANUAL_GRADING_STEP_ID)
@@ -268,6 +294,9 @@ class MainWindow(QMainWindow):
         btn.setCursor(Qt.PointingHandCursor if enabled else Qt.ArrowCursor)
         if compact:
             btn.setObjectName("NavBranchStep")
+        if sid == 6:
+            btn.setObjectName("NavOptionalStep")
+            btn.setToolTip("任意 — 薄い字の検査・強調。スキップしても⑦ OCR は実行できます。")
         if enabled:
             btn.clicked.connect(lambda _c=False, s=sid: self.load_step(s))
         self.nav_group.addButton(btn)

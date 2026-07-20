@@ -72,7 +72,7 @@ def create_test(test_name: str, subject: str = "", datetime_str: str = "") -> di
             "ステータス": "作成中",
             "現在ステップ": "1",
             "IDマーク欄使用": "true",
-            "生徒解答フォルダID": inbox_path,
+            "生徒回答フォルダID": inbox_path,
         }
         for key in TEST_INFO_KEYS:
             conn.execute(
@@ -184,6 +184,9 @@ def get_test_info(test_id: str | None = None) -> dict[str, Any]:
             "SELECT key, value FROM test_info WHERE test_id = ?", (tid,)
         ).fetchall()
         info = {r["key"]: r["value"] for r in info_rows}
+        legacy_inbox = info.get("生徒解答フォルダID", "").strip()
+        if legacy_inbox and not info.get("生徒回答フォルダID", "").strip():
+            info["生徒回答フォルダID"] = legacy_inbox
         fields = get_answer_fields_conn(conn, tid)
         points = get_points_conn(conn, tid)
     inbox_path = resolve_student_inbox(tid)
@@ -206,7 +209,7 @@ def get_test_info(test_id: str | None = None) -> dict[str, Any]:
 
 
 def get_use_id_mark(test_id: str) -> bool:
-    """解答用紙に生徒IDマーク欄があり、③で OMR 読取するか。"""
+    """回答用紙に生徒IDマーク欄があり、③で OMR 読取するか。"""
     init_db()
     with connect() as conn:
         row = conn.execute(
@@ -256,14 +259,14 @@ def save_student_folder(test_id: str, folder_path: str) -> None:
     folder_path = str(Path(folder_path).resolve())
     if not is_path_under_test_storage(test_id, folder_path):
         raise ValueError(
-            f"生徒解答フォルダはテスト専用フォルダ内である必要があります: {test_dir(test_id)}"
+            f"生徒回答フォルダはテスト専用フォルダ内である必要があります: {test_dir(test_id)}"
         )
     with connect() as conn:
         conn.execute(
             "UPDATE tests SET student_folder_path = ? WHERE id = ?",
             (folder_path, test_id),
         )
-        _set_test_info(conn, test_id, "生徒解答フォルダID", folder_path)
+        _set_test_info(conn, test_id, "生徒回答フォルダID", folder_path)
         conn.commit()
 
 
@@ -531,32 +534,118 @@ def append_result_row(
 
 def flush_result_rows(test_id: str, rows: list[dict[str, Any]]) -> dict[str, Any]:
     written = 0
+    updated = 0
     skipped = 0
     errors: list[dict[str, str]] = []
     written_names: list[str] = []
+    existing = get_processed_file_names(test_id)
     for r in rows:
+        file_name = str(r.get("fileName") or r.get("file_name") or "")
         try:
-            ok = append_result_row(
-                test_id,
-                r.get("fileName") or r.get("file_name") or "",
-                r.get("sourcePath") or r.get("source_path") or "",
-                r.get("warpedPath") or r.get("warped_path") or "",
-                r.get("studentId") or r.get("student_id") or "",
-                r.get("textMapping") or r.get("text_mapping") or {},
-            )
-            if ok:
-                written += 1
-                written_names.append(str(r.get("fileName") or ""))
+            norm = normalize_file_name(file_name)
+            text_mapping = r.get("textMapping") or r.get("text_mapping") or {}
+            source_path = str(r.get("sourcePath") or r.get("source_path") or "")
+            warped_path = str(r.get("warpedPath") or r.get("warped_path") or "")
+            student_id = r.get("studentId") or r.get("student_id") or ""
+            if norm in existing:
+                upsert_result_texts(
+                    test_id,
+                    file_name,
+                    text_mapping,
+                    source_path=source_path,
+                    warped_path=warped_path,
+                    student_id=student_id if student_id else None,
+                )
+                updated += 1
+                written_names.append(file_name)
             else:
-                skipped += 1
+                ok = append_result_row(
+                    test_id,
+                    file_name,
+                    source_path,
+                    warped_path,
+                    student_id,
+                    text_mapping,
+                )
+                if ok:
+                    written += 1
+                    written_names.append(file_name)
+                    existing.add(norm)
+                else:
+                    skipped += 1
         except Exception as e:
-            errors.append({"fileName": str(r.get("fileName") or ""), "error": str(e)})
+            errors.append({"fileName": file_name, "error": str(e)})
     return {
         "written": written,
+        "updated": updated,
         "skipped": skipped,
         "errors": errors,
         "writtenFileNames": written_names,
     }
+
+
+def bootstrap_empty_result_row(
+    test_id: str,
+    file_name: str,
+    *,
+    source_path: str,
+    warped_path: str,
+    field_ids: list[str],
+) -> str:
+    """手動採点用の空テキスト行を INSERT、既存行はパスのみ UPDATE（判定・得点・テキストは保持）。
+
+    戻り値: inserted / updated / skipped
+    """
+    file_name = str(file_name or "").strip()
+    if not file_name:
+        raise ValueError("ファイル名が空です。")
+    if not str(warped_path or "").strip():
+        return "skipped"
+
+    empty_texts = {str(fid): "" for fid in field_ids if fid}
+    now = _now()
+
+    with connect() as conn:
+        existing = conn.execute(
+            "SELECT id, texts_json, judgments_json, scores_json FROM results "
+            "WHERE test_id = ? AND file_name = ?",
+            (test_id, file_name),
+        ).fetchone()
+        if existing:
+            conn.execute(
+                """
+                UPDATE results SET source_path = ?, warped_path = ?
+                WHERE id = ?
+                """,
+                (source_path or "", warped_path or "", existing["id"]),
+            )
+            touch_progress_conn(conn, test_id, 4, "手動採点準備")
+            conn.commit()
+            return "updated"
+
+        conn.execute(
+            """
+            INSERT INTO results(
+                test_id, student_id, file_name, source_path, warped_path, name,
+                texts_json, judgments_json, scores_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                test_id,
+                "",
+                file_name,
+                source_path or "",
+                warped_path or "",
+                "",
+                json.dumps(empty_texts, ensure_ascii=False),
+                "{}",
+                "{}",
+                now,
+            ),
+        )
+        touch_progress_conn(conn, test_id, 4, "手動採点準備")
+        conn.commit()
+        return "inserted"
 
 
 def get_result_preview(test_id: str) -> list[dict[str, Any]]:

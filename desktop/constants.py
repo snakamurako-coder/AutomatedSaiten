@@ -28,7 +28,7 @@ TEST_INFO_KEYS = [
     "実施日時",
     "作成日時",
     "模範解答画像FileID",
-    "生徒解答フォルダID",
+    "生徒回答フォルダID",
     "基準画像幅",
     "基準画像高さ",
     "ステータス",
@@ -69,7 +69,7 @@ STEPS = [
     {"id": 3, "label": "③ 生徒回答用紙取り込み"},
     {"id": 4, "label": "④ 配点決定"},
     {"id": 5, "label": "⑤ トリミング"},
-    {"id": 6, "label": "⑥ 薄字補正"},
+    {"id": 6, "label": "（⑥ 薄字補正）"},
     {"id": 7, "label": "⑦ OCR実行"},
     {"id": 8, "label": "⑧ 採点基準"},
     {"id": 9, "label": "⑨ 採点実行"},
@@ -80,9 +80,25 @@ STEPS = [
     {"id": 14, "label": "⑭ 個票・成績一覧出力"},
 ]
 
-# ④ から分岐する手動採点（⑤⑥⑦ の代替フロー）
-MANUAL_GRADING_STEP_ID = 15
+# 分岐後 — 手動採点ルート（⑦ の代替 + 空DBで開始）
+MANUAL_BOOTSTRAP_STEP_ID = 15
+MANUAL_GRADING_STEP_ID = 16
 
 DESKTOP_READY_STEPS = {
-    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, MANUAL_GRADING_STEP_ID
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    MANUAL_BOOTSTRAP_STEP_ID,
+    MANUAL_GRADING_STEP_ID,
 }

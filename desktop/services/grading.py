@@ -88,7 +88,7 @@ def build_summary(test_id: str, unregistered_count: int = 0) -> int:
                 "全体",
                 "未登録パターン照合数",
                 str(unregistered_count),
-                "採点基準に無い解答",
+                "採点基準に無い回答",
             ),
         ]
 

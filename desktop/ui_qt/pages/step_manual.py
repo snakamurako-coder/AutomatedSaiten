@@ -1,4 +1,4 @@
-"""手動採点ページ（④ から分岐・⑤⑥⑦ の代替）。"""
+"""手動採点ページ（空DB作成 → 画像を見ながら ○△×。⑦ OCR は任意）。"""
 
 from __future__ import annotations
 
@@ -136,8 +136,8 @@ class StepManualPage(QWidget):
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("ファイル名", "file")
         self.sort_combo.addItem("ID", "id")
-        self.sort_combo.addItem("自動採点：解答の集約順（ファイル名）", "agg_file")
-        self.sort_combo.addItem("自動採点：解答の集約順（ID）", "agg_id")
+        self.sort_combo.addItem("自動採点：回答の集約順（ファイル名）", "agg_file")
+        self.sort_combo.addItem("自動採点：回答の集約順（ID）", "agg_id")
         self.sort_combo.setMinimumWidth(200)
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         top.addWidget(self.sort_combo)
@@ -761,7 +761,10 @@ class StepManualPage(QWidget):
         if not results:
             self._items = []
             self._render_grid()
-            self.status_label.setText("採点結果がありません。⑦ OCR実行でテキスト化してください。")
+            self.status_label.setText(
+                "採点結果がありません。手動採点の「空DB作成」を実行するか、"
+                "自動採点の ⑦ OCR実行 でテキスト化してください。"
+            )
             return
         rows = [
             {
@@ -1014,7 +1017,7 @@ class StepManualPage(QWidget):
         )
 
     def _answer_aggregate_order(self) -> dict[str, int]:
-        """⑥ 解答の集約と同じ順（人数降順・解答テキスト昇順）の順位マップ。"""
+        """⑧ 回答の集約と同じ順（人数降順・回答テキスト昇順）の順位マップ。"""
         fid = self._selected_field_id()
         test_id = self.app.active_test_id
         if not fid or not test_id:

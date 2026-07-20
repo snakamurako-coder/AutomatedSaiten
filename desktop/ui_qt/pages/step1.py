@@ -78,7 +78,7 @@ class Step1Page(QWidget):
         self.active_label = h.muted_label("選択中: （なし）")
         root.addWidget(self.active_label)
 
-        template_box = QGroupBox("解答用紙ひな形（Excel）")
+        template_box = QGroupBox("回答用紙ひな形（Excel）")
         template_lay = QVBoxLayout(template_box)
         template_lay.addWidget(
             h.caption_label(
@@ -193,8 +193,8 @@ class Step1Page(QWidget):
     def _on_export_answer_templates(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
             self,
-            "解答用紙ひな形を Excel 出力",
-            "解答用紙ひな形_A4.xlsx",
+            "回答用紙ひな形を Excel 出力",
+            "回答用紙ひな形_A4.xlsx",
             "Excel (*.xlsx)",
         )
         if not path:
