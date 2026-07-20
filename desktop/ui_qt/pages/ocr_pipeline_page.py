@@ -909,6 +909,15 @@ class OcrPipelinePage(QWidget):
         if not queue:
             h.warn(self, "対象なし", "補正画像がある行がありません。")
             return
+        checked_rows = [
+            rd
+            for i, rd in enumerate(self._inventory_rows)
+            if self._row_checked(i)
+            and (rd.get("warpedPath") or (rd.get("queueItem") or {}).get("path"))
+        ]
+        bulk_apply_targets = [
+            self._review_entry_from_row(rd) for rd in checked_rows
+        ] if checked_rows else list(queue)
         dlg = FaintReviewDialog(
             self,
             test_id=self.app.active_test_id,
@@ -919,6 +928,7 @@ class OcrPipelinePage(QWidget):
                 for i, rd in enumerate(self._inventory_rows)
                 if self._row_checked(i)
             },
+            bulk_apply_targets=bulk_apply_targets,
         )
         dlg.exec()
         if self._scanned and dlg.did_bulk_save():

@@ -101,6 +101,7 @@ class FaintReviewDialog(QDialog):
         queue: list[dict[str, Any]],
         fields: list[dict[str, Any]],
         selected_file_names: set[str] | frozenset[str] | None = None,
+        bulk_apply_targets: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("薄い字の目視・強調")
@@ -111,6 +112,7 @@ class FaintReviewDialog(QDialog):
         self._selected_names = {
             normalize_file_name(n) for n in (selected_file_names or set()) if n
         }
+        self._bulk_apply_targets = list(bulk_apply_targets or [])
         self._index = 0
         self._src_bgr: np.ndarray | None = None
         self._preview_bgr: np.ndarray | None = None
@@ -389,6 +391,8 @@ class FaintReviewDialog(QDialog):
         return resolved
 
     def _targets_for_bulk_apply(self) -> list[dict[str, Any]]:
+        if self._bulk_apply_targets:
+            return list(self._bulk_apply_targets)
         if self._selected_names:
             return [
                 e
