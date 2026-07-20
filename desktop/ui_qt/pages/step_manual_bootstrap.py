@@ -93,7 +93,7 @@ class StepManualBootstrapPage(QWidget):
         self.table.horizontalHeader().setSectionResizeMode(_COL_FILE, QHeaderView.Stretch)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        wire_toggle_columns(self.table, (_COL_CHECK,))
+        wire_toggle_columns(self.table, (_COL_CHECK,), lambda _r, _c, _v: None)
         root.addWidget(main_table_frame(self.table), 1)
 
         self.log = QPlainTextEdit()
