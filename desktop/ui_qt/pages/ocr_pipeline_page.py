@@ -54,7 +54,7 @@ from ui_qt import helpers as h
 from ui_qt.faint_review_dialog import FaintReviewDialog
 from ui_qt.helpers import ProgressBridge
 from ui_qt.layout_helpers import CollapsibleSection, main_table_frame
-from ui_qt.manual_warp_dialog import ManualWarpDialog, collect_continuous_manual_warp_queue
+from ui_qt.manual_warp_dialog import ManualWarpDialog
 from ui_qt.style import COLORS
 from ui_qt.table_cells import (
     is_toggle_checked,
@@ -534,23 +534,73 @@ class OcrPipelinePage(QWidget):
                     self._set_check_cell(i, True)
         self._update_check_count()
 
-    def _get_checked_items(self) -> tuple[list[dict[str, Any]], list[str]]:
+    def _row_to_work_item(self, rd: dict[str, Any]) -> dict[str, Any] | None:
+        """一覧行からバッチ処理用 item を組み立てる。"""
+        q = rd.get("queueItem")
+        path = str((q or {}).get("path") or rd.get("sourcePath") or "").strip()
+        if q:
+            item = dict(q)
+            if path and not item.get("path"):
+                item["path"] = path
+                item["id"] = item.get("id") or path
+        elif path:
+            item = {
+                "id": path,
+                "name": str(rd.get("fileName") or ""),
+                "path": path,
+                "mimeType": "image/jpeg",
+                "isPdf": False,
+                "stage": "warp_and_ocr",
+                "warpedPath": "",
+                "inArchive": bool(rd.get("inArchive")),
+            }
+        else:
+            return None
+        warped = str(rd.get("warpedPath") or "").strip()
+        if warped:
+            item["warpedPath"] = warped
+        return item
+
+    def _get_checked_items(
+        self,
+        *,
+        skip_processed: bool = True,
+        require_path: bool = True,
+    ) -> tuple[list[dict[str, Any]], list[str]]:
         items: list[dict[str, Any]] = []
-        skipped: list[str] = []
+        skipped_processed: list[str] = []
         for i, rd in enumerate(self._inventory_rows):
             if not self._row_checked(i):
                 continue
-            if rd.get("status") == "反映済":
-                skipped.append(rd["fileName"])
+            if skip_processed and rd.get("status") == "反映済":
+                skipped_processed.append(str(rd.get("fileName") or ""))
                 continue
-            q = rd.get("queueItem")
-            if not q:
-                continue
-            item = dict(q)
-            if rd.get("warpedPath"):
-                item["warpedPath"] = rd["warpedPath"]
+            item = self._row_to_work_item(rd)
+            if item is None:
+                if require_path:
+                    continue
+                item = {
+                    "name": str(rd.get("fileName") or ""),
+                    "path": "",
+                    "warpedPath": str(rd.get("warpedPath") or ""),
+                }
             items.append(item)
-        return items, skipped
+        return items, skipped_processed
+
+    def _get_checked_manual_warp_queue(self) -> list[dict[str, Any]]:
+        """チェック行のうち原画像パスがあるものをファイル名順に返す。"""
+        by_name: dict[str, dict[str, Any]] = {}
+        for i, rd in enumerate(self._inventory_rows):
+            if not self._row_checked(i):
+                continue
+            item = self._row_to_work_item(rd)
+            if not item or not str(item.get("path") or "").strip():
+                continue
+            by_name[str(item.get("name") or rd.get("fileName") or "")] = item
+        return sorted(by_name.values(), key=lambda x: str(x.get("name") or ""))
+
+    def _count_checked(self) -> int:
+        return sum(1 for i in range(len(self._inventory_rows)) if self._row_checked(i))
 
     def _row_index(self, file_name: str) -> int | None:
         return self._row_by_name.get(normalize_file_name(file_name))
@@ -605,11 +655,18 @@ class OcrPipelinePage(QWidget):
         if not get_answer_fields(self.app.active_test_id):
             h.error(self, "記述欄未設定", "先に ② 回答欄設定で記述欄を登録してください。")
             return
+        if self._count_checked() == 0:
+            h.warn(self, "選択なし", "トリミングするファイルにチェックを入れてください。")
+            return
         items, skipped = self._get_checked_items()
         if skipped:
             h.warn(self, "反映済みはスキップ", "反映済みのファイルは再トリミングしません。")
         if not items:
-            h.warn(self, "選択なし", "トリミングするファイルにチェックを入れてください。")
+            h.warn(
+                self,
+                "選択なし",
+                "チェックした行に原画像パスがありません。解答フォルダ内のファイルを選んでください。",
+            )
             return
         test_id = self.app.active_test_id
         total = len(items)
@@ -653,6 +710,9 @@ class OcrPipelinePage(QWidget):
         if not get_answer_fields(test_id):
             h.error(self, "記述欄未設定", "先に ② 回答欄設定で記述欄を登録してください。")
             return
+        if self._count_checked() == 0:
+            h.warn(self, "選択なし", "OCR するファイルにチェックを入れてください。")
+            return
         items, skipped = self._get_checked_items()
         if skipped:
             h.warn(
@@ -661,7 +721,11 @@ class OcrPipelinePage(QWidget):
                 "反映済みのファイルは再 OCR しません（⑦をリセット後に再実行できます）。",
             )
         if not items:
-            h.warn(self, "選択なし", "OCR するファイルにチェックを入れてください。")
+            h.warn(
+                self,
+                "選択なし",
+                "チェックした行に処理できるファイルがありません（反映済みは対象外です）。",
+            )
             return
         no_warp = [
             i["name"]
@@ -794,20 +858,15 @@ class OcrPipelinePage(QWidget):
     def _on_faint_precheck(self) -> None:
         if not self.app.require_active_test() or not self._require_scanned():
             return
+        if self._count_checked() == 0:
+            h.warn(self, "選択なし", "薄字検査するファイルにチェックを入れてください。")
+            return
         test_id = self.app.active_test_id
-        items: list[dict[str, Any]] = []
-        for rd in self._inventory_rows:
-            if rd.get("status") == "反映済":
-                continue
-            q = rd.get("queueItem")
-            if not q:
-                continue
-            item = dict(q)
-            if rd.get("warpedPath"):
-                item["warpedPath"] = rd["warpedPath"]
-            items.append(item)
+        items, skipped = self._get_checked_items()
+        if skipped:
+            h.warn(self, "反映済みはスキップ", "反映済みのファイルは薄字検査しません。")
         if not items:
-            h.warn(self, "対象なし", "検査できる未反映のファイルがありません。")
+            h.warn(self, "選択なし", "検査できるチェック行がありません（原画像または補正画像が必要です）。")
             return
         self._set_primary_enabled(False)
         bridge = ProgressBridge(self)
@@ -910,9 +969,17 @@ class OcrPipelinePage(QWidget):
     def _on_continuous_manual_warp(self) -> None:
         if not self.app.require_active_test() or not self._require_scanned():
             return
-        queue = collect_continuous_manual_warp_queue(self._inventory_rows)
+        if self._count_checked() == 0:
+            h.warn(self, "選択なし", "手動補正するファイルにチェックを入れてください。")
+            return
+        queue = self._get_checked_manual_warp_queue()
         if not queue:
-            h.warn(self, "対象なし", "連続手動補正対象がありません。")
+            h.warn(
+                self,
+                "対象なし",
+                "チェックした行に原画像パスがありません。\n"
+                "解答フォルダまたは元画像フォルダにファイルがある行を選んでください。",
+            )
             return
         orientation, thresh = self._warp_dialog_settings()
         dlg = ManualWarpDialog(
