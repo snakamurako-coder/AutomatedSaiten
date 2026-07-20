@@ -9,8 +9,8 @@ from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QWidget
 from ui_qt.style import set_variant
 
 
-def _refresh_nav_button(btn: QPushButton) -> None:
-    set_variant(btn, "nav")
+def _refresh_segment_button(btn: QPushButton) -> None:
+    set_variant(btn, "nav-segment")
     style = btn.style()
     style.unpolish(btn)
     style.polish(btn)
@@ -43,9 +43,7 @@ class RegionDetectModeToggle(QWidget):
             btn.setCheckable(True)
             btn.setAutoDefault(False)
             btn.setDefault(False)
-            btn.setFixedHeight(26)
-            btn.setFixedWidth(72)
-            _refresh_nav_button(btn)
+            _refresh_segment_button(btn)
             self._group.addButton(btn)
             lay.addWidget(btn)
 
@@ -60,8 +58,8 @@ class RegionDetectModeToggle(QWidget):
         self._btn_manual.setChecked(not enabled)
         self._group.blockSignals(False)
         self._updating = False
-        _refresh_nav_button(self._btn_auto)
-        _refresh_nav_button(self._btn_manual)
+        _refresh_segment_button(self._btn_auto)
+        _refresh_segment_button(self._btn_manual)
 
     def is_auto_detect(self) -> bool:
         return self._btn_auto.isChecked()
@@ -69,7 +67,7 @@ class RegionDetectModeToggle(QWidget):
     def _emit_if(self, auto_detect: bool) -> None:
         if self._updating:
             return
-        _refresh_nav_button(self._btn_auto)
-        _refresh_nav_button(self._btn_manual)
+        _refresh_segment_button(self._btn_auto)
+        _refresh_segment_button(self._btn_manual)
         if self._on_change is not None:
             self._on_change(auto_detect)

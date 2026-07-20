@@ -124,6 +124,26 @@ QPushButton[variant="nav"]:checked {{
 QPushButton[variant="nav"]:disabled {{
     color: {COLORS["text_muted"]};
 }}
+QPushButton[variant="nav-segment"] {{
+    background: transparent;
+    border: none;
+    border-radius: 6px;
+    padding: 3px 10px;
+    text-align: center;
+    font-size: 12px;
+    min-height: 26px;
+}}
+QPushButton[variant="nav-segment"]:hover {{
+    background: #eef2f7;
+}}
+QPushButton[variant="nav-segment"]:checked {{
+    background: {COLORS["accent"]};
+    color: white;
+    font-weight: 700;
+}}
+QPushButton[variant="nav-segment"]:disabled {{
+    color: {COLORS["text_muted"]};
+}}
 
 /* --- ホバーサイドバー グラバー --- */
 #NavGrabber {{

@@ -21,7 +21,7 @@ from models.identity_repo import IDENTITY_TYPES, get_identity_fields, save_ident
 from models.test_repo import get_test_info
 from ui_qt import helpers as h
 from ui_qt.region_editor import AnswerRegionEditor
-from ui_qt.region_mode_widgets import RegionDetectModeToggle
+from ui_qt.region_mode_widgets import RegionDetectModeToggle, _refresh_segment_button
 from ui_qt.style import set_variant
 
 
@@ -53,7 +53,7 @@ class Step8Page(QWidget):
             btn.setCheckable(True)
             btn.setAutoDefault(False)
             btn.setDefault(False)
-            set_variant(btn, "nav")
+            set_variant(btn, "nav-segment")
             self._type_group.addButton(btn)
             btn.clicked.connect(lambda _c=False, tt=t: self._select_type(tt))
             self.type_buttons[t] = btn
@@ -162,8 +162,7 @@ class Step8Page(QWidget):
         self._selected_type = type_name
         for t, btn in self.type_buttons.items():
             btn.setChecked(t == type_name)
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
+            _refresh_segment_button(btn)
         self.editor.set_pending_label(type_name, replace_same=True)
         self.editor.focus_canvas()
         self.hint_label.setText(f"「{type_name}」欄 — {self._region_action_hint()}")
@@ -177,7 +176,7 @@ class Step8Page(QWidget):
             if t in done_types:
                 set_variant(btn, "success")
             else:
-                set_variant(btn, "nav")
+                set_variant(btn, "nav-segment")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
             btn.update()

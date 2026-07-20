@@ -6,7 +6,7 @@ from collections.abc import Callable
 
 from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QWidget
 
-from ui_qt.style import set_variant
+from ui_qt.region_mode_widgets import _refresh_segment_button
 
 
 class OcrLangToggle(QWidget):
@@ -32,9 +32,9 @@ class OcrLangToggle(QWidget):
         self._btn_ja = QPushButton("日本語")
         for btn in (self._btn_en, self._btn_ja):
             btn.setCheckable(True)
-            btn.setFixedHeight(24)
-            btn.setFixedWidth(46)
-            set_variant(btn, "nav")
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            _refresh_segment_button(btn)
             self._group.addButton(btn)
             lay.addWidget(btn)
 
@@ -44,10 +44,14 @@ class OcrLangToggle(QWidget):
 
     def set_lang(self, lang: str) -> None:
         self._updating = True
+        self._group.blockSignals(True)
         ja = str(lang or "en").lower() == "ja"
         self._btn_ja.setChecked(ja)
         self._btn_en.setChecked(not ja)
+        self._group.blockSignals(False)
         self._updating = False
+        _refresh_segment_button(self._btn_en)
+        _refresh_segment_button(self._btn_ja)
 
     def lang(self) -> str:
         return "ja" if self._btn_ja.isChecked() else "en"
@@ -55,5 +59,7 @@ class OcrLangToggle(QWidget):
     def _emit_if(self, lang: str) -> None:
         if self._updating:
             return
+        _refresh_segment_button(self._btn_en)
+        _refresh_segment_button(self._btn_ja)
         if self._on_change is not None:
             self._on_change(lang)
