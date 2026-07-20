@@ -77,7 +77,8 @@ def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
 
-    _MAIN_FILTERS = ("○", "△", "×", "?", "未採点", "採点済み", "無回答")
+    _MAIN_FILTERS = ("○", "△", "×", "?", "未採点", "未判定", "採点済み", "無回答")
+    _CLEAR_JUDGMENT_KEY = "none"
 
     def __init__(self, app: Any) -> None:
         super().__init__()
@@ -401,6 +402,7 @@ class StepManualPage(QWidget):
             "×": "ON にすると × 判定のみ表示",
             "?": "ON にすると 保留（?）のみ表示",
             "未採点": "ON にすると 判定がまだない回答を表示",
+            "未判定": "ON にすると 判定なし（初期状態）の回答を表示",
             "採点済み": "ON にすると 確定判定（○△×）を表示（保留は含まない）",
             "無回答": "ON にすると OCR/集約で「なし」の無回答を表示",
         }.get(key, "")
@@ -499,17 +501,31 @@ class StepManualPage(QWidget):
         self.btn_batsu = QPushButton("×")
         self.btn_pending = QPushButton("?")
         self.btn_pending.setToolTip("保留（あとで確認）")
+        self.btn_unjudged = QPushButton("未判定")
+        self.btn_unjudged.setToolTip("判定を解除（初期状態・判定なし）")
         for btn, handler in (
             (self.btn_maru, lambda: self._apply_judgment("○")),
             (self.btn_sankaku, lambda: self._apply_judgment("△")),
             (self.btn_batsu, lambda: self._apply_judgment("×")),
             (self.btn_pending, lambda: self._apply_judgment(PENDING_JUDGMENT)),
+            (self.btn_unjudged, lambda: self._apply_judgment("")),
         ):
-            btn.setFixedSize(44, 36)
+            if btn is self.btn_unjudged:
+                btn.setFixedSize(56, 36)
+                btn.setStyleSheet(
+                    f"QPushButton {{ font-size: 11px; font-weight: 700;"
+                    f" color: {COLORS['text_secondary']};"
+                    f" border: 2px solid {COLORS['border']}; border-radius: 6px;"
+                    f" background: {COLORS['surface']}; }}"
+                    f"QPushButton:hover {{ background: #f1f5f9; }}"
+                )
+            else:
+                btn.setFixedSize(44, 36)
             btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(handler)
             judge_lay.addWidget(btn)
         self._apply_judgment_button_colors()
+        judge_lay.addWidget(h.button("全選択", self._select_all_visible))
         judge_lay.addWidget(
             h.button("未採点を一括選択", self._select_ungraded, variant="success")
         )
@@ -528,6 +544,7 @@ class StepManualPage(QWidget):
         self.palette_btn_row = QHBoxLayout()
         self.palette_btn_row.setSpacing(4)
         lay.addLayout(self.palette_btn_row)
+        lay.addWidget(h.button("全選択", self._select_all_visible))
         lay.addStretch()
         return box
 
@@ -565,6 +582,8 @@ class StepManualPage(QWidget):
             for s in range(max_score - 1, 0, -1):
                 specs.append((f"△:{s}", f"△({s})", "△", s))
         specs.append(("×", "×", "×", 0))
+        specs.append(("?", "?", PENDING_JUDGMENT, 0))
+        specs.append((self._CLEAR_JUDGMENT_KEY, "未判定", "", 0))
         return specs
 
     def _palette_stroke_for_key(self, key: str) -> str:
@@ -575,6 +594,10 @@ class StepManualPage(QWidget):
             return str((mark.get("sankaku") or {}).get("strokeColor") or "#ea580c")
         if key == "×":
             return str((mark.get("batsu") or {}).get("strokeColor") or "#2563eb")
+        if key == "?":
+            return "#a16207"
+        if key == self._CLEAR_JUDGMENT_KEY:
+            return COLORS["text_secondary"]
         return COLORS["text_secondary"]
 
     def _palette_button_style(self, key: str, *, active: bool) -> str:
@@ -1115,6 +1138,7 @@ class StepManualPage(QWidget):
             tags.append("?")
         else:
             tags.append("未採点")
+            tags.append("未判定")
         if j in ("○", "△", "×"):
             tags.append("採点済み")
         if ans == "なし":
@@ -1179,10 +1203,19 @@ class StepManualPage(QWidget):
     def _filtered_items(self) -> list[dict[str, Any]]:
         if self._filter_snapshot_ids is None:
             return list(self._items)
+        visible_ids = set(self._filter_snapshot_ids)
+        # 判定順ソート時: スナップショットで「消えない」を維持しつつ、
+        # 現在フィルタに合致する件は即時表示（再フィルタ不要）
+        if self._sort_mode in ("judgment_file", "judgment_id"):
+            visible_ids.update(
+                int(i.get("result_id") or 0)
+                for i in self._items
+                if self._item_passes_filter(i) and int(i.get("result_id") or 0)
+            )
         return [
             i
             for i in self._items
-            if int(i.get("result_id") or 0) in self._filter_snapshot_ids
+            if int(i.get("result_id") or 0) in visible_ids
         ]
 
     def _current_page_items(self) -> list[dict[str, Any]]:
@@ -1204,6 +1237,19 @@ class StepManualPage(QWidget):
         self._selected_ids.clear()
         self._render_grid()
 
+    def _select_all_visible(self) -> None:
+        """表示中の画像をすべて選択（フィルタ適用時は表示分、指定件数表示時は現在ページ）。"""
+        ids = {
+            int(i.get("result_id") or 0)
+            for i in self._current_page_items()
+            if int(i.get("result_id") or 0)
+        }
+        if not ids:
+            h.warn(self, "表示なし", "選択できる表示中の画像がありません。")
+            return
+        self._selected_ids = ids
+        self._render_grid()
+
     def _select_ungraded(self) -> None:
         """表示中の画像のうち、判定なし（未採点）を一括選択する。"""
         ids = {
@@ -1219,6 +1265,9 @@ class StepManualPage(QWidget):
         self._render_grid()
 
     def _resolve_judgment_score(self, judgment: str) -> tuple[str, int] | None:
+        raw = str(judgment or "").strip()
+        if raw in ("", "未判定", self._CLEAR_JUDGMENT_KEY):
+            return "", 0
         max_score = self._field_max_score()
         nj = normalize_judgment(judgment)
         if nj == "○":
@@ -1275,14 +1324,19 @@ class StepManualPage(QWidget):
             if item.get("result_id") in id_set:
                 item["judgment"] = nj
                 item["score"] = score
+        if self._filter_snapshot_ids is not None:
+            self._filter_snapshot_ids |= id_set
         if self._sort_mode in ("judgment_file", "judgment_id"):
             self._sort_items()
         self._render_grid()
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
         if not silent:
-            label = "保留" if nj == PENDING_JUDGMENT else nj
-            h.info(self, "反映完了", f"{n} 件に {label}（{score}点）を反映しました。")
+            if not nj:
+                h.info(self, "反映完了", f"{n} 件の判定を解除しました（未判定）。")
+            else:
+                label = "保留" if nj == PENDING_JUDGMENT else nj
+                h.info(self, "反映完了", f"{n} 件に {label}（{score}点）を反映しました。")
         return True
 
     def _apply_judgment(self, judgment: str) -> None:
