@@ -1,4 +1,4 @@
-"""手動採点ページ（② から分岐・③④⑤ の代替）。"""
+"""手動採点ページ（④ から分岐・⑤⑥⑦ の代替）。"""
 
 from __future__ import annotations
 
@@ -193,8 +193,8 @@ class StepManualPage(QWidget):
         self.mark_mode_switch.setObjectName("MarkModeSwitch")
         self.mark_mode_switch.setCursor(Qt.PointingHandCursor)
         self.mark_mode_switch.setToolTip(
-            "文字: 画像下に判定・得点を表示（タイル余白は⑩の判定色）\n"
-            "印字: ⑩個票プレビューと同じ ○△×・得点を画像上に重ねる"
+            "文字: 画像下に判定・得点を表示（タイル余白は⑫の判定色）\n"
+            "印字: ⑫ 個票プレビューと同じ ○△×・得点を画像上に重ねる"
         )
         self.mark_mode_switch.setStyleSheet(
             f"""
@@ -510,7 +510,7 @@ class StepManualPage(QWidget):
     # --- データ ---
 
     def _judgment_button_style(self, stroke: str) -> str:
-        """⑩出力書式の判定色をボタンに反映。"""
+        """⑫ 出力書式の判定色をボタンに反映。"""
         soft = _mix_hex_with_white(stroke, 0.82)
         return (
             f"QPushButton {{ background: {soft}; color: {stroke}; font-weight: 800;"
@@ -761,7 +761,7 @@ class StepManualPage(QWidget):
         if not results:
             self._items = []
             self._render_grid()
-            self.status_label.setText("採点結果がありません。③ テキスト化で画像を登録してください。")
+            self.status_label.setText("採点結果がありません。⑤ テキスト化で画像を登録してください。")
             return
         rows = [
             {
@@ -976,7 +976,7 @@ class StepManualPage(QWidget):
                 break
 
     def _reload_grades(self) -> None:
-        """DB の判定を再読込（⑤一括採点後の確認用。画像は再取得しない）。"""
+        """DB の判定を再読込（⑦ 一括採点後の確認用。画像は再取得しない）。"""
         fid = self._selected_field_id()
         test_id = self.app.active_test_id
         if not fid or not test_id or not self._items:
@@ -1014,7 +1014,7 @@ class StepManualPage(QWidget):
         )
 
     def _answer_aggregate_order(self) -> dict[str, int]:
-        """④解答の集約と同じ順（人数降順・解答テキスト昇順）の順位マップ。"""
+        """⑥ 解答の集約と同じ順（人数降順・解答テキスト昇順）の順位マップ。"""
         fid = self._selected_field_id()
         test_id = self.app.active_test_id
         if not fid or not test_id:
@@ -1287,7 +1287,7 @@ class StepManualPage(QWidget):
         return None
 
     def _tile_colors(self, judgment: str, *, selected: bool) -> tuple[str, str]:
-        """タイル余白の背景色・枠色（⑩の判定色ベース。選択時は紫）。"""
+        """タイル余白の背景色・枠色（⑫の判定色ベース。選択時は紫）。"""
         if selected:
             return COLORS["selection_soft"], COLORS["selection"]
         stroke = self._judgment_stroke_color(judgment)
@@ -1296,7 +1296,7 @@ class StepManualPage(QWidget):
         return COLORS["surface"], COLORS["border"]
 
     def _pil_with_mark(self, pil: Image.Image, judgment: str, score: Any) -> Image.Image:
-        """⑩個票プレビューと同じ判定マーク・得点を画像上に重ねる。"""
+        """⑫ 個票プレビューと同じ判定マーク・得点を画像上に重ねる。"""
         return composite_mark_on_image(
             pil, judgment, score, self._feedback_style, supersample=4
         )

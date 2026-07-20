@@ -70,7 +70,7 @@ def create_test(test_name: str, subject: str = "", datetime_str: str = "") -> di
             "実施日時": datetime_str or "",
             "作成日時": created_at,
             "ステータス": "作成中",
-            "現在ステップ": "0",
+            "現在ステップ": "1",
             "IDマーク欄使用": "true",
             "生徒解答フォルダID": inbox_path,
         }

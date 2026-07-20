@@ -60,7 +60,7 @@ class _EditorCanvas(QWidget):
         self._detect_busy = False
         self._scale = 1.0
         # ラベル指定モード: 新規矩形の ID をこのラベルにし、同ラベルの既存矩形を置き換える
-        # （⑧本人欄=欄種別、⑩出力欄=slotKey で使用）
+        # （⑩本人欄=欄種別、⑫出力欄=slotKey で使用）
         self.pending_label: str | None = None
         self.replace_same_label = False
         self.click_detect_mode = False
@@ -542,7 +542,7 @@ class AnswerRegionEditor(QScrollArea):
             self._canvas.regions[index]["ocrLang"] = "ja" if lang == "ja" else "en"
 
     def set_pending_label(self, label: str | None, *, replace_same: bool = True) -> None:
-        """次にドラッグで作る矩形の ID を指定する（⑧欄種別 / ⑩slotKey 用）。"""
+        """次にドラッグで作る矩形の ID を指定する（⑩欄種別 / ⑫slotKey 用）。"""
         self._canvas.pending_label = label
         self._canvas.replace_same_label = replace_same
 

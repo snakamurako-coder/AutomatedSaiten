@@ -55,7 +55,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
         init_db()
         self.active_test_id: str | None = None
-        self.current_step = 0
+        self.current_step = 1
         self._field_rows: list[dict[str, Any]] = []
         self._criteria_rows: list[dict[str, Any]] = []
         self._ocr_replace_rows: list[dict[str, Any]] = []
@@ -63,7 +63,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
         self._build_layout()
         self._refresh_ocr_status()
-        self._load_step(0)
+        self._load_step(1)
         self._refresh_test_list()
 
     def _build_layout(self) -> None:
@@ -171,21 +171,21 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
     def _load_step(self, step_id: int) -> None:
         self._show_frame(step_id)
-        if step_id == 1:
+        if step_id == 2:
             self._reload_fields()
-        elif step_id == 2:
-            self._reload_points()
-        elif step_id == 3:
-            self._reload_ocr_panel()
         elif step_id == 4:
-            self._reload_criteria_panel()
+            self._reload_points()
         elif step_id == 5:
+            self._reload_ocr_panel()
+        elif step_id == 6:
+            self._reload_criteria_panel()
+        elif step_id == 7:
             self._reload_summary_panel()
 
     # --- Step 0 ---
     def _build_step0(self) -> None:
-        f = self.frames[0]
-        ttk.Label(f, text="⓪ テスト作成", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
+        f = self.frames[1]
+        ttk.Label(f, text="① テスト作成", style="Title.TLabel").grid(row=0, column=0, columnspan=2, sticky="w")
 
         form = ttk.LabelFrame(f, text="新規テスト", padding=12)
         form.grid(row=1, column=0, sticky="nw", pady=8)
@@ -250,10 +250,10 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
     # --- Step 1 ---
     def _build_step1(self) -> None:
-        f = self.frames[1]
+        f = self.frames[2]
         f.columnconfigure(0, weight=1)
 
-        ttk.Label(f, text="① 回答欄設定（模範解答）", style="Title.TLabel").grid(
+        ttk.Label(f, text="② 回答欄設定（模範解答）", style="Title.TLabel").grid(
             row=0, column=0, sticky="w"
         )
         ttk.Label(
@@ -521,8 +521,8 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
     # --- Step 2 ---
     def _build_step2(self) -> None:
-        f = self.frames[2]
-        ttk.Label(f, text="② 配点決定", style="Title.TLabel").pack(anchor="w")
+        f = self.frames[4]
+        ttk.Label(f, text="④ 配点決定", style="Title.TLabel").pack(anchor="w")
         self.points_tree = ttk.Treeview(f, columns=("fieldId", "displayName", "points"), show="headings", height=12)
         for c, label in [("fieldId", "記述欄ID"), ("displayName", "表示名"), ("points", "配点")]:
             self.points_tree.heading(c, text=label)
@@ -577,8 +577,8 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
     # --- Step 3 ---
     def _build_step3(self) -> None:
-        f = self.frames[3]
-        ttk.Label(f, text="③ テキスト化（OCRバッチ）", style="Title.TLabel").pack(anchor="w")
+        f = self.frames[5]
+        ttk.Label(f, text="⑤ テキスト化（OCRバッチ）", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
             text="生徒解答フォルダ内の PDF / JPG / PNG を自動補正→OCR→SQLite に一括保存します。",
@@ -707,7 +707,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
     # --- Step 4 ---
     def _build_step4(self) -> None:
-        f = self.frames[4]
+        f = self.frames[6]
         outer = ttk.Frame(f)
         outer.pack(fill="both", expand=True)
         canvas = tk.Canvas(outer, highlightthickness=0)
@@ -728,7 +728,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
 
-        ttk.Label(scroll, text="④ 採点基準の設定", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(scroll, text="⑥ 採点基準の設定", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             scroll,
             text="OCR置換・みなし採点で解答を整えてから、判定・得点の基準を設定します。",
@@ -1187,8 +1187,8 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
 
     # --- Step 5 ---
     def _build_step5(self) -> None:
-        f = self.frames[5]
-        ttk.Label(f, text="⑤ 採点の実施", style="Title.TLabel").pack(anchor="w")
+        f = self.frames[7]
+        ttk.Label(f, text="⑦ 採点の実施", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
             text="保存済みの採点基準に従い、全受験者の判定・得点を一括反映し、考査総括を生成します。",

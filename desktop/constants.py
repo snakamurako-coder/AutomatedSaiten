@@ -64,20 +64,21 @@ ROSTER_HEADERS = [
 CELL_PX = 20
 
 STEPS = [
-    {"id": 0, "label": "⓪ テスト作成"},
-    {"id": 1, "label": "① 回答欄設定"},
-    {"id": 2, "label": "② 配点決定"},
-    {"id": 3, "label": "③ テキスト化"},
-    {"id": 4, "label": "④ 採点基準"},
-    {"id": 5, "label": "⑤ 採点実行"},
-    {"id": 6, "label": "⑥ 領域設定"},
-    {"id": 7, "label": "⑦ 合計・外部得点"},
-    {"id": 8, "label": "⑧ 本人欄設定"},
-    {"id": 9, "label": "⑨ ID・氏名照合"},
-    {"id": 10, "label": "⑩ 個票・成績一覧出力"},
+    {"id": 1, "label": "① テスト作成"},
+    {"id": 2, "label": "② 回答欄設定"},
+    {"id": 3, "label": "③ 生徒回答用紙取り込み"},
+    {"id": 4, "label": "④ 配点決定"},
+    {"id": 5, "label": "⑤ テキスト化"},
+    {"id": 6, "label": "⑥ 採点基準"},
+    {"id": 7, "label": "⑦ 採点実行"},
+    {"id": 8, "label": "⑧ 領域設定"},
+    {"id": 9, "label": "⑨ 合計・外部得点"},
+    {"id": 10, "label": "⑩ 本人欄設定"},
+    {"id": 11, "label": "⑪ ID・氏名照合"},
+    {"id": 12, "label": "⑫ 個票・成績一覧出力"},
 ]
 
-# ② から分岐する手動採点（③④⑤ の代替フロー）
-MANUAL_GRADING_STEP_ID = 11
+# ④ から分岐する手動採点（⑤⑥⑦ の代替フロー）
+MANUAL_GRADING_STEP_ID = 13
 
-DESKTOP_READY_STEPS = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, MANUAL_GRADING_STEP_ID}
+DESKTOP_READY_STEPS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, MANUAL_GRADING_STEP_ID}

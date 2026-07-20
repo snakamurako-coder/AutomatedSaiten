@@ -1,877 +1,235 @@
-"""⑩ 個票・成績一覧出力ページ（合計欄・個票生成・成績Excel）。"""
+"""⑩ 本人欄設定ページ（学年・組・番号・ID・氏名の矩形指定）。"""
 
 from __future__ import annotations
 
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPixmap
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QComboBox,
-    QDoubleSpinBox,
-    QFileDialog,
-    QFrame,
-    QGroupBox,
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QProgressBar,
+    QMessageBox,
     QPushButton,
-    QScrollArea,
-    QSizePolicy,
-    QSpinBox,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
-from models.output_repo import (
-    get_available_output_slot_keys,
-    get_feedback_export_format,
-    get_feedback_style,
-    get_output_slots,
-    reset_feedback_style,
-    save_feedback_export_format,
-    save_feedback_style,
-    save_output_slots,
-)
+from models.identity_repo import IDENTITY_TYPES, get_identity_fields, save_identity_fields
 from models.test_repo import get_test_info
-from config import require_path_under_test_storage, test_feedback, test_grade_list_excel_path
-from services.feedback_exporter import (
-    is_pdf_export_format,
-    rasterize_feedback_preview,
-    render_feedback_preview,
-)
-from services.feedback_renderer import (
-    _load_rows_with_extras,
-    batch_generate_feedback,
-)
-from services.duplex_feedback_exporter import (
-    DuplexMatchError,
-    batch_export_duplex_feedback,
-    list_duplex_candidate_tests,
-)
-from services.grade_excel_exporter import export_grade_excel
 from ui_qt import helpers as h
-from ui_qt.crop_widgets import ZoomControls
-from ui_qt.excel_export_settings_dialog import ExcelExportSettingsDialog
-from ui_qt.helpers import ProgressBridge, pil_to_qpixmap
-from ui_qt.layout_helpers import CollapsibleSection, make_expanding
 from ui_qt.region_editor import AnswerRegionEditor
-from ui_qt.style import COLORS
-
-
-class _FeedbackPreviewHost(QWidget):
-    """個票プレビュー用 — ピクセル等倍で描画し、右端が切れないようにする。"""
-
-    def __init__(self, parent: QWidget | None = None) -> None:
-        super().__init__(parent)
-        self._pixmap: QPixmap | None = None
-        self._placeholder = "「1件プレビュー」で個票の合成結果を確認できます"
-        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-
-    def set_placeholder(self, text: str) -> None:
-        self._placeholder = text
-
-    def set_pixmap(self, pixmap: QPixmap | None) -> None:
-        self._pixmap = pixmap
-        if pixmap is None or pixmap.isNull():
-            self.setFixedSize(480, 72)
-        else:
-            self.setFixedSize(pixmap.size())
-        self.update()
-
-    def paintEvent(self, event) -> None:  # noqa: N802
-        painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor(COLORS["sidebar"]))
-        if self._pixmap is not None and not self._pixmap.isNull():
-            painter.drawPixmap(0, 0, self._pixmap)
-            return
-        painter.setPen(QColor(COLORS["text_muted"]))
-        painter.drawText(self.rect(), Qt.AlignCenter, self._placeholder)
-
-
-class _PreviewScrollArea(QScrollArea):
-    """プレビュー欄のリサイズを親へ通知。"""
-
-    viewport_resized = Signal()
-
-    def resizeEvent(self, event) -> None:  # noqa: N802
-        super().resizeEvent(event)
-        self.viewport_resized.emit()
+from ui_qt.region_mode_widgets import RegionDetectModeToggle, _refresh_segment_button
+from ui_qt.style import set_variant
 
 
 class Step10Page(QWidget):
     def __init__(self, app: Any) -> None:
         super().__init__()
         self.app = app
-        self._slot_print_modes: dict[str, str] = {}
-        self._rows: list[dict[str, Any]] = []
-        self._preview_state: dict[str, Any] | None = None
-        self._preview_scroll: QScrollArea | None = None
+        self._selected_type: str | None = None
 
-        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        make_expanding(self._scroll)
-        outer.addWidget(self._scroll, 1)
-
-        body = QWidget()
-        self._scroll.setWidget(body)
-        root = QVBoxLayout(body)
-        root.setContentsMargins(0, 0, 8, 0)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
-
-        root.addWidget(h.title_label("⑩ 個票・成績一覧出力"))
+        root.addWidget(h.title_label("⑩ 本人欄設定"))
         root.addWidget(
             h.muted_label(
-                "補正済み解答画像に判定マーク（○/△/×）・小問得点・合計欄・手書き・テキスト注釈を合成した個票を生成します。"
-                "手書き・テキストを含む場合は PDF 出力を推奨します。"
-                "成績一覧は Excel で別途出力できます。"
-            )
-        )
-        root.addWidget(self._build_slots_box())
-        root.addWidget(self._build_style_section())
-        root.addWidget(self._build_preview_box())
-        root.addWidget(self._build_batch_box())
-        root.addWidget(self._build_excel_box())
-        root.addStretch()
-
-    # ---------- 合計欄の配置 ----------
-
-    def _build_slots_box(self) -> QGroupBox:
-        box = QGroupBox("合計欄の配置（出力欄設定）")
-        lay = QVBoxLayout(box)
-        lay.addWidget(
-            h.caption_label(
-                "項目を選んで模範解答の上をドラッグすると合計欄が配置されます（同じ項目は上書き）。"
-                "候補は ⑥ 領域設定から生成されます。"
+                "学年・組・番号・ID・氏名のうち 1 つ以上を選び、模範解答上で本人欄を指定します。"
+                "「自動認識」では欄の内側をクリック、「手動設定」ではドラッグで矩形を指定します。"
+                "この枠は ⑪ の照合で切り出し画像として使われます（OCR はしません）。"
             )
         )
 
-        ctrl = QHBoxLayout()
-        ctrl.addWidget(QLabel("印字形式"))
-        self.print_mode_combo = QComboBox()
-        self.print_mode_combo.addItem("数字のみ", "number")
-        self.print_mode_combo.addItem("ラベル付き", "label")
-        ctrl.addWidget(self.print_mode_combo)
-        ctrl.addWidget(h.button("選択欄を削除", self._on_delete_slot, variant="danger-soft"))
-        ctrl.addWidget(h.button("合計欄を保存", self._on_save_slots, variant="primary"))
-        ctrl.addStretch()
-        lay.addLayout(ctrl)
-
-        self.slot_btn_row = QHBoxLayout()
-        self.slot_btn_row.setSpacing(6)
-        lay.addLayout(self.slot_btn_row)
-        self._slot_buttons: dict[str, QPushButton] = {}
-
-        self.slot_hint = h.caption_label("")
-        lay.addWidget(self.slot_hint)
-
-        self.slot_editor = AnswerRegionEditor(
-            on_change=self._on_slots_changed,
-            fit_height_to_image=True,
+        toolbar = QHBoxLayout()
+        toolbar.addWidget(QLabel("欄種別"))
+        self._type_group = QButtonGroup(self)
+        self._type_group.setExclusive(True)
+        self.type_buttons: dict[str, QPushButton] = {}
+        for t in IDENTITY_TYPES:
+            btn = QPushButton(t)
+            btn.setCheckable(True)
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            set_variant(btn, "nav-segment")
+            self._type_group.addButton(btn)
+            btn.clicked.connect(lambda _c=False, tt=t: self._select_type(tt))
+            self.type_buttons[t] = btn
+            toolbar.addWidget(btn)
+        toolbar.addSpacing(12)
+        toolbar.addWidget(QLabel("設定"))
+        self.region_mode_toggle = RegionDetectModeToggle(
+            auto_detect=True,
+            on_change=self._on_region_mode_changed,
         )
-        self.slot_editor.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        lay.addWidget(self.slot_editor)
-
-        self.slot_status = h.caption_label("")
-        lay.addWidget(self.slot_status)
-        return box
-
-    def _build_style_section(self) -> CollapsibleSection:
-        return CollapsibleSection(
-            "出力書式設定（全テスト共通）",
-            self._build_style_body(),
-            collapsed=True,
-            tint="#f8fafc",
+        self.region_mode_toggle.setToolTip(
+            "自動認識: 欄の内側をクリックして枠を検出。\n"
+            "手動設定: ドラッグで矩形を指定。\n"
+            "検出精度は「二値化」しきい値で調整できます。"
         )
+        toolbar.addWidget(self.region_mode_toggle)
+        toolbar.addWidget(QLabel("二値化"))
+        self.thresh_slider = QSlider(Qt.Orientation.Horizontal)
+        self.thresh_slider.setRange(0, 255)
+        self.thresh_slider.setValue(128)
+        self.thresh_slider.setFixedWidth(120)
+        self.thresh_slider.valueChanged.connect(self._on_detect_thresh_changed)
+        toolbar.addWidget(self.thresh_slider)
+        self.delete_btn = h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft")
+        self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.delete_btn.setAutoDefault(False)
+        self.delete_btn.setDefault(False)
+        toolbar.addWidget(self.delete_btn)
+        toolbar.addWidget(h.button("やり直し", self._on_reset, variant="danger-soft"))
+        toolbar.addWidget(h.button("本人欄を保存", self._on_save, variant="primary"))
+        toolbar.addWidget(h.button("再読込", self.refresh))
+        toolbar.addStretch()
+        root.addLayout(toolbar)
 
-    def _build_style_body(self) -> QWidget:
-        body = QWidget()
-        lay = QVBoxLayout(body)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
+        self.hint_label = h.caption_label("欄種別を選んでから、自動認識または手動設定で枠を指定してください。")
+        root.addWidget(self.hint_label)
 
-        row1 = QHBoxLayout()
-        row1.addWidget(QLabel("マーク余白率"))
-        self.style_inset = QDoubleSpinBox()
-        self.style_inset.setRange(0.0, 0.45)
-        self.style_inset.setSingleStep(0.01)
-        row1.addWidget(self.style_inset)
-        row1.addWidget(QLabel("○ 色"))
-        self.style_maru_color = QLineEdit()
-        self.style_maru_color.setFixedWidth(90)
-        row1.addWidget(self.style_maru_color)
-        row1.addWidget(QLabel("○ 塗り透明度"))
-        self.style_maru_fill = QDoubleSpinBox()
-        self.style_maru_fill.setRange(0.0, 1.0)
-        self.style_maru_fill.setSingleStep(0.02)
-        row1.addWidget(self.style_maru_fill)
-        row1.addWidget(QLabel("△ 色"))
-        self.style_sankaku_color = QLineEdit()
-        self.style_sankaku_color.setFixedWidth(90)
-        row1.addWidget(self.style_sankaku_color)
-        row1.addWidget(QLabel("× 色"))
-        self.style_batsu_color = QLineEdit()
-        self.style_batsu_color.setFixedWidth(90)
-        row1.addWidget(self.style_batsu_color)
-        row1.addStretch()
-        lay.addLayout(row1)
-
-        row2 = QHBoxLayout()
-        row2.addWidget(QLabel("得点文字色"))
-        self.style_score_color = QLineEdit()
-        self.style_score_color.setFixedWidth(90)
-        row2.addWidget(self.style_score_color)
-        row2.addWidget(QLabel("得点サイズ比"))
-        self.style_score_size = QDoubleSpinBox()
-        self.style_score_size.setRange(0.1, 1.0)
-        self.style_score_size.setSingleStep(0.05)
-        row2.addWidget(self.style_score_size)
-        row2.addWidget(QLabel("合計文字色"))
-        self.style_total_color = QLineEdit()
-        self.style_total_color.setFixedWidth(90)
-        row2.addWidget(self.style_total_color)
-        row2.addWidget(QLabel("合計サイズ比"))
-        self.style_total_size = QDoubleSpinBox()
-        self.style_total_size.setRange(0.1, 1.0)
-        self.style_total_size.setSingleStep(0.05)
-        row2.addWidget(self.style_total_size)
-        row2.addWidget(QLabel("合計最小フォント"))
-        self.style_total_min = QSpinBox()
-        self.style_total_min.setRange(6, 72)
-        row2.addWidget(self.style_total_min)
-        row2.addWidget(h.button("書式を保存", self._on_save_style, variant="success"))
-        row2.addWidget(h.button("デフォルトに戻す", self._on_reset_style))
-        row2.addStretch()
-        lay.addLayout(row2)
-        return body
-
-    def _build_preview_box(self) -> QGroupBox:
-        box = QGroupBox("プレビュー")
-        lay = QVBoxLayout(box)
-        ctrl = QHBoxLayout()
-        self.preview_row_combo = QComboBox()
-        self.preview_row_combo.setMinimumWidth(320)
-        ctrl.addWidget(self.preview_row_combo)
-        ctrl.addWidget(h.button("1件プレビュー", self._on_preview, variant="primary"))
-        ctrl.addStretch()
-        lay.addLayout(ctrl)
-
-        self.preview_zoom = ZoomControls(min_pct=10, max_pct=400, value=100)
-        self.preview_zoom.connect_zoom_changed(self._update_preview_pixmap)
-        lay.addWidget(self.preview_zoom)
-        self.preview_mode_label = h.caption_label(
-            "出力形式が PDF のとき、プレビューでもベクトル合成の見た目を表示します。"
+        self.editor = AnswerRegionEditor(
+            on_change=self._on_regions_changed,
+            on_status=self._set_status,
         )
-        lay.addWidget(self.preview_mode_label)
+        self.editor.set_detect_threshold(int(self.thresh_slider.value()))
+        self.editor.set_detect_roi_margin(480)
+        self.editor.set_click_detect_mode(True)
+        self.editor.set_require_pending_label_for_detect(True)
+        root.addWidget(self.editor, 1)
 
-        preview_scroll = _PreviewScrollArea()
-        preview_scroll.setWidgetResizable(False)
-        preview_scroll.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        preview_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        preview_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        preview_scroll.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        preview_scroll.setMinimumHeight(120)
-        self._preview_scroll = preview_scroll
-        preview_scroll.setStyleSheet(
-            f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
-            f" background: {COLORS['sidebar']}; }}"
-        )
-        self.preview_host = _FeedbackPreviewHost()
-        preview_scroll.setWidget(self.preview_host)
-        preview_scroll.viewport_resized.connect(self._update_preview_pixmap)
-        lay.addWidget(preview_scroll)
-        return box
+        self.status_label = h.caption_label("")
+        root.addWidget(self.status_label)
 
-    def _build_batch_box(self) -> QGroupBox:
-        box = QGroupBox("一括生成")
-        lay = QVBoxLayout(box)
-        fmt_row = QHBoxLayout()
-        fmt_row.addWidget(QLabel("出力形式"))
-        self.export_format_combo = QComboBox()
-        self.export_format_combo.addItem("PDF（推奨・1枚ずつ）", "pdf")
-        self.export_format_combo.addItem("PDF（全件を1ファイル）", "pdf_combined")
-        self.export_format_combo.addItem("JPEG（1枚ずつ）", "jpeg")
-        self.export_format_combo.addItem("PNG（1枚ずつ）", "png")
-        self.export_format_combo.currentIndexChanged.connect(self._on_export_format_changed)
-        fmt_row.addWidget(self.export_format_combo, 1)
-        lay.addLayout(fmt_row)
-        lay.addWidget(
-            h.caption_label(
-                "PDF は手書き・テキストをベクトル描画します。"
-                "「1件プレビュー」は選択行1件のみ表示（全件1ファイル PDF でも同様）。"
-            )
-        )
-        ctrl = QHBoxLayout()
-        self.batch_btn = h.button("全員分の個票を生成", self._on_batch, variant="primary")
-        ctrl.addWidget(self.batch_btn)
-        self.open_output_btn = h.open_folder_button(
-            self._on_open_output_folder, text="個票フォルダを開く"
-        )
-        ctrl.addWidget(self.open_output_btn)
-        self.batch_progress = QProgressBar()
-        self.batch_progress.setRange(0, 100)
-        ctrl.addWidget(self.batch_progress, 1)
-        lay.addLayout(ctrl)
-        self.batch_status = h.caption_label("")
-        lay.addWidget(self.batch_status)
+    def handle_delete_key(self) -> None:
+        """Del — キャンバスの選択欄を直接削除。"""
+        canvas = self.editor._canvas
+        if canvas.selected_idx < 0:
+            return
+        canvas._delete_selected_region()
+        self._update_type_buttons()
 
-        lay.addWidget(
-            h.caption_label(
-                "表裏一体印刷: 表側・裏側の採点済みテストを生徒IDで突き合わせ、"
-                "奇数ページ＝表・偶数ページ＝裏の PDF を出力します。"
-            )
-        )
-        duplex_row1 = QHBoxLayout()
-        duplex_row1.addWidget(QLabel("表側テスト"))
-        self.duplex_front_combo = QComboBox()
-        self.duplex_front_combo.setMinimumWidth(220)
-        duplex_row1.addWidget(self.duplex_front_combo, 1)
-        duplex_row1.addWidget(QLabel("裏側テスト"))
-        self.duplex_back_combo = QComboBox()
-        self.duplex_back_combo.setMinimumWidth(220)
-        duplex_row1.addWidget(self.duplex_back_combo, 1)
-        lay.addLayout(duplex_row1)
+    def _on_delete_selected(self) -> None:
+        self.handle_delete_key()
 
-        duplex_row2 = QHBoxLayout()
-        duplex_row2.addWidget(QLabel("表裏出力"))
-        self.duplex_mode_combo = QComboBox()
-        self.duplex_mode_combo.addItem("全員分を1つのPDF", "combined")
-        self.duplex_mode_combo.addItem("生徒ごとに2ページPDF", "per_student")
-        duplex_row2.addWidget(self.duplex_mode_combo, 1)
-        self.duplex_btn = h.button(
-            "表裏一体PDFを生成", self._on_duplex_batch, variant="primary"
-        )
-        duplex_row2.addWidget(self.duplex_btn)
-        lay.addLayout(duplex_row2)
+    def _set_status(self, message: str) -> None:
+        self.status_label.setText(message)
 
-        self._last_output_dir: str | None = None
-        return box
+    def _region_action_hint(self) -> str:
+        if self.region_mode_toggle.is_auto_detect():
+            return "欄の内側をクリックすると自動検出します（再指定で上書き）。"
+        return "画像上をドラッグして指定してください（再ドラッグで上書き）。"
 
-    def _build_excel_box(self) -> QGroupBox:
-        box = QGroupBox("成績一覧（Excel）")
-        lay = QVBoxLayout(box)
-        lay.addWidget(
-            h.caption_label(
-                "採点結果・各問判定・テスト分析・ランキング・成績一覧表の5シートを出力します。"
-                "名簿・未受験は⑦の設定を反映します。"
-            )
+    def _on_region_mode_changed(self, auto_detect: bool) -> None:
+        self.editor.set_click_detect_mode(auto_detect)
+        self.editor.focus_canvas()
+        hint = (
+            "欄の内側をクリックすると自動検出します（再指定で上書き）。"
+            if auto_detect
+            else "画像上をドラッグして指定してください（再ドラッグで上書き）。"
         )
-        ctrl = QHBoxLayout()
-        self.excel_btn = h.button(
-            "成績一覧をExcel出力", self._on_excel_export, variant="primary"
-        )
-        ctrl.addWidget(self.excel_btn)
-        ctrl.addWidget(
-            h.button("エクセル出力詳細設定", self._on_excel_settings)
-        )
-        ctrl.addStretch()
-        lay.addLayout(ctrl)
-        self.excel_status = h.caption_label("")
-        lay.addWidget(self.excel_status)
-        return box
+        if self._selected_type:
+            self.hint_label.setText(f"「{self._selected_type}」欄 — {hint}")
+        elif auto_detect:
+            self.hint_label.setText("欄種別を選んでから、欄の内側をクリックしてください。")
+        else:
+            self.hint_label.setText("欄種別を選んでから、画像上をドラッグして指定してください。")
+        self._set_status("自動認識モード" if auto_detect else "手動設定モード")
 
-    # ---------- 再読込 ----------
+    def _on_detect_thresh_changed(self, value: int) -> None:
+        self.editor.set_detect_threshold(value)
 
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
-        test_id = self.app.active_test_id
-
-        # 模範解答 + 保存済みスロット
-        info = get_test_info(test_id)
+        info = get_test_info(self.app.active_test_id)
         model_path = info.get("modelAnswerPath") or ""
         if model_path and Path(model_path).exists():
             try:
-                self.slot_editor.load_image_from_path(model_path)
+                self.editor.load_image_from_path(model_path)
             except Exception as e:
-                self.slot_status.setText(f"模範解答の表示に失敗: {e}")
+                self.status_label.setText(f"模範解答の表示に失敗: {e}")
+                return
         else:
-            self.slot_status.setText("模範解答が未登録です。先に ① 回答欄設定で読み込んでください。")
-
-        slots = get_output_slots(test_id)
-        self._slot_print_modes = {s["slotKey"]: s["printMode"] for s in slots}
-        self.slot_editor.set_regions(
+            self.status_label.setText("模範解答が未登録です。先に ② 回答欄設定で読み込んでください。")
+            return
+        fields = get_identity_fields(self.app.active_test_id)
+        self.editor.set_regions(
             [
                 {
-                    "id": s["slotKey"],
-                    "displayName": s["slotKey"],
-                    "x": s["x"],
-                    "y": s["y"],
-                    "width": s["width"],
-                    "height": s["height"],
+                    "id": f["type"],
+                    "displayName": f["type"],
+                    "x": f["x"],
+                    "y": f["y"],
+                    "width": f["width"],
+                    "height": f["height"],
                 }
-                for s in slots
+                for f in fields
             ]
         )
+        self._update_type_buttons()
+        if self._selected_type:
+            self.editor.set_pending_label(self._selected_type, replace_same=True)
+        self.status_label.setText(f"設定済み: {len(fields)} 欄")
 
-        # 項目ボタン
-        while self.slot_btn_row.count():
-            item = self.slot_btn_row.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self._slot_buttons = {}
-        keys = get_available_output_slot_keys(test_id)
-        for key in keys:
-            btn = QPushButton(key)
-            btn.setCheckable(True)
-            btn.clicked.connect(lambda _c=False, k=key: self._select_slot_key(k))
-            self._slot_buttons[key] = btn
-            self.slot_btn_row.addWidget(btn)
-        self.slot_btn_row.addStretch()
-        if len(keys) <= 2:
-            self.slot_hint.setText("⑥ 領域設定で大問・範囲・能力を設定すると候補が増えます。")
-        self._update_slot_status()
+    def _select_type(self, type_name: str) -> None:
+        self._selected_type = type_name
+        for t, btn in self.type_buttons.items():
+            btn.setChecked(t == type_name)
+            _refresh_segment_button(btn)
+        self.editor.set_pending_label(type_name, replace_same=True)
+        self.editor.focus_canvas()
+        self.hint_label.setText(f"「{type_name}」欄 — {self._region_action_hint()}")
 
-        # 書式
-        self._load_style_to_form(get_feedback_style())
-        self._load_export_format_to_form()
+    def _on_regions_changed(self) -> None:
+        QTimer.singleShot(0, self._update_type_buttons)
 
-        # プレビュー行
-        self._rows = _load_rows_with_extras(test_id)
-        self.preview_row_combo.clear()
-        for r in self._rows:
-            label = f"{r.get('studentId') or '-'} / {r.get('name') or '-'} / {r.get('fileName')}"
-            self.preview_row_combo.addItem(label)
+    def _update_type_buttons(self) -> None:
+        done_types = {r["id"] for r in self.editor.get_regions()}
+        for t, btn in self.type_buttons.items():
+            if t in done_types:
+                set_variant(btn, "success")
+            else:
+                set_variant(btn, "nav-segment")
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
+            btn.update()
+        done_list = [t for t in IDENTITY_TYPES if t in done_types]
+        if done_list:
+            self.status_label.setText("設定済み: " + "、".join(done_list))
 
-        self._populate_duplex_combos(test_id)
-
-    def _duplex_combo_label(self, t: dict[str, Any]) -> str:
-        name = str(t.get("testName") or "無題")
-        rc = t.get("resultCount")
-        vc = t.get("validIdCount")
-        extra = f"（ID {vc}/{rc}）" if rc is not None and vc is not None else ""
-        active = " ★" if t.get("isActive") else ""
-        return f"{name}{extra}{active}"
-
-    def _populate_duplex_combos(self, active_test_id: str) -> None:
-        candidates = list_duplex_candidate_tests()
-        if not candidates:
-            self.duplex_front_combo.clear()
-            self.duplex_back_combo.clear()
-            self.duplex_btn.setEnabled(False)
+    def _on_reset(self) -> None:
+        if (
+            QMessageBox.question(self, "確認", "設定した本人欄をすべてクリアしますか？")
+            != QMessageBox.Yes
+        ):
             return
-        self.duplex_btn.setEnabled(True)
+        self.editor.clear_all_regions()
+        self.status_label.setText("クリアしました。")
 
-        def fill_combo(combo: QComboBox, select_id: str | None) -> None:
-            combo.blockSignals(True)
-            combo.clear()
-            for t in candidates:
-                combo.addItem(self._duplex_combo_label(t), str(t.get("testSsId") or ""))
-            if select_id:
-                idx = combo.findData(select_id)
-                if idx >= 0:
-                    combo.setCurrentIndex(idx)
-            combo.blockSignals(False)
-
-        fill_combo(self.duplex_front_combo, active_test_id)
-        back_default = None
-        for t in candidates:
-            tid = str(t.get("testSsId") or "")
-            if tid and tid != active_test_id:
-                back_default = tid
-                break
-        if back_default is None and len(candidates) > 1:
-            back_default = str(candidates[1].get("testSsId") or "")
-        fill_combo(self.duplex_back_combo, back_default)
-
-    # ---------- 合計欄 ----------
-
-    def _select_slot_key(self, key: str) -> None:
-        for k, btn in self._slot_buttons.items():
-            btn.setChecked(k == key)
-        self.slot_editor.set_pending_label(key, replace_same=True)
-        self._slot_print_modes.setdefault(key, self.print_mode_combo.currentData())
-        self.slot_hint.setText(f"「{key}」の欄を画像上でドラッグして配置してください（再ドラッグで上書き）。")
-
-    def _on_slots_changed(self) -> None:
-        # 新規配置されたスロットに現在の印字形式を割り当てる
-        for r in self.slot_editor.get_regions():
-            self._slot_print_modes.setdefault(r["id"], self.print_mode_combo.currentData())
-        self._update_slot_status()
-
-    def _update_slot_status(self) -> None:
-        regions = self.slot_editor.get_regions()
-        if not regions:
-            self.slot_status.setText("配置済みの合計欄はありません。")
-            return
-        parts = []
-        for r in regions:
-            mode = self._slot_print_modes.get(r["id"], "number")
-            parts.append(f"{r['id']}（{'ラベル付き' if mode == 'label' else '数字のみ'}）")
-        self.slot_status.setText("配置済み: " + "、".join(parts))
-
-    def _on_delete_slot(self) -> None:
-        self.slot_editor.delete_selected()
-
-    def _on_save_slots(self) -> None:
+    def _on_save(self) -> None:
         if not self.app.require_active_test():
             return
-        regions = self.slot_editor.get_regions()
-        slots = []
-        current_mode = self.print_mode_combo.currentData()
-        for r in regions:
-            slots.append(
-                {
-                    "slotKey": r["id"],
-                    "x": r["x"],
-                    "y": r["y"],
-                    "width": r["width"],
-                    "height": r["height"],
-                    "printMode": self._slot_print_modes.get(r["id"], current_mode),
-                }
-            )
+        regions = self.editor.get_regions()
+        fields = [
+            {
+                "type": r["id"],
+                "x": r["x"],
+                "y": r["y"],
+                "width": r["width"],
+                "height": r["height"],
+            }
+            for r in regions
+            if r["id"] in IDENTITY_TYPES
+        ]
+        if not fields:
+            h.error(self, "保存エラー", "本人確認欄を 1 つ以上設定してください。")
+            return
         try:
-            count = save_output_slots(self.app.active_test_id, slots)
-            h.info(self, "保存完了", f"合計欄を {count} 件保存しました。")
-            self._update_slot_status()
+            count = save_identity_fields(self.app.active_test_id, fields)
+            h.info(self, "保存完了", f"本人確認欄を {count} 件保存しました。")
         except Exception as e:
             h.error(self, "エラー", str(e))
-
-    def _load_export_format_to_form(self) -> None:
-        fmt = get_feedback_export_format()
-        idx = self.export_format_combo.findData(fmt)
-        self.export_format_combo.blockSignals(True)
-        self.export_format_combo.setCurrentIndex(idx if idx >= 0 else 0)
-        self.export_format_combo.blockSignals(False)
-
-    def _on_export_format_changed(self) -> None:
-        fmt = self.export_format_combo.currentData()
-        if not fmt:
-            return
-        try:
-            save_feedback_export_format(str(fmt))
-        except Exception as e:
-            h.error(self, "保存エラー", str(e))
-
-    # ---------- 書式 ----------
-
-    def _load_style_to_form(self, style: dict[str, Any]) -> None:
-        mark = style["mark"]
-        self.style_inset.setValue(float(mark["insetRatio"]))
-        self.style_maru_color.setText(mark["maru"]["strokeColor"])
-        self.style_maru_fill.setValue(float(mark["maru"]["fillOpacity"]))
-        self.style_sankaku_color.setText(mark["sankaku"]["strokeColor"])
-        self.style_batsu_color.setText(mark["batsu"]["strokeColor"])
-        self.style_score_color.setText(mark["score"]["color"])
-        self.style_score_size.setValue(float(mark["score"]["sizeRatio"]))
-        self.style_total_color.setText(style["total"]["color"])
-        self.style_total_size.setValue(float(style["total"]["sizeRatio"]))
-        self.style_total_min.setValue(int(style["total"]["minFontSize"]))
-
-    def _collect_style(self) -> dict[str, Any]:
-        style = get_feedback_style()
-        style["mark"]["insetRatio"] = self.style_inset.value()
-        style["mark"]["maru"]["strokeColor"] = self.style_maru_color.text().strip() or "#dc2626"
-        style["mark"]["maru"]["fillOpacity"] = self.style_maru_fill.value()
-        style["mark"]["sankaku"]["strokeColor"] = self.style_sankaku_color.text().strip() or "#ea580c"
-        style["mark"]["batsu"]["strokeColor"] = self.style_batsu_color.text().strip() or "#2563eb"
-        style["mark"]["score"]["color"] = self.style_score_color.text().strip() or "#111827"
-        style["mark"]["score"]["sizeRatio"] = self.style_score_size.value()
-        style["total"]["color"] = self.style_total_color.text().strip() or "#111827"
-        style["total"]["sizeRatio"] = self.style_total_size.value()
-        style["total"]["minFontSize"] = self.style_total_min.value()
-        return style
-
-    def _on_save_style(self) -> None:
-        try:
-            save_feedback_style(self._collect_style())
-            h.info(self, "保存完了", "出力書式を保存しました（全テスト共通）。")
-        except Exception as e:
-            h.error(self, "エラー", str(e))
-
-    def _on_reset_style(self) -> None:
-        self._load_style_to_form(reset_feedback_style())
-        h.info(self, "リセット", "出力書式をデフォルトに戻しました。")
-
-    # ---------- プレビュー ----------
-
-    def _on_preview(self) -> None:
-        if not self.app.require_active_test():
-            return
-        idx = self.preview_row_combo.currentIndex()
-        if idx < 0 or idx >= len(self._rows):
-            h.warn(self, "行未選択", "プレビューする行を選択してください。")
-            return
-        row = self._rows[idx]
-        test_id = self.app.active_test_id
-        export_format = str(self.export_format_combo.currentData() or "pdf")
-        self._preview_state = None
-        self.preview_host.set_pixmap(None)
-        self.preview_host.set_placeholder("合成中…")
-
-        def done(result, err):
-            if err:
-                self.preview_host.set_placeholder(
-                    "「1件プレビュー」で個票の合成結果を確認できます"
-                )
-                self.preview_mode_label.setText(
-                    "出力形式が PDF のとき、プレビューでもベクトル合成の見た目を表示します。"
-                )
-                h.error(self, "プレビューエラー", str(err))
-                return
-            self._preview_state = result
-            if is_pdf_export_format(export_format):
-                self.preview_mode_label.setText(
-                    "プレビュー: PDF ベクトル合成（選択行1件）— ズームで鮮明さを確認できます"
-                )
-            else:
-                fmt_label = "JPEG" if export_format == "jpeg" else "PNG"
-                self.preview_mode_label.setText(f"プレビュー: {fmt_label} ラスター出力（選択行1件）")
-            self._fit_preview_zoom_to_viewport()
-            self._update_preview_pixmap()
-
-        h.run_in_thread(
-            self,
-            lambda: render_feedback_preview(test_id, row, export_format),
-            done,
-        )
-
-    def _fit_preview_zoom_to_viewport(self) -> None:
-        """ビューポート幅に収まる倍率を初期設定（全体が見えるように）。"""
-        if self._preview_state is None or self._preview_scroll is None:
-            return
-        native_w, _native_h = self._preview_state["native_size"]
-        vw = max(120, self._preview_scroll.viewport().width() - 4)
-        iw = max(1, int(native_w))
-        pct = max(10, min(400, int(vw / iw * 100)))
-        self.preview_zoom.set_zoom_value(pct)
-
-    def _update_preview_pixmap(self) -> None:
-        if self._preview_scroll is None:
-            return
-        if self._preview_state is None:
-            self.preview_host.set_pixmap(None)
-            self._apply_preview_scroll_height(72, 480)
-            return
-        zoom = max(10, min(400, self.preview_zoom.zoom_value())) / 100.0
-        native_w, native_h = self._preview_state["native_size"]
-        target_w = max(1, int(round(native_w * zoom)))
-        target_h = max(1, int(round(native_h * zoom)))
-
-        if self._preview_state.get("mode") == "pdf":
-            img = rasterize_feedback_preview(
-                self._preview_state, zoom_pct=self.preview_zoom.zoom_value()
-            )
-        else:
-            img = self._preview_state["image"]
-
-        pix = pil_to_qpixmap(img)
-        scaled = pix.scaled(
-            target_w,
-            target_h,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
-        scaled.setDevicePixelRatio(1.0)
-        self.preview_host.set_pixmap(scaled)
-        self._apply_preview_scroll_height(scaled.height(), scaled.width())
-
-    def _apply_preview_scroll_height(self, content_h: int, content_w: int) -> None:
-        if self._preview_scroll is None:
-            return
-        frame = self._preview_scroll.frameWidth() * 2
-        extra = 0
-        if content_w > max(1, self._preview_scroll.viewport().width()):
-            extra = self._preview_scroll.horizontalScrollBar().sizeHint().height()
-        self._preview_scroll.setFixedHeight(max(80, content_h + frame + extra))
-
-    # ---------- 一括生成 ----------
-
-    def _on_batch(self) -> None:
-        if not self.app.require_active_test():
-            return
-        test_id = self.app.active_test_id
-        export_format = str(self.export_format_combo.currentData() or "pdf")
-        self.batch_btn.setEnabled(False)
-        self.duplex_btn.setEnabled(False)
-        self.batch_progress.setValue(0)
-        self.batch_status.setText("個票を生成中…")
-
-        bridge = ProgressBridge(self)
-        bridge.updated.connect(self._on_batch_progress)
-
-        def task():
-            def on_progress(current: int, total: int, name: str) -> None:
-                bridge.updated.emit(current, total, name)
-
-            return batch_generate_feedback(
-                test_id, on_progress=on_progress, export_format=export_format
-            )
-
-        h.run_in_thread(self, task, self._on_batch_done)
-
-    def _on_batch_progress(self, current: int, total: int, name: str) -> None:
-        pct = int(current / total * 100) if total else 0
-        self.batch_progress.setValue(pct)
-        self.batch_status.setText(f"{current}/{total} {name}")
-
-    def _on_batch_done(self, result: dict[str, Any] | None, err: Exception | None) -> None:
-        self.batch_btn.setEnabled(True)
-        self.duplex_btn.setEnabled(True)
-        if err:
-            self.batch_status.setText("")
-            h.error(self, "一括生成エラー", str(err))
-            return
-        assert result is not None
-        fmt = result.get("exportFormat") or "pdf"
-        fmt_labels = {
-            "pdf": "PDF（1枚ずつ）",
-            "pdf_combined": "PDF（全件1ファイル）",
-            "jpeg": "JPEG（1枚ずつ）",
-            "png": "PNG（1枚ずつ）",
-        }
-        fmt_label = fmt_labels.get(fmt, fmt.upper())
-        out_dir = str(result.get("outputDir") or "")
-        if out_dir:
-            self._last_output_dir = out_dir
-        if result.get("combined"):
-            msg = (
-                f"形式: {fmt_label} / {result.get('pageCount', result['saved'])} ページ / "
-                f"スキップ {len(result['skipped'])} 件 / エラー {len(result['errors'])} 件\n"
-                f"ファイル: {result.get('combinedFile') or result['outputDir']}"
-            )
-        else:
-            msg = (
-                f"形式: {fmt_label} / 生成 {result['saved']} 件 / "
-                f"スキップ {len(result['skipped'])} 件 / エラー {len(result['errors'])} 件\n"
-                f"保存先: {result['outputDir']}"
-            )
-        self.batch_status.setText(msg.replace("\n", " — "))
-        h.info(self, "一括生成完了", msg)
-
-    def _on_duplex_batch(self) -> None:
-        if not self.app.require_active_test():
-            return
-        front_id = str(self.duplex_front_combo.currentData() or "").strip()
-        back_id = str(self.duplex_back_combo.currentData() or "").strip()
-        mode = str(self.duplex_mode_combo.currentData() or "combined")
-        if not front_id or not back_id:
-            h.warn(self, "表裏一体印刷", "表側・裏側のテストを選択してください。")
-            return
-        if front_id == back_id:
-            h.warn(self, "表裏一体印刷", "表側と裏側は異なるテストを選んでください。")
-            return
-
-        self.batch_btn.setEnabled(False)
-        self.duplex_btn.setEnabled(False)
-        self.batch_progress.setValue(0)
-        self.batch_status.setText("表裏一体PDFを生成中…")
-
-        bridge = ProgressBridge(self)
-        bridge.updated.connect(self._on_batch_progress)
-
-        def task():
-            def on_progress(current: int, total: int, name: str) -> None:
-                bridge.updated.emit(current, total, name)
-
-            return batch_export_duplex_feedback(
-                front_id,
-                back_id,
-                mode=mode,  # type: ignore[arg-type]
-                on_progress=on_progress,
-            )
-
-        h.run_in_thread(self, task, self._on_duplex_batch_done)
-
-    def _on_duplex_batch_done(
-        self, result: dict[str, Any] | None, err: Exception | None
-    ) -> None:
-        self.batch_btn.setEnabled(True)
-        self.duplex_btn.setEnabled(True)
-        if err:
-            self.batch_status.setText("")
-            title = "表裏一体印刷エラー"
-            if isinstance(err, DuplexMatchError):
-                h.error(self, title, str(err))
-            else:
-                h.error(self, title, str(err))
-            return
-        assert result is not None
-        out_dir = str(result.get("outputDir") or "")
-        if out_dir:
-            self._last_output_dir = out_dir
-        mode = result.get("mode") or "combined"
-        if mode == "combined":
-            msg = (
-                f"表裏一体 / {result.get('savedStudents', 0)} 名 / "
-                f"{result.get('pageCount', 0)} ページ / "
-                f"スキップ {len(result.get('skipped') or [])} 件 / "
-                f"エラー {len(result.get('errors') or [])} 件\n"
-                f"ファイル: {result.get('combinedFile') or out_dir}"
-            )
-        else:
-            files = result.get("perStudentFiles") or []
-            msg = (
-                f"表裏個別 / {result.get('savedStudents', 0)} 名 / "
-                f"{len(files)} ファイル / "
-                f"スキップ {len(result.get('skipped') or [])} 件 / "
-                f"エラー {len(result.get('errors') or [])} 件\n"
-                f"保存先: {out_dir}"
-            )
-        self.batch_status.setText(msg.replace("\n", " — "))
-        h.info(self, "表裏一体印刷完了", msg)
-
-    def _on_open_output_folder(self) -> None:
-        if self._last_output_dir:
-            h.open_in_file_manager(self._last_output_dir, parent=self)
-            return
-        if not self.app.require_active_test():
-            return
-        h.open_in_file_manager(test_feedback(self.app.active_test_id), parent=self)
-
-    # ---------- Excel ----------
-
-    def _on_excel_settings(self) -> None:
-        dlg = ExcelExportSettingsDialog(self)
-        dlg.exec()
-
-    def _on_excel_export(self) -> None:
-        if not self.app.require_active_test():
-            return
-        test_id = self.app.active_test_id
-        try:
-            info = get_test_info(test_id)
-            test_name = str(info.get("testName") or "")
-        except Exception:
-            test_name = ""
-        default_path = str(test_grade_list_excel_path(test_id, test_name))
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "成績一覧 Excel の保存先",
-            default_path,
-            "Excel ブック (*.xlsx)",
-        )
-        if not path:
-            return
-        if not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
-        try:
-            require_path_under_test_storage(test_id, path, label="Excel の保存先")
-        except ValueError as e:
-            h.error(self, "保存先エラー", str(e))
-            return
-        self.excel_btn.setEnabled(False)
-        self.excel_status.setText("Excel を生成中…")
-
-        def task():
-            return str(export_grade_excel(test_id, path))
-
-        def done(result: str | None, err: Exception | None) -> None:
-            self.excel_btn.setEnabled(True)
-            if err:
-                self.excel_status.setText("")
-                h.error(self, "Excel出力エラー", str(err))
-                return
-            out = result or path
-            self.excel_status.setText(f"保存しました: {out}")
-            h.info(self, "Excel出力完了", f"保存しました:\n{out}")
-
-        h.run_in_thread(self, task, done)

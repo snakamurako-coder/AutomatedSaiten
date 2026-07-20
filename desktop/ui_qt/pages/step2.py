@@ -1,202 +1,353 @@
-"""② 配点決定ページ。"""
+"""② 回答欄設定ページ（模範解答 D&D + 領域エディタ）。"""
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QFrame,
     QHBoxLayout,
     QLabel,
-    QLineEdit,
-    QTableWidget,
+    QScrollArea,
+    QSlider,
     QVBoxLayout,
     QWidget,
 )
 
-from models.grading_status import field_grading_complete_map
-from models.test_repo import get_test_info, save_answer_fields, save_points
+from config import load_config, save_config, test_model_source
+from models.test_repo import (
+    archive_model_answer_source,
+    get_answer_fields,
+    get_test_info,
+    get_use_id_mark,
+    save_answer_fields,
+    save_model_answer_image,
+    set_use_id_mark,
+)
+from services.image_loader import is_supported_input_path
+from services.image_warp import warp_image_from_path
 from ui_qt import helpers as h
+from ui_qt.region_editor import AnswerRegionEditor
+from ui_qt.region_mode_widgets import RegionDetectModeToggle
 from ui_qt.style import COLORS
-from ui_qt.table_cells import make_editable_item, make_readonly_item, wire_excel_edit_columns
 
 
 class Step2Page(QWidget):
     def __init__(self, app: Any) -> None:
         super().__init__()
         self.app = app
-        self._points_map: dict[str, int] = {}
-        self._fields: list[dict[str, Any]] = []
+        self._field_rows: list[dict[str, Any]] = []
+        self.setAcceptDrops(True)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
-        root.setSpacing(10)
+        root.setSpacing(8)
 
         header = QHBoxLayout()
-        header.addWidget(h.title_label("② 配点決定"))
-        header.addStretch()
-        self.total_label = QLabel("合計点: 0")
-        self.total_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self.total_label.setStyleSheet(
-            f"font-size: 16px; font-weight: 700; color: {COLORS['accent']};"
-            f" padding: 4px 10px; background: {COLORS['accent_soft']};"
-            f" border: 1px solid #93c5fd; border-radius: 8px;"
+        header.setSpacing(12)
+        title_col = QVBoxLayout()
+        title_col.setSpacing(4)
+        title_col.addWidget(h.title_label("② 回答欄設定（模範解答）"))
+        title_col.addWidget(
+            h.muted_label(
+                "PDF / JPG / PNG をドロップするか「画像を開く」で模範解答を読み込み、"
+                "記述欄は「自動認識」または「手動設定」で追加します。"
+            )
         )
-        header.addWidget(self.total_label)
+        header.addLayout(title_col, 1)
+        folder_col = QVBoxLayout()
+        folder_col.setSpacing(6)
+        folder_col.addWidget(
+            h.open_folder_button(self._on_open_model_source_folder, text="模範解答原稿フォルダを開く")
+        )
+        header.addLayout(folder_col, 0)
         root.addLayout(header)
 
-        self.table = QTableWidget(0, 4)
-        self.table.setHorizontalHeaderLabels(["記述欄ID", "表示名", "配点", "採点"])
-        self.table.horizontalHeader().setStretchLastSection(True)
-        self.table.setColumnWidth(0, 180)
-        self.table.setColumnWidth(1, 220)
-        self.table.setColumnWidth(2, 80)
-        self.table.setColumnWidth(3, 72)
-        self.table.setSelectionBehavior(QTableWidget.SelectItems)
-        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.table.verticalHeader().setDefaultSectionSize(32)
-        self.table.verticalHeader().setVisible(False)
-        wire_excel_edit_columns(self.table, (1, 2), on_changed=self._on_table_cell_changed)
-        root.addWidget(self.table, 1)
+        toolbar = QHBoxLayout()
+        toolbar.setSpacing(8)
+        toolbar.addWidget(QLabel("用紙方向"))
+        self.orientation_combo = QComboBox()
+        self.orientation_combo.addItem("A4横", "landscape")
+        self.orientation_combo.addItem("A4縦", "portrait")
+        toolbar.addWidget(self.orientation_combo)
+        self.use_id_mark_check = QCheckBox("IDマーク欄あり（OMRで生徒ID読取）")
+        self.use_id_mark_check.setChecked(True)
+        self.use_id_mark_check.setToolTip(
+            "解答用紙ひな形の生徒IDマーク欄を⑤ テキスト化時に OMR で読み取ります。"
+        )
+        toolbar.addWidget(self.use_id_mark_check)
+        toolbar.addWidget(QLabel("二値化"))
+        self.thresh_slider = QSlider(Qt.Horizontal)
+        self.thresh_slider.setRange(0, 255)
+        self.thresh_slider.setValue(128)
+        self.thresh_slider.setFixedWidth(120)
+        self.thresh_slider.valueChanged.connect(self._on_detect_thresh_changed)
+        toolbar.addWidget(self.thresh_slider)
+        toolbar.addWidget(QLabel("設定"))
+        self.region_mode_toggle = RegionDetectModeToggle(
+            auto_detect=True,
+            on_change=self._on_region_mode_changed,
+        )
+        self.region_mode_toggle.setToolTip(
+            "自動認識: 欄の内側をクリックして枠を検出。\n"
+            "手動設定: ドラッグで矩形を指定。\n"
+            "検出精度は「二値化」しきい値で調整できます。"
+        )
+        toolbar.addWidget(self.region_mode_toggle)
+        toolbar.addWidget(h.button("画像を開く", self._on_open_file))
+        toolbar.addWidget(h.button("記述欄を保存", self._on_save_fields, variant="primary"))
+        self.delete_btn = h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft")
+        self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.delete_btn.setAutoDefault(False)
+        self.delete_btn.setDefault(False)
+        toolbar.addWidget(self.delete_btn)
+        toolbar.addWidget(h.button("再読込", self.refresh))
+        toolbar.addStretch()
+        root.addLayout(toolbar)
 
-        row = QHBoxLayout()
-        row.addWidget(QLabel("配点"))
-        self.points_edit = QLineEdit()
-        self.points_edit.setFixedWidth(80)
-        row.addWidget(self.points_edit)
-        row.addWidget(h.button("選択行に適用", self._on_apply))
-        row.addWidget(h.button("保存", self._on_save, variant="primary"))
-        row.addWidget(h.button("再読込", self.refresh))
-        row.addStretch()
-        root.addLayout(row)
+        body = QHBoxLayout()
+        body.setSpacing(10)
+        root.addLayout(body, 1)
+
+        self.editor = AnswerRegionEditor(
+            on_change=self._refresh_field_panel,
+            on_status=self._set_status,
+        )
+        self.editor.set_detect_threshold(int(self.thresh_slider.value()))
+        self.editor.set_click_detect_mode(True)
+        body.addWidget(self.editor, 1)
+
+        side = QFrame()
+        side.setFixedWidth(230)
+        side.setStyleSheet(
+            f"QFrame {{ background: {COLORS['sidebar']}; border: 1px solid {COLORS['border']};"
+            f" border-radius: 8px; }}"
+        )
+        side_layout = QVBoxLayout(side)
+        side_layout.setContentsMargins(8, 8, 8, 8)
+        side_title = QLabel("記述欄一覧")
+        side_title.setStyleSheet("font-weight: 700; border: none;")
+        side_layout.addWidget(side_title)
+        self.field_scroll = QScrollArea()
+        self.field_scroll.setWidgetResizable(True)
+        self.field_scroll.setStyleSheet("QScrollArea { border: none; background: transparent; }")
+        self.field_panel = QWidget()
+        self.field_panel.setStyleSheet("background: transparent; border: none;")
+        self.field_panel_layout = QVBoxLayout(self.field_panel)
+        self.field_panel_layout.setContentsMargins(0, 0, 0, 0)
+        self.field_panel_layout.setSpacing(6)
+        self.field_panel_layout.addStretch()
+        self.field_scroll.setWidget(self.field_panel)
+        side_layout.addWidget(self.field_scroll)
+        body.addWidget(side, 0)
+
+        self.status_label = h.caption_label("PDF / JPG / PNG をドロップするか「画像を開く」で開始")
+        root.addWidget(self.status_label)
+
+    def handle_delete_key(self) -> None:
+        """Del — キャンバスの選択欄を直接削除。"""
+        canvas = self.editor._canvas
+        if canvas.selected_idx < 0:
+            return
+        canvas._delete_selected_region()
+        self._refresh_field_panel()
+
+    def _set_status(self, message: str) -> None:
+        self.status_label.setText(message)
+
+    def _on_region_mode_changed(self, auto_detect: bool) -> None:
+        self.editor.set_click_detect_mode(auto_detect)
+        self.editor.focus_canvas()
+        if auto_detect:
+            self._set_status("自動認識モード — 解答欄の内側をクリックしてください。")
+        else:
+            self._set_status("手動設定モード — ドラッグで記述欄を指定できます。")
+
+    def _on_detect_thresh_changed(self, value: int) -> None:
+        self.editor.set_detect_threshold(value)
+
+    def _on_open_model_source_folder(self) -> None:
+        if not self.app.require_active_test():
+            return
+        folder = test_model_source(self.app.active_test_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        h.open_in_file_manager(folder, parent=self)
+
+    def dragEnterEvent(self, event) -> None:  # noqa: N802
+        if event.mimeData().hasUrls():
+            event.acceptProposedAction()
+
+    def dropEvent(self, event) -> None:  # noqa: N802
+        paths = [u.toLocalFile() for u in event.mimeData().urls()]
+        files = [p for p in paths if p and is_supported_input_path(p)]
+        if not files:
+            h.warn(self, "ドロップ", "PDF / JPG / PNG ファイルをドロップしてください。")
+            return
+        self._load_model_from_path(files[0])
+
+    def _on_open_file(self) -> None:
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "模範解答を選択（PDF / JPG / PNG）",
+            "",
+            "PDF / JPG / PNG (*.pdf *.jpg *.jpeg *.png);;すべて (*.*)",
+        )
+        if path:
+            self._load_model_from_path(path)
+
+    def _load_model_from_path(self, path: str) -> None:
+        if not self.app.require_active_test():
+            return
+        self._set_status("読込・補正中…")
+        orientation = self.orientation_combo.currentData() or "landscape"
+        thresh = int(self.thresh_slider.value())
+        test_id = self.app.active_test_id
+        existing_fields = list(self._field_rows)
+        ref_w = ref_h = 0
+        try:
+            info = get_test_info(test_id)
+            ref_w = int(info.get("refWidth") or 0)
+            ref_h = int(info.get("refHeight") or 0)
+        except Exception:
+            pass
+
+        def task():
+            warped = warp_image_from_path(path, orientation, thresh)
+            hh, ww = warped.shape[:2]
+            keep = existing_fields if ref_w == ww and ref_h == hh and existing_fields else []
+            save_model_answer_image(test_id, warped)
+            archived = archive_model_answer_source(test_id, path)
+            return warped, keep, archived
+
+        def done(result, err):
+            if err:
+                self._set_status("")
+                h.error(self, "読込エラー", str(err))
+                return
+            warped, keep, archived = result
+            self.editor.set_image(warped)
+            if keep:
+                self.editor.set_regions(keep)
+            self._field_rows = self.editor.get_regions()
+            hh, ww = warped.shape[:2]
+            self._set_status(
+                f"模範解答を読み込みました（{ww}×{hh}）— 原稿も保存済み — 記述欄を追加してください"
+            )
+            self._refresh_field_panel()
+
+        h.run_in_thread(self, task, done)
+
+    def _on_delete_selected(self) -> None:
+        self.handle_delete_key()
 
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
+        self._field_rows = get_answer_fields(self.app.active_test_id)
         info = get_test_info(self.app.active_test_id)
-        fields = info["fields"]
-        points = info["points"]
-        self._fields = [dict(f) for f in fields]
-        complete_map = field_grading_complete_map(self.app.active_test_id)
-        done_bg = QColor(COLORS["selection_soft"])
-        self.table.setRowCount(0)
-        self._points_map = {}
-        for f in self._fields:
-            pts = points.get(f["id"], 0)
-            self._points_map[f["id"]] = pts
-            r = self.table.rowCount()
-            self.table.insertRow(r)
-            done = bool(complete_map.get(f["id"], False))
-            self.table.setItem(r, 0, make_readonly_item(f["id"]))
-            self.table.setItem(r, 1, make_editable_item(f["displayName"]))
-            self.table.setItem(r, 2, make_editable_item(str(pts), center=True))
-            status_item = make_readonly_item("完了" if done else "未完", center=True)
-            self.table.setItem(r, 3, status_item)
-            if done:
-                for c in range(4):
-                    item = self.table.item(r, c)
-                    if item is not None:
-                        item.setBackground(done_bg)
-        self._update_total_label()
-
-    def _update_total_label(self) -> None:
-        total = 0
-        for i in range(self.table.rowCount()):
-            item = self.table.item(i, 2)
-            if item is None:
-                continue
+        self.use_id_mark_check.setChecked(bool(info.get("useIdMark", True)))
+        orient = load_config().get("default_orientation", "landscape")
+        idx = self.orientation_combo.findData(orient)
+        if idx >= 0:
+            self.orientation_combo.setCurrentIndex(idx)
+        model_path = info.get("modelAnswerPath") or ""
+        if model_path and Path(model_path).exists():
             try:
-                total += int(item.text() or 0)
-            except ValueError:
-                continue
-        self.total_label.setText(f"合計点: {total}")
+                self.editor.load_image_from_path(model_path)
+                self.editor.set_regions(self._field_rows)
+                self._field_rows = self.editor.get_regions()
+                self._set_status(
+                    f"保存済み模範解答を表示（{info.get('refWidth')}×{info.get('refHeight')}）"
+                )
+            except Exception as e:
+                self._set_status(f"模範解答の表示に失敗: {e}")
+        else:
+            self._set_status("模範解答未登録 — 画像をドロップまたは開いてください")
+        self._refresh_field_panel()
 
-    def _on_table_cell_changed(self, row: int, col: int, text: str) -> None:
-        if row < 0:
-            return
-        fid_item = self.table.item(row, 0)
-        if fid_item is None:
-            return
-        fid = fid_item.text()
-        if col == 1:
-            name = text.strip() or fid
-            for f in self._fields:
-                if f["id"] == fid:
-                    f["displayName"] = name
-                    break
-        elif col == 2:
-            try:
-                pts = int(text or 0)
-            except ValueError:
-                self._update_total_label()
-                return
-            self._points_map[fid] = pts
-            self._update_total_label()
+    def _refresh_field_panel(self) -> None:
+        while self.field_panel_layout.count():
+            item = self.field_panel_layout.takeAt(0)
+            if item.widget():
+                item.widget().deleteLater()
+        self._field_rows = self.editor.get_regions()
 
-    def _sync_from_table(self) -> bool:
-        for i in range(self.table.rowCount()):
-            fid_item = self.table.item(i, 0)
-            name_item = self.table.item(i, 1)
-            pts_item = self.table.item(i, 2)
-            if fid_item is None or name_item is None or pts_item is None:
-                continue
-            fid = fid_item.text()
-            name = name_item.text().strip() or fid
-            try:
-                pts = int(pts_item.text() or 0)
-            except ValueError:
-                h.error(self, "入力エラー", f"配点は整数で入力してください（行 {i + 1}）。")
-                return False
-            for f in self._fields:
-                if f["id"] == fid:
-                    f["displayName"] = name
-                    break
-            self._points_map[fid] = pts
-        return True
-
-    def _selected_rows(self) -> list[int]:
-        rows = sorted({idx.row() for idx in self.table.selectedIndexes()})
-        if rows:
-            return rows
-        current = self.table.currentRow()
-        return [current] if current >= 0 else []
-
-    def _on_apply(self) -> None:
-        rows = self._selected_rows()
-        if not rows:
-            h.warn(self, "未選択", "配点を適用する行（青く選択したセル）を選んでください。")
+        if not self._field_rows:
+            self.field_panel_layout.addWidget(
+                h.muted_label(
+                    "「自動認識」または\n「手動設定」で\n記述欄を追加"
+                )
+            )
+            self.field_panel_layout.addStretch()
             return
-        try:
-            pts = int(self.points_edit.text() or 0)
-        except ValueError:
-            h.error(self, "入力エラー", "配点は整数で入力してください。")
-            return
-        applied = 0
-        for row in rows:
-            fid_item = self.table.item(row, 0)
-            pts_item = self.table.item(row, 2)
-            if fid_item is None or pts_item is None:
-                continue
-            fid = fid_item.text()
-            self._points_map[fid] = pts
-            pts_item.setText(str(pts))
-            applied += 1
-        if applied == 0:
-            h.warn(self, "適用不可", "選択行に配点列がありません。")
-            return
-        self._update_total_label()
 
-    def _on_save(self) -> None:
+        for idx, row in enumerate(self._field_rows):
+            card = QFrame()
+            card.setStyleSheet(
+                f"QFrame {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']};"
+                f" border-radius: 6px; }}"
+            )
+            lay = QVBoxLayout(card)
+            lay.setContentsMargins(8, 6, 8, 6)
+            lay.setSpacing(4)
+            name = QLabel(f"{row['displayName']}  {row['width']}×{row['height']}")
+            name.setStyleSheet("border: none; font-weight: 600; font-size: 12px;")
+            lay.addWidget(name)
+            ctrl = QHBoxLayout()
+            ocr_label = QLabel("OCR")
+            ocr_label.setStyleSheet("border: none; font-size: 10px; color: #9ca3af;")
+            ctrl.addWidget(ocr_label)
+            combo = QComboBox()
+            combo.addItems(["en", "ja"])
+            combo.setCurrentText(row.get("ocrLang") or "en")
+            combo.setFixedWidth(64)
+            combo.currentTextChanged.connect(
+                lambda lang, i=idx: self._on_lang_changed(i, lang)
+            )
+            ctrl.addWidget(combo)
+            ctrl.addStretch()
+            select_btn = h.button("選択", lambda _=False, i=idx: self._select_field(i))
+            select_btn.setFixedWidth(52)
+            ctrl.addWidget(select_btn)
+            lay.addLayout(ctrl)
+            self.field_panel_layout.addWidget(card)
+        self.field_panel_layout.addStretch()
+
+    def _on_lang_changed(self, index: int, lang: str) -> None:
+        self.editor.set_region_ocr_lang(index, lang)
+        self._field_rows = self.editor.get_regions()
+
+    def _select_field(self, index: int) -> None:
+        self.editor.select_region(index)
+        self.editor.focus_canvas()
+
+    def _on_save_fields(self) -> None:
         if not self.app.require_active_test():
             return
-        if not self._sync_from_table():
+        self._field_rows = self.editor.get_regions()
+        if not self._field_rows:
+            h.error(self, "保存エラー", "記述欄がありません。画像上で矩形を指定してください。")
             return
-        test_id = self.app.active_test_id
+        if not self.editor.has_image():
+            h.error(self, "保存エラー", "模範解答画像が読み込まれていません。")
+            return
         try:
-            save_answer_fields(test_id, self._fields)
-            save_points(test_id, self._points_map)
-            h.info(self, "保存完了", "表示名と配点を保存しました。")
-            self.refresh()
+            warped = self.editor.get_image_bgr()
+            if warped is not None:
+                save_model_answer_image(self.app.active_test_id, warped)
+            save_answer_fields(self.app.active_test_id, self._field_rows)
+            set_use_id_mark(self.app.active_test_id, self.use_id_mark_check.isChecked())
+            cfg = load_config()
+            cfg["default_orientation"] = (
+                self.orientation_combo.currentData() or "landscape"
+            )
+            save_config(cfg)
+            h.info(self, "保存完了", "模範解答・記述欄・IDマーク設定を保存しました。")
+            self._set_status("記述欄を保存しました")
         except Exception as e:
             h.error(self, "エラー", str(e))

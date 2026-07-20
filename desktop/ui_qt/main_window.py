@@ -28,7 +28,6 @@ from constants import DESKTOP_READY_STEPS, MANUAL_GRADING_STEP_ID, STEPS
 from models.database import connect, get_active_test_id, init_db
 from services.ocr import check_ocr_config
 from ui_qt import helpers as h
-from ui_qt.pages.step0 import Step0Page
 from ui_qt.pages.step1 import Step1Page
 from ui_qt.pages.step2 import Step2Page
 from ui_qt.pages.step3 import Step3Page
@@ -39,6 +38,8 @@ from ui_qt.pages.step7 import Step7Page
 from ui_qt.pages.step8 import Step8Page
 from ui_qt.pages.step9 import Step9Page
 from ui_qt.pages.step10 import Step10Page
+from ui_qt.pages.step11 import Step11Page
+from ui_qt.pages.step12 import Step12Page
 from ui_qt.pages.step_manual import StepManualPage
 from ui_qt.floating_palette.palette_controller import PaletteController
 from ui_qt.settings_dialog import open_settings_dialog
@@ -54,7 +55,7 @@ class MainWindow(QMainWindow):
 
         init_db()
         self.active_test_id: str | None = None
-        self._current_step_id = 0
+        self._current_step_id = 1
         self._apply_startup_test_load()
 
         app = QApplication.instance()
@@ -85,7 +86,6 @@ class MainWindow(QMainWindow):
 
         self.pages: dict[int, QWidget] = {}
         page_classes = {
-            0: Step0Page,
             1: Step1Page,
             2: Step2Page,
             3: Step3Page,
@@ -96,6 +96,8 @@ class MainWindow(QMainWindow):
             8: Step8Page,
             9: Step9Page,
             10: Step10Page,
+            11: Step11Page,
+            12: Step12Page,
         }
         for step in STEPS:
             sid = step["id"]
@@ -119,7 +121,7 @@ class MainWindow(QMainWindow):
         self._refresh_ocr_status()
         self.palette_controller = PaletteController(self)
         self.statusBar().showMessage("準備完了")
-        self.load_step(0)
+        self.load_step(1)
 
     def show_app_message(self, text: str, *, level: str = "info") -> None:
         """画面下部ステータスバーへ非モーダル通知（システム音なし）。"""
@@ -156,7 +158,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[int, QPushButton] = {}
 
         for step in STEPS:
-            if step["id"] <= 2:
+            if step["id"] <= 3:
                 self._add_nav_button(lay, step)
 
         fork_lbl = QLabel("▼ 分岐")
@@ -180,7 +182,7 @@ class MainWindow(QMainWindow):
         auto_title.setAlignment(Qt.AlignCenter)
         auto_lay.addWidget(auto_title)
         for step in STEPS:
-            if step["id"] in (3, 4, 5):
+            if step["id"] in (5, 6, 7):
                 self._add_nav_button(auto_lay, step, compact=True)
 
         manual_panel = QFrame()
@@ -199,7 +201,7 @@ class MainWindow(QMainWindow):
         manual_btn.setCheckable(True)
         manual_btn.setEnabled(MANUAL_GRADING_STEP_ID in DESKTOP_READY_STEPS)
         manual_btn.setCursor(Qt.PointingHandCursor)
-        manual_btn.setToolTip("③④⑤ の代替 — 画像を見ながら ○△× を付ける")
+        manual_btn.setToolTip("⑤⑥⑦ の代替 — 画像を見ながら ○△× を付ける")
         manual_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         manual_btn.clicked.connect(
             lambda _c=False: self.load_step(MANUAL_GRADING_STEP_ID)
@@ -218,7 +220,7 @@ class MainWindow(QMainWindow):
         lay.addWidget(merge_lbl)
 
         for step in STEPS:
-            if step["id"] >= 6:
+            if step["id"] >= 8:
                 self._add_nav_button(lay, step)
 
         lay.addSpacing(10)
@@ -305,13 +307,13 @@ class MainWindow(QMainWindow):
             test_id=str(self.active_test_id),
             on_open_crop=self._text_search_open_crop,
             on_open_full_sheet=self._text_search_open_full_sheet,
-            on_open_step4=self._text_search_open_step4,
+            on_open_step4=self._text_search_open_step6,
         )
         dlg.exec()
 
     def _text_search_open_crop(self, hit: dict) -> None:
-        self.load_step(4)
-        page = self.pages.get(4)
+        self.load_step(6)
+        page = self.pages.get(6)
         if page is not None and hasattr(page, "show_crop_from_search"):
             page.show_crop_from_search(hit)  # type: ignore[attr-defined]
 
@@ -326,9 +328,9 @@ class MainWindow(QMainWindow):
             result_id=rid, field_id=fid or None
         )
 
-    def _text_search_open_step4(self, hit: dict) -> None:
-        self.load_step(4)
-        page = self.pages.get(4)
+    def _text_search_open_step6(self, hit: dict) -> None:
+        self.load_step(6)
+        page = self.pages.get(6)
         if page is not None and hasattr(page, "focus_field_from_search"):
             page.focus_field_from_search(str(hit.get("fieldId") or ""))  # type: ignore[attr-defined]
 
@@ -342,16 +344,16 @@ class MainWindow(QMainWindow):
         btn = self.nav_buttons.get(step_id)
         if btn:
             btn.setChecked(True)
-        if step_id != 0 and hasattr(page, "refresh") and self.active_test_id:
+        if step_id != 1 and hasattr(page, "refresh") and self.active_test_id:
             page.refresh()  # type: ignore[attr-defined]
-        elif step_id == 0:
+        elif step_id == 1:
             page.refresh()  # type: ignore[attr-defined]
         self._sync_palette(step_id)
-        self.palette_controller.set_delete_hotkey_enabled(self._current_step_id not in (1, 8))
+        self.palette_controller.set_delete_hotkey_enabled(self._current_step_id not in (2, 10))
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if (
-            self._current_step_id in (1, 8)
+            self._current_step_id in (2, 10)
             and event.type() == QEvent.Type.KeyPress
             and isinstance(event, QKeyEvent)
             and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)

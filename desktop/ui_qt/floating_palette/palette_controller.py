@@ -92,7 +92,7 @@ class PaletteFabButton(QPushButton):
 class PaletteController:
     """描画・テキストパレットのライフサイクルと状態同期。"""
 
-    ACTIVE_STEPS = frozenset({4, 11})
+    ACTIVE_STEPS = frozenset({6, 13})
 
     def __init__(self, main_window: QWidget) -> None:
         self._main = main_window
@@ -223,7 +223,7 @@ class PaletteController:
         return tool
 
     def set_delete_hotkey_enabled(self, enabled: bool) -> None:
-        """①・⑧など、MainWindow 側で Del を処理するステップでは無効化する。"""
+        """②・⑩など、MainWindow 側で Del を処理するステップでは無効化する。"""
         for shortcut in self._delete_hotkeys:
             shortcut.setEnabled(bool(enabled))
 
@@ -984,7 +984,7 @@ class PaletteController:
     def _on_delete_selected_text_hotkey(self) -> None:
         """選択中のテキストボックスを Del で削除（文字編集中はエディタに任せる）。"""
         main = self._main
-        if getattr(main, "_current_step_id", None) == 1:
+        if getattr(main, "_current_step_id", None) == 2:
             return
         if self._tool not in (TOOL_TEXT, TOOL_PHRASE):
             return
