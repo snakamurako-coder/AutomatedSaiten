@@ -5,7 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QButtonGroup,
     QHBoxLayout,
@@ -96,6 +96,7 @@ class Step8Page(QWidget):
             on_status=self._set_status,
         )
         self.editor.set_detect_threshold(int(self.thresh_slider.value()))
+        self.editor.set_detect_roi_margin(480)
         self.editor.set_click_detect_mode(True)
         self.editor.set_require_pending_label_for_detect(True)
         root.addWidget(self.editor, 1)
@@ -184,7 +185,7 @@ class Step8Page(QWidget):
         self.hint_label.setText(f"「{type_name}」欄 — {self._region_action_hint()}")
 
     def _on_regions_changed(self) -> None:
-        self._update_type_buttons()
+        QTimer.singleShot(0, self._update_type_buttons)
 
     def _update_type_buttons(self) -> None:
         done_types = {r["id"] for r in self.editor.get_regions()}

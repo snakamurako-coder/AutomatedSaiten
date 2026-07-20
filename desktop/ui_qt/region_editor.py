@@ -56,6 +56,8 @@ class _EditorCanvas(QWidget):
         self._drag: dict[str, Any] | None = None
         self._image_bgr: np.ndarray | None = None
         self._pixmap: QPixmap | None = None
+        self._detect_blur: np.ndarray | None = None
+        self._detect_busy = False
         self._scale = 1.0
         # ラベル指定モード: 新規矩形の ID をこのラベルにし、同ラベルの既存矩形を置き換える
         # （⑧本人欄=欄種別、⑩出力欄=slotKey で使用）
@@ -63,6 +65,7 @@ class _EditorCanvas(QWidget):
         self.replace_same_label = False
         self.click_detect_mode = False
         self.detect_threshold = 128
+        self.detect_roi_margin: int | None = None
         self.require_pending_label_for_detect = False
         self.default_ocr_lang = "en"
         self.setFocusPolicy(Qt.StrongFocus)
@@ -75,8 +78,17 @@ class _EditorCanvas(QWidget):
     def set_image(self, image_bgr: np.ndarray) -> None:
         self._image_bgr = image_bgr.copy()
         self._pixmap = bgr_to_qpixmap(self._image_bgr)
+        self._refresh_detect_cache()
         self._update_scale()
         self.update()
+
+    def _refresh_detect_cache(self) -> None:
+        if self._image_bgr is None:
+            self._detect_blur = None
+            return
+        from services.region_detect import prepare_detect_blur
+
+        self._detect_blur = prepare_detect_blur(self._image_bgr)
 
     def _update_scale(self) -> None:
         if self._pixmap is None:
@@ -270,21 +282,44 @@ class _EditorCanvas(QWidget):
         self.status.emit(f"「{name}」を削除しました")
 
     def _try_detect_region_at(self, px: float, py: float) -> None:
-        from services.region_detect import detect_region_at_point
+        if self._image_bgr is None or self._detect_busy:
+            return
+        if self._detect_blur is None:
+            self._refresh_detect_cache()
+        self._detect_busy = True
+        self.status.emit("検出中…")
+        blur = self._detect_blur
+        image_bgr = self._image_bgr
+        thresh = self.detect_threshold
+        min_size = self.MIN_SIZE
+        roi_margin = self.detect_roi_margin
 
-        try:
-            x, y, w, h = detect_region_at_point(
-                self._image_bgr,
+        from ui_qt.helpers import run_in_thread
+
+        def task() -> tuple[int, int, int, int]:
+            from services.region_detect import detect_region_at_point
+
+            return detect_region_at_point(
+                image_bgr,
                 px,
                 py,
-                thresh=self.detect_threshold,
-                min_size=self.MIN_SIZE,
+                thresh=thresh,
+                min_size=min_size,
+                blur=blur,
+                roi_margin=roi_margin,
             )
-        except ValueError as e:
-            self.status.emit(str(e))
-            return
-        self._add_region(float(x), float(y), float(w), float(h))
-        self.status.emit(f"欄を検出しました（{w}×{h}）")
+
+        def done(result: tuple[int, int, int, int] | None, error: Exception | None) -> None:
+            self._detect_busy = False
+            if error is not None:
+                self.status.emit(str(error))
+                return
+            assert result is not None
+            x, y, w, h = result
+            self._add_region(float(x), float(y), float(w), float(h))
+            self.status.emit(f"欄を検出しました（{w}×{h}）")
+
+        run_in_thread(self, task, done)
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         px, py = self._to_image(event.position())
@@ -380,6 +415,7 @@ class _EditorCanvas(QWidget):
         for i, r in enumerate(self.regions):
             r["order"] = i + 1
         self.selected_idx = len(self.regions) - 1
+        self.update()
         self.changed.emit()
 
 
@@ -519,6 +555,10 @@ class AnswerRegionEditor(QScrollArea):
 
     def set_detect_threshold(self, thresh: int) -> None:
         self._canvas.detect_threshold = max(0, min(255, int(thresh)))
+
+    def set_detect_roi_margin(self, margin: int | None) -> None:
+        """自動認識の切り出し範囲（本人欄など小さい欄向けに小さくできる）。"""
+        self._canvas.detect_roi_margin = None if margin is None else max(120, int(margin))
 
     def set_default_ocr_lang(self, lang: str) -> None:
         self._canvas.default_ocr_lang = "ja" if str(lang or "en").lower() == "ja" else "en"
