@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -240,13 +240,10 @@ class Step1Page(QWidget):
         self.status_label = h.caption_label("PDF / JPG / PNG をドロップするか「画像を開く」で開始")
         root.addWidget(self.status_label)
 
-    def handle_delete_key(self) -> None:
-        """Del / Backspace — キャンバスの選択欄を直接削除する。"""
-        canvas = self.editor._canvas
-        if canvas.selected_idx < 0:
-            return
-        canvas._delete_selected_region()
-        self._refresh_field_panel()
+        # Del → ボタンと同じ _on_delete_selected（click() はフォーカス移動のみになるため直接呼ぶ）
+        self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self)
+        self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._delete_shortcut.activated.connect(self._on_delete_selected)
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
@@ -377,7 +374,10 @@ class Step1Page(QWidget):
         h.run_in_thread(self, task, done)
 
     def _on_delete_selected(self) -> None:
-        self.handle_delete_key()
+        if not self.editor.has_selection():
+            return
+        self.editor.delete_selected()
+        self._refresh_field_panel()
 
     def refresh(self) -> None:
         if not self.app.require_active_test():
