@@ -511,9 +511,10 @@ class StepManualPage(QWidget):
             (self.btn_unjudged, lambda: self._apply_judgment("")),
         ):
             if btn is self.btn_unjudged:
-                btn.setFixedSize(56, 36)
+                btn.setFixedSize(64, 36)
                 btn.setStyleSheet(
                     f"QPushButton {{ font-size: 11px; font-weight: 700;"
+                    f" padding: 0 8px; min-height: 0; min-width: 0;"
                     f" color: {COLORS['text_secondary']};"
                     f" border: 2px solid {COLORS['border']}; border-radius: 6px;"
                     f" background: {COLORS['surface']}; }}"
@@ -555,7 +556,8 @@ class StepManualPage(QWidget):
         soft = _mix_hex_with_white(stroke, 0.82)
         return (
             f"QPushButton {{ background: {soft}; color: {stroke}; font-weight: 800;"
-            f" font-size: 16px; border: 2px solid {stroke}; border-radius: 6px; }}"
+            f" font-size: 16px; border: 2px solid {stroke}; border-radius: 6px;"
+            f" padding: 0; min-height: 0; min-width: 0; }}"
             f"QPushButton:hover {{ background: {_mix_hex_with_white(stroke, 0.7)}; }}"
             f"QPushButton:pressed {{ background: {stroke}; color: white; }}"
         )
@@ -607,7 +609,7 @@ class StepManualPage(QWidget):
         return (
             f"QPushButton {{ background: {COLORS['surface']}; color: {COLORS['text_muted']};"
             f" font-weight: 700; font-size: 14px; border: 2px solid {COLORS['border']};"
-            f" border-radius: 6px; }}"
+            f" border-radius: 6px; padding: 0 6px; min-height: 0; min-width: 0; }}"
             f"QPushButton:hover {{ background: #f9fafb; }}"
         )
 
