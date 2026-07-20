@@ -20,13 +20,14 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import load_config, save_config, test_inbox, test_model_source
+from config import load_config, save_config, test_dir, test_model_source
 from models.test_repo import (
     archive_model_answer_source,
-    copy_student_sheet_to_inbox,
+    copy_files_to_inbox,
     get_answer_fields,
     get_test_info,
     get_use_id_mark,
+    resolve_student_inbox,
     save_answer_fields,
     save_model_answer_image,
     set_use_id_mark,
@@ -39,13 +40,13 @@ from ui_qt.style import COLORS
 
 
 class StudentSheetDropZone(QFrame):
-    """生徒回答用紙のドラッグ＆ドロップ領域。"""
+    """生徒回答用紙のドラッグ＆ドロップ領域（複数ファイル対応）。"""
 
-    file_dropped = Signal(str)
+    files_dropped = Signal(list)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._source_path: str | None = None
+        self._pending_count = 0
         self.setAcceptDrops(True)
         self.setFixedWidth(280)
         self.setMinimumHeight(92)
@@ -58,7 +59,7 @@ class StudentSheetDropZone(QFrame):
         self.title_label.setStyleSheet(
             f"border: none; font-weight: 700; color: {COLORS['text']}; font-size: 12px;"
         )
-        self.hint_label = QLabel("PDF / JPG / PNG を\nここにドロップ")
+        self.hint_label = QLabel("PDF / JPG / PNG を\n複数ドロップで一括保存")
         self.hint_label.setWordWrap(True)
         self.hint_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.hint_label.setStyleSheet(
@@ -67,20 +68,17 @@ class StudentSheetDropZone(QFrame):
         lay.addWidget(self.title_label)
         lay.addWidget(self.hint_label, 1)
 
-    def source_path(self) -> str | None:
-        return self._source_path
-
-    def set_source_path(self, path: str | None) -> None:
-        self._source_path = (path or "").strip() or None
-        if self._source_path:
-            self.hint_label.setText(Path(self._source_path).name)
+    def set_pending_count(self, count: int) -> None:
+        self._pending_count = max(0, int(count))
+        if self._pending_count:
+            self.hint_label.setText(f"作業フォルダに {self._pending_count} 件")
             self._apply_active_style()
         else:
-            self.hint_label.setText("PDF / JPG / PNG を\nここにドロップ")
+            self.hint_label.setText("PDF / JPG / PNG を\n複数ドロップで一括保存")
             self._apply_idle_style()
 
     def clear(self) -> None:
-        self.set_source_path(None)
+        self.set_pending_count(0)
 
     def _apply_idle_style(self) -> None:
         self.setStyleSheet(
@@ -103,7 +101,7 @@ class StudentSheetDropZone(QFrame):
             )
 
     def dragLeaveEvent(self, event) -> None:  # noqa: N802
-        if self._source_path:
+        if self._pending_count:
             self._apply_active_style()
         else:
             self._apply_idle_style()
@@ -113,13 +111,12 @@ class StudentSheetDropZone(QFrame):
         files = [p for p in paths if p and is_supported_input_path(p)]
         if not files:
             h.warn(self, "ドロップ", "PDF / JPG / PNG ファイルをドロップしてください。")
-            if self._source_path:
+            if self._pending_count:
                 self._apply_active_style()
             else:
                 self._apply_idle_style()
             return
-        self.set_source_path(files[0])
-        self.file_dropped.emit(files[0])
+        self.files_dropped.emit(files)
         event.acceptProposedAction()
 
 
@@ -150,19 +147,16 @@ class Step1Page(QWidget):
         student_col = QVBoxLayout()
         student_col.setSpacing(6)
         self.student_drop = StudentSheetDropZone()
-        self.student_drop.file_dropped.connect(self._on_student_sheet_dropped)
+        self.student_drop.files_dropped.connect(self._on_student_files_dropped)
         student_col.addWidget(self.student_drop)
-        self.copy_student_btn = h.button(
-            "生徒回答用紙のコピーを作業フォルダに作成",
-            self._on_copy_student_sheet_to_inbox,
-        )
-        self.copy_student_btn.setEnabled(False)
-        student_col.addWidget(self.copy_student_btn)
         student_col.addWidget(
             h.open_folder_button(self._on_open_inbox_folder, text="作業フォルダを開く")
         )
         student_col.addWidget(
             h.open_folder_button(self._on_open_model_source_folder, text="模範解答原稿フォルダを開く")
+        )
+        student_col.addWidget(
+            h.open_folder_button(self._on_open_test_storage_folder, text="テスト保存フォルダを開く")
         )
         header.addLayout(student_col, 0)
         root.addLayout(header)
@@ -233,41 +227,50 @@ class Step1Page(QWidget):
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
 
-    def _on_student_sheet_dropped(self, path: str) -> None:
-        self.copy_student_btn.setEnabled(True)
-        self._set_status(f"生徒回答用紙を読み込みました: {Path(path).name}")
-
-    def _on_copy_student_sheet_to_inbox(self) -> None:
+    def _on_student_files_dropped(self, paths: list[str]) -> None:
         if not self.app.require_active_test():
             return
-        source = self.student_drop.source_path()
-        if not source:
-            h.warn(self, "未選択", "先に生徒回答用紙をドロップしてください。")
-            return
-        try:
-            dest = copy_student_sheet_to_inbox(self.app.active_test_id, source)
-            inbox = test_inbox(self.app.active_test_id)
-            self._set_status(f"作業フォルダにコピーしました: {Path(dest).name}")
+        test_id = self.app.active_test_id
+        self._set_status(f"{len(paths)} 件を作業フォルダへ保存中…")
+
+        def task():
+            return copy_files_to_inbox(test_id, paths)
+
+        def done(result, err):
+            if err:
+                self._set_status("")
+                h.error(self, "保存失敗", str(err))
+                return
+            copied: list[str] = result
+            self.student_drop.set_pending_count(len(copied))
+            inbox = resolve_student_inbox(test_id)
+            self._set_status(f"作業フォルダに {len(copied)} 件保存しました")
             h.info(
                 self,
-                "コピー完了",
-                f"作業フォルダ（inbox）に保存しました:\n{dest}\n\n"
-                f"フォルダ: {inbox}",
+                "保存完了",
+                f"テスト専用作業フォルダ（inbox）に {len(copied)} 件保存しました。\n\n"
+                f"フォルダ:\n{inbox}",
             )
-        except Exception as e:
-            h.error(self, "コピー失敗", str(e))
+
+        h.run_in_thread(self, task, done)
 
     def _on_open_inbox_folder(self) -> None:
         if not self.app.require_active_test():
             return
-        folder = test_inbox(self.app.active_test_id)
-        folder.mkdir(parents=True, exist_ok=True)
+        folder = Path(resolve_student_inbox(self.app.active_test_id))
         h.open_in_file_manager(folder, parent=self)
 
     def _on_open_model_source_folder(self) -> None:
         if not self.app.require_active_test():
             return
         folder = test_model_source(self.app.active_test_id)
+        folder.mkdir(parents=True, exist_ok=True)
+        h.open_in_file_manager(folder, parent=self)
+
+    def _on_open_test_storage_folder(self) -> None:
+        if not self.app.require_active_test():
+            return
+        folder = test_dir(self.app.active_test_id)
         folder.mkdir(parents=True, exist_ok=True)
         h.open_in_file_manager(folder, parent=self)
 
@@ -343,7 +346,6 @@ class Step1Page(QWidget):
         if not self.app.require_active_test():
             return
         self.student_drop.clear()
-        self.copy_student_btn.setEnabled(False)
         self._field_rows = get_answer_fields(self.app.active_test_id)
         info = get_test_info(self.app.active_test_id)
         self.use_id_mark_check.setChecked(bool(info.get("useIdMark", True)))

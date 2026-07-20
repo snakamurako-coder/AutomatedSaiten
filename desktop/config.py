@@ -268,3 +268,29 @@ def test_grade_list_excel_path(test_id: str, test_name: str = "") -> Path:
         c for c in str(test_name or "").strip() if c not in '\\/:*?"<>|'
     ).strip() or "無題"
     return test_dir(test_id) / f"成績一覧_{safe}.xlsx"
+
+
+def is_path_under_test_storage(test_id: str, path: str | Path) -> bool:
+    """パスが当該テスト専用フォルダ配下かどうか。"""
+    try:
+        base = test_dir(test_id).resolve()
+        target = Path(path).resolve()
+        return target == base or base in target.parents
+    except OSError:
+        return False
+
+
+def require_path_under_test_storage(
+    test_id: str,
+    path: str | Path,
+    *,
+    label: str = "保存先",
+) -> Path:
+    """テスト専用フォルダ外への保存を拒否する。"""
+    resolved = Path(path).resolve()
+    if not is_path_under_test_storage(test_id, resolved):
+        raise ValueError(
+            f"{label}はこのテスト専用フォルダ内に保存してください:\n"
+            f"{test_dir(test_id).resolve()}"
+        )
+    return resolved

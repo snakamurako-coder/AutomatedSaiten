@@ -27,7 +27,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import load_config, test_results_excel_path, test_warped
+from config import load_config, test_dir, test_results_excel_path, test_warped
 from models.test_repo import (
     build_pending_rows_tsv,
     build_results_tsv,
@@ -39,7 +39,7 @@ from models.test_repo import (
     import_results_from_excel,
     normalize_file_name,
     reset_step3_data,
-    save_student_folder,
+    resolve_student_inbox,
     set_step3_failed_entry,
     upsert_result_texts,
 )
@@ -106,10 +106,14 @@ class Step3Page(QWidget):
         )
 
         folder_row = QHBoxLayout()
-        folder_row.addWidget(QLabel("解答フォルダ"))
+        folder_row.addWidget(QLabel("解答フォルダ（テスト専用）"))
         self.inbox_edit = QLineEdit()
+        self.inbox_edit.setReadOnly(True)
+        self.inbox_edit.setToolTip("各テストごとに inbox フォルダへ固定されます。外部フォルダは指定できません。")
         folder_row.addWidget(self.inbox_edit, 1)
-        folder_row.addWidget(h.button("参照…", self._pick_inbox))
+        folder_row.addWidget(
+            h.open_folder_button(self._on_open_inbox_folder, text="フォルダを開く")
+        )
         folder_row.addWidget(h.button("フォルダを再認識", self._scan_folder, variant="primary"))
         folder_row.addWidget(h.button("薄い字を検査", self._on_faint_precheck))
         root.addLayout(folder_row)
@@ -253,8 +257,7 @@ class Step3Page(QWidget):
         if not self.app.require_active_test():
             return
         test_id = self.app.active_test_id
-        info = get_test_info(test_id)
-        self.inbox_edit.setText(info.get("folderPath") or "")
+        self.inbox_edit.setText(resolve_student_inbox(test_id))
         self._fields = get_answer_fields(test_id)
 
         if test_id != self._loaded_test_id:
@@ -276,18 +279,20 @@ class Step3Page(QWidget):
         self.progress_label.setText("")
         self.tsv_view.clear()
 
-    def _pick_inbox(self) -> None:
-        path = QFileDialog.getExistingDirectory(self, "生徒解答フォルダを選択")
-        if path and self.app.require_active_test():
-            self.inbox_edit.setText(path)
-            save_student_folder(self.app.active_test_id, path)
-            self._scanned = False
-            self.status_label.setText("フォルダを変更しました。「フォルダを再認識」で一覧を更新してください。")
+    def _inbox_path(self) -> str:
+        if not self.app.active_test_id:
+            return ""
+        return resolve_student_inbox(self.app.active_test_id)
+
+    def _on_open_inbox_folder(self) -> None:
+        if not self.app.require_active_test():
+            return
+        h.open_in_file_manager(self._inbox_path(), parent=self)
 
     def _scan_folder(self) -> None:
         if not self.app.require_active_test():
             return
-        folder = self.inbox_edit.text().strip()
+        folder = self._inbox_path()
         if not folder:
             h.error(self, "エラー", "解答フォルダを指定してください。")
             return
@@ -609,7 +614,7 @@ class Step3Page(QWidget):
             h.warn(self, "一覧未表示", "先に「フォルダを再認識」でファイル一覧を表示してください。")
             return
 
-        folder = self.inbox_edit.text().strip()
+        folder = self._inbox_path()
         if not folder:
             h.error(self, "エラー", "解答フォルダを指定してください。")
             return
@@ -783,30 +788,19 @@ class Step3Page(QWidget):
         if not self.app.require_active_test():
             return
         test_id = self.app.active_test_id
-        default_path = str(test_results_excel_path(test_id))
-        path, _ = QFileDialog.getSaveFileName(
-            self,
-            "採点結果を Excel にエクスポート",
-            default_path,
-            "Excel (*.xlsx)",
-        )
-        if not path:
-            return
+        path = str(test_results_excel_path(test_id))
         try:
+            test_results_excel_path(test_id).parent.mkdir(parents=True, exist_ok=True)
             export_results_to_excel(test_id, path)
             self._last_excel_path = path
-            h.info(self, "エクスポート完了", f"保存しました:\n{path}")
+            h.info(self, "エクスポート完了", f"テスト専用フォルダに保存しました:\n{path}")
         except Exception as e:
             h.error(self, "エラー", str(e))
 
     def _on_open_excel_folder(self) -> None:
-        if self._last_excel_path:
-            h.open_in_file_manager(self._last_excel_path, parent=self)
-            return
         if not self.app.require_active_test():
             return
-        # 個票フォルダの親（テスト配下）＝ Excel 既定保存先と同じ階層
-        h.open_in_file_manager(test_results_excel_path(self.app.active_test_id), parent=self)
+        h.open_in_file_manager(test_dir(self.app.active_test_id), parent=self)
 
     def _on_import_excel(self) -> None:
         if not self.app.require_active_test():
@@ -825,27 +819,10 @@ class Step3Page(QWidget):
         if res["total"] == 0:
             h.warn(self, "インポート", "取り込める行がありませんでした。")
             return
-        folder = self.inbox_edit.text().strip()
-        if not folder:
-            info = get_test_info(test_id)
-            folder = (info.get("folderPath") or "").strip()
-            if folder:
-                self.inbox_edit.setText(folder)
-        if folder:
-            self._scan_folder()
-        else:
-            inv = build_file_inventory(test_id, "")
-            self._fields = get_answer_fields(test_id)
-            self._inventory_rows = inv["rows"]
-            st = inv["stats"]
-            self.queue_stats.setText(
-                f"Excel 取込 {res['total']} 件 — 合計 {st['total']} 件 "
-                f"（新規 {res['inserted']} / 更新 {res['updated']}）"
-            )
-            self._rebuild_table(self._inventory_rows)
-            self._scanned = True
-            n = sum(1 for i in range(self.table.rowCount()) if self._row_checked(i))
-            self.status_label.setText(f"Excel から {res['total']} 件を復元しました（{n} 件を選択中）。")
+        self.inbox_edit.setText(resolve_student_inbox(test_id))
+        self._scan_folder()
+        n = sum(1 for i in range(self.table.rowCount()) if self._row_checked(i))
+        self.status_label.setText(f"Excel から {res['total']} 件を復元しました（{n} 件を選択中）。")
         self.log.appendPlainText(
             f"--- Excel インポート: 新規 {res['inserted']} / 更新 {res['updated']} "
             f"/ スキップ {res['skipped']} ---"

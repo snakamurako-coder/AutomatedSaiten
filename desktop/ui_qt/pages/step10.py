@@ -36,7 +36,7 @@ from models.output_repo import (
     save_output_slots,
 )
 from models.test_repo import get_test_info
-from config import test_feedback, test_grade_list_excel_path
+from config import require_path_under_test_storage, test_feedback, test_grade_list_excel_path
 from services.feedback_exporter import (
     is_pdf_export_format,
     rasterize_feedback_preview,
@@ -853,6 +853,11 @@ class Step10Page(QWidget):
             return
         if not path.lower().endswith(".xlsx"):
             path += ".xlsx"
+        try:
+            require_path_under_test_storage(test_id, path, label="Excel の保存先")
+        except ValueError as e:
+            h.error(self, "保存先エラー", str(e))
+            return
         self.excel_btn.setEnabled(False)
         self.excel_status.setText("Excel を生成中…")
 

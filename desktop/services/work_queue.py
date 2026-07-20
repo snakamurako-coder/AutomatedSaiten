@@ -6,8 +6,8 @@ import re
 from pathlib import Path
 from typing import Any
 
-from config import test_archive, test_inbox, test_warped
-from models.test_repo import get_processed_file_names, normalize_file_name
+from config import is_path_under_test_storage, test_archive, test_inbox, test_warped
+from models.test_repo import get_processed_file_names, normalize_file_name, resolve_student_inbox
 from services.image_loader import ALL_INPUT_EXTENSIONS, PDF_EXTENSIONS
 
 
@@ -62,9 +62,15 @@ def find_warped_for_original(test_id: str, original_name: str) -> str | None:
     return None
 
 
+def _resolve_inbox(test_id: str, inbox_path: str) -> Path:
+    if inbox_path and is_path_under_test_storage(test_id, inbox_path):
+        return Path(inbox_path)
+    return Path(resolve_student_inbox(test_id))
+
+
 def build_ocr_work_queue(test_id: str, inbox_path: str) -> dict[str, Any]:
     processed = get_processed_file_names(test_id)
-    inbox = Path(inbox_path) if inbox_path else test_inbox(test_id)
+    inbox = _resolve_inbox(test_id, inbox_path)
     archive = test_archive(test_id)
 
     items_by_name: dict[str, dict[str, Any]] = {}
@@ -127,7 +133,7 @@ def build_file_inventory(test_id: str, inbox_path: str) -> dict[str, Any]:
     """フォルダ・DB・失敗記録を統合したファイル一覧（③ UI 用）。"""
     from models.test_repo import get_result_preview, get_step3_failed, get_step3_faint
 
-    inbox = Path(inbox_path) if inbox_path else test_inbox(test_id)
+    inbox = _resolve_inbox(test_id, inbox_path)
     archive = test_archive(test_id)
     results = {normalize_file_name(r["fileName"]): r for r in get_result_preview(test_id)}
     failed_map = get_step3_failed(test_id)

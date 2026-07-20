@@ -12,7 +12,10 @@ from typing import Any, Callable
 
 from config import (
     ensure_data_dirs,
+    is_path_under_test_storage,
+    require_path_under_test_storage,
     test_archive,
+    test_dir,
     test_feedback,
     test_inbox,
     test_model,
@@ -183,6 +186,7 @@ def get_test_info(test_id: str | None = None) -> dict[str, Any]:
         info = {r["key"]: r["value"] for r in info_rows}
         fields = get_answer_fields_conn(conn, tid)
         points = get_points_conn(conn, tid)
+    inbox_path = resolve_student_inbox(tid)
     return {
         "testSsId": tid,
         "testName": test["test_name"],
@@ -190,7 +194,7 @@ def get_test_info(test_id: str | None = None) -> dict[str, Any]:
         "datetime": test["datetime"],
         "status": test["status"],
         "currentStep": test["current_step"],
-        "folderPath": test["student_folder_path"],
+        "folderPath": inbox_path,
         "modelAnswerPath": test["model_answer_path"],
         "refWidth": test["ref_width"],
         "refHeight": test["ref_height"],
@@ -249,7 +253,11 @@ def touch_progress(test_id: str, step: int, status: str | None = None) -> None:
 
 
 def save_student_folder(test_id: str, folder_path: str) -> None:
-    folder_path = str(folder_path)
+    folder_path = str(Path(folder_path).resolve())
+    if not is_path_under_test_storage(test_id, folder_path):
+        raise ValueError(
+            f"生徒解答フォルダはテスト専用フォルダ内である必要があります: {test_dir(test_id)}"
+        )
     with connect() as conn:
         conn.execute(
             "UPDATE tests SET student_folder_path = ? WHERE id = ?",
@@ -257,6 +265,64 @@ def save_student_folder(test_id: str, folder_path: str) -> None:
         )
         _set_test_info(conn, test_id, "生徒解答フォルダID", folder_path)
         conn.commit()
+
+
+def resolve_student_inbox(test_id: str) -> str:
+    """テスト専用 inbox を返す（他テストや外部フォルダ指定は inbox に正規化）。"""
+    init_db()
+    _ensure_test_dirs(test_id)
+    canonical = str(test_inbox(test_id).resolve())
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT student_folder_path FROM tests WHERE id = ?", (test_id,)
+        ).fetchone()
+        stored = (row["student_folder_path"] or "").strip() if row else ""
+    if (
+        not stored
+        or not is_path_under_test_storage(test_id, stored)
+        or Path(stored).resolve() != Path(canonical)
+    ):
+        save_student_folder(test_id, canonical)
+        return canonical
+    return str(Path(stored).resolve())
+
+
+def _unique_file_in_dir(dest_dir: Path, filename: str) -> Path:
+    dest = dest_dir / filename
+    if not dest.exists():
+        return dest
+    stem = Path(filename).stem
+    ext = Path(filename).suffix
+    n = 1
+    while True:
+        candidate = dest_dir / f"{stem}_{n}{ext}"
+        if not candidate.exists():
+            return candidate
+        n += 1
+
+
+def copy_files_to_inbox(test_id: str, source_paths: list[str | Path]) -> list[str]:
+    """複数ファイルをテスト専用 inbox にコピーする。"""
+    _ensure_test_dirs(test_id)
+    inbox = test_inbox(test_id)
+    copied: list[str] = []
+    for raw in source_paths:
+        source = Path(raw)
+        if not source.is_file():
+            continue
+        dest = _unique_file_in_dir(inbox, source.name)
+        shutil.copy2(source, dest)
+        copied.append(str(dest.resolve()))
+    if not copied:
+        raise ValueError("コピーできるファイルがありません。")
+    save_student_folder(test_id, str(inbox.resolve()))
+    return copied
+
+
+def copy_student_sheet_to_inbox(test_id: str, source_path: str | Path) -> str:
+    """生徒回答用紙を inbox（作業フォルダ）にコピーする。"""
+    copied = copy_files_to_inbox(test_id, [source_path])
+    return copied[0]
 
 
 def save_model_answer_image(test_id: str, warped_bgr: Any) -> str:
@@ -298,24 +364,6 @@ def archive_model_answer_source(test_id: str, source_path: str | Path) -> str:
     fname = f"模範解答_原稿_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
     dest = dest_dir / fname
     shutil.copy2(source, dest)
-    return str(dest.resolve())
-
-
-def copy_student_sheet_to_inbox(test_id: str, source_path: str | Path) -> str:
-    """生徒回答用紙を inbox（作業フォルダ）にコピーする。"""
-    source = Path(source_path)
-    if not source.is_file():
-        raise ValueError(f"ファイルが見つかりません: {source}")
-    _ensure_test_dirs(test_id)
-    inbox = test_inbox(test_id)
-    inbox.mkdir(parents=True, exist_ok=True)
-    ext = source.suffix.lower() or ".jpg"
-    dest = inbox / f"生徒回答用紙{ext}"
-    if dest.exists():
-        dest = inbox / f"生徒回答用紙_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
-    shutil.copy2(source, dest)
-    resolved_inbox = str(inbox.resolve())
-    save_student_folder(test_id, resolved_inbox)
     return str(dest.resolve())
 
 
@@ -869,10 +917,11 @@ def export_results_to_excel(test_id: str, output_path: str) -> str:
     """採点結果を GAS 互換のワイド形式 Excel にエクスポート。"""
     import pandas as pd
 
+    path = str(require_path_under_test_storage(test_id, output_path, label="Excel の保存先"))
     headers, rows = build_result_export_rows(test_id)
     df = pd.DataFrame(rows, columns=headers)
-    df.to_excel(output_path, index=False, sheet_name="採点結果")
-    return output_path
+    df.to_excel(path, index=False, sheet_name="採点結果")
+    return path
 
 
 def escape_tsv_cell(value: Any) -> str:

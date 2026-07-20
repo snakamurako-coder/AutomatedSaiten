@@ -15,7 +15,7 @@ from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.page import PageMargins
 
 from models.domain_repo import get_domain_column_labels, get_domain_max_score
-from models.excel_export_prefs import load_excel_export_prefs
+from config import require_path_under_test_storage
 from models.roster_repo import (
     get_roster_absent_state,
     get_roster_rows,
@@ -708,7 +708,7 @@ def export_grade_excel(
     )
     _sheet_class_list(wb, students, meta)
 
-    path = Path(output_path)
+    path = require_path_under_test_storage(test_id, output_path, label="Excel の保存先")
     path.parent.mkdir(parents=True, exist_ok=True)
     wb.save(path)
     return path
