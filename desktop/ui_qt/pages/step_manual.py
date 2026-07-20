@@ -89,6 +89,7 @@ class StepManualPage(QWidget):
         self._tri_filter_btns: dict[str, QPushButton] = {}
         self._tri_filter_key = "all"
         self._sort_mode = "file"
+        self._filter_snapshot_ids: set[int] | None = None
         self._print_mark_mode = False  # False=文字情報 / True=個票と同じ印字
         self._feedback_style: dict[str, Any] = get_feedback_style()
         self._show_all_pages = False  # False=指定件数表示 / True=全件表示
@@ -137,6 +138,8 @@ class StepManualPage(QWidget):
         self.sort_combo = QComboBox()
         self.sort_combo.addItem("ファイル名", "file")
         self.sort_combo.addItem("ID", "id")
+        self.sort_combo.addItem("判定－ファイル名", "judgment_file")
+        self.sort_combo.addItem("判定－ID", "judgment_id")
         self.sort_combo.addItem("自動採点：回答の集約順（ファイル名）", "agg_file")
         self.sort_combo.addItem("自動採点：回答の集約順（ID）", "agg_id")
         self.sort_combo.setMinimumWidth(200)
@@ -154,7 +157,6 @@ class StepManualPage(QWidget):
         self.status_label.setWordWrap(False)
         info_row.addWidget(self.selection_label, 0)
         info_row.addWidget(self.status_label, 0)
-        info_row.addWidget(self._build_page_nav_row(), 0)
         info_row.addWidget(self._build_selection_mode_switch(), 0)
         info_row.addStretch()
         left_hdr.addLayout(info_row)
@@ -295,25 +297,25 @@ class StepManualPage(QWidget):
         lay.addWidget(self._page_lbl_all)
         lay.addWidget(self.page_mode_switch)
         lay.addWidget(self._page_lbl_chunk)
-        lay.addStretch()
-        self._update_page_mode_labels()
-        wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        return wrap
 
-    def _build_page_nav_row(self) -> QWidget:
         self._page_nav_wrap = QWidget()
-        lay = QHBoxLayout(self._page_nav_wrap)
-        lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(6)
-        lay.addWidget(self.page_size_spin)
-        lay.addWidget(self.page_prev_btn)
-        lay.addWidget(self.page_info_label)
-        lay.addWidget(self.page_next_btn)
-        self._update_page_controls_enabled()
+        nav_lay = QHBoxLayout(self._page_nav_wrap)
+        nav_lay.setContentsMargins(0, 0, 0, 0)
+        nav_lay.setSpacing(6)
+        nav_lay.addWidget(self.page_size_spin)
+        nav_lay.addWidget(self.page_prev_btn)
+        nav_lay.addWidget(self.page_info_label)
+        nav_lay.addWidget(self.page_next_btn)
         self._page_nav_wrap.setSizePolicy(
             QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
         )
-        return self._page_nav_wrap
+        lay.addWidget(self._page_nav_wrap)
+
+        lay.addStretch()
+        self._update_page_mode_labels()
+        self._update_page_controls_enabled()
+        wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        return wrap
 
     def _on_page_mode_toggled(self, checked: bool) -> None:
         # checked=True → 指定件数表示, False → 全件表示
@@ -701,6 +703,7 @@ class StepManualPage(QWidget):
     def _on_field_changed(self, _index: int) -> None:
         self._selected_ids.clear()
         self._page_index = 0
+        self._filter_snapshot_ids = None
         self._rebuild_triangle_filters()
         self._update_judge_buttons()
         self._load_crops_async()
@@ -713,6 +716,7 @@ class StepManualPage(QWidget):
 
     def _on_filter_toggled(self) -> None:
         self._page_index = 0
+        self._refresh_filter_snapshot()
         self._render_grid()
 
     def _rebuild_triangle_filters(self) -> None:
@@ -750,6 +754,9 @@ class StepManualPage(QWidget):
                     all_btn.setChecked(True)
                     all_btn.blockSignals(False)
                     self._tri_filter_key = "all"
+            self._page_index = 0
+            self._refresh_filter_snapshot()
+            self._render_grid()
             return
         self._tri_filter_key = key
         for k, btn in self._tri_filter_btns.items():
@@ -757,6 +764,8 @@ class StepManualPage(QWidget):
                 btn.blockSignals(True)
                 btn.setChecked(False)
                 btn.blockSignals(False)
+        self._page_index = 0
+        self._refresh_filter_snapshot()
         self._render_grid()
 
     def _update_judge_buttons(self) -> None:
@@ -842,6 +851,7 @@ class StepManualPage(QWidget):
                     }
                 )
             self._sort_items()
+            self._refresh_filter_snapshot()
             self._render_grid()
             self._update_status_summary()
 
@@ -1063,6 +1073,21 @@ class StepManualPage(QWidget):
                 return (rank, sec, str(row.get("fileName") or "").lower())
 
             self._items.sort(key=key_fn)
+        elif mode == "judgment_file":
+            self._items.sort(
+                key=lambda i: (
+                    *self._judgment_sort_rank(i),
+                    str((i.get("row") or {}).get("fileName") or "").lower(),
+                )
+            )
+        elif mode == "judgment_id":
+            self._items.sort(
+                key=lambda i: (
+                    *self._judgment_sort_rank(i),
+                    str((i.get("row") or {}).get("studentId") or "").strip().lower(),
+                    str((i.get("row") or {}).get("fileName") or "").lower(),
+                )
+            )
         elif mode == "id":
             self._items.sort(
                 key=lambda i: (
@@ -1096,6 +1121,43 @@ class StepManualPage(QWidget):
             tags.append("無回答")
         return tags
 
+    def _filters_active(self) -> bool:
+        if any(btn.isChecked() for btn in self._filter_btns.values()):
+            return True
+        return (
+            self._tri_filter_key != "all"
+            and self._field_max_score() > 1
+            and bool(self._tri_filter_btns)
+        )
+
+    def _refresh_filter_snapshot(self) -> None:
+        """フィルタ操作時のみ表示対象を確定（判定変更では再計算しない）。"""
+        if not self._filters_active():
+            self._filter_snapshot_ids = None
+            return
+        self._filter_snapshot_ids = {
+            int(i.get("result_id") or 0)
+            for i in self._items
+            if self._item_passes_filter(i) and int(i.get("result_id") or 0)
+        }
+
+    def _judgment_sort_rank(self, item: dict[str, Any]) -> tuple[int, int]:
+        """○ → △(部分点降順) → × → ? → 未採点。"""
+        j = normalize_judgment(item.get("judgment"))
+        if j == "○":
+            return 0, 0
+        if j == "△":
+            try:
+                partial = -int(float(item.get("score") or 0))
+            except (TypeError, ValueError):
+                partial = 0
+            return 1, partial
+        if j == "×":
+            return 2, 0
+        if j == PENDING_JUDGMENT:
+            return 3, 0
+        return 4, 0
+
     def _item_passes_filter(self, item: dict[str, Any]) -> bool:
         """すべて OFF＝全件表示。1つでも ON なら、ON のタグに該当するものだけ（OR）。"""
         active = {k for k, btn in self._filter_btns.items() if btn.isChecked()}
@@ -1115,7 +1177,13 @@ class StepManualPage(QWidget):
         return True
 
     def _filtered_items(self) -> list[dict[str, Any]]:
-        return [i for i in self._items if self._item_passes_filter(i)]
+        if self._filter_snapshot_ids is None:
+            return list(self._items)
+        return [
+            i
+            for i in self._items
+            if int(i.get("result_id") or 0) in self._filter_snapshot_ids
+        ]
 
     def _current_page_items(self) -> list[dict[str, Any]]:
         """全件表示ならフィルタ後すべて、指定件数表示なら現在ページのみ。"""
@@ -1207,6 +1275,8 @@ class StepManualPage(QWidget):
             if item.get("result_id") in id_set:
                 item["judgment"] = nj
                 item["score"] = score
+        if self._sort_mode in ("judgment_file", "judgment_id"):
+            self._sort_items()
         self._render_grid()
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
