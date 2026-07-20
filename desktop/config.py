@@ -57,7 +57,7 @@ DEFAULT_CONFIG: dict = {
     "excel_export_rank_overall_limit": 48,
     "excel_export_rank_class_limit": 16,
     "faint_check_enabled": True,
-    "faint_min_weber_contrast": 0.4,
+    "faint_min_weber_contrast": 0.14,
     "faint_gamma_default": 2.5,
     # 目視・強調ダイアログのユーザー定義プリセット
     # [{name, contrast, clahe, bg_whiten, gamma}]  ※gamma は ×10（25 = γ2.5）
@@ -101,16 +101,6 @@ def default_field_ocr_lang(cfg: dict | None = None) -> str:
 BUILTIN_ENHANCE_PRESETS: list[dict] = [
     {"name": "生画像", "contrast": 100, "clahe": 0, "bg_whiten": 0, "gamma": 10, "builtin": True},
     {"name": "ガンマ強調", "contrast": 100, "clahe": 0, "bg_whiten": 0, "gamma": 25, "builtin": True},
-    {"name": "薄い字", "contrast": 145, "clahe": 30, "bg_whiten": 0, "gamma": 10, "builtin": True},
-    {"name": "地色除去", "contrast": 120, "clahe": 15, "bg_whiten": 70, "gamma": 10, "builtin": True},
-    {
-        "name": "地色＋薄い字",
-        "contrast": 140,
-        "clahe": 25,
-        "bg_whiten": 55,
-        "gamma": 10,
-        "builtin": True,
-    },
 ]
 
 

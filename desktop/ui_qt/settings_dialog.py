@@ -216,7 +216,7 @@ class SettingsDialog(QDialog):
         self.faint_weber.setRange(0.0, 1.0)
         self.faint_weber.setDecimals(2)
         self.faint_weber.setSingleStep(0.05)
-        self.faint_weber.setValue(float(cfg.get("faint_min_weber_contrast", 0.4)))
+        self.faint_weber.setValue(float(cfg.get("faint_min_weber_contrast", 0.14)))
         self.faint_weber.setToolTip(
             "Weber Contrast C = (μ_bg − μ_text) / μ_bg。"
             "この値未満なら薄い疑い（0 に近いほど薄い、1 に近いほど濃い）"

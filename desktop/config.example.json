@@ -11,7 +11,7 @@
   "stylus_palm_rejection": true,
   "stylus_eraser_mode": "pixel",
   "faint_check_enabled": true,
-  "faint_min_weber_contrast": 0.4,
+  "faint_min_weber_contrast": 0.14,
   "faint_gamma_default": 2.5,
   "enhance_presets": [],
   "floating_palette": {
