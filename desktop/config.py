@@ -37,6 +37,7 @@ DEFAULT_CONFIG: dict = {
     "openai_api_key": "",
     "openai_ocr_model": "gpt-4o-mini",
     "ocr_engine": "openai",
+    "default_field_ocr_lang": "en",
     "default_orientation": "landscape",
     # ⓪ 起動時: auto=前回テストを読み出す / blank=未選択
     "startup_test_load": "auto",
@@ -88,6 +89,12 @@ def faint_thresholds_from_config(cfg: dict | None = None) -> dict[str, float | b
             c.get("faint_min_bg_delta", DEFAULT_CONFIG["faint_min_bg_delta"])
         ),
     }
+
+
+def default_field_ocr_lang(cfg: dict | None = None) -> str:
+    """①記述欄設定で新規欄に付与する OCR 言語（en / ja）。"""
+    lang = str((cfg if cfg is not None else load_config()).get("default_field_ocr_lang") or "en")
+    return "ja" if lang.lower() == "ja" else "en"
 
 
 # 内蔵プリセット（スライダー整数: contrast 100–220, clahe 0–80, bg_whiten 0–100）

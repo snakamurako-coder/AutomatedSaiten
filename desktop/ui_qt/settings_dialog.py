@@ -25,7 +25,7 @@ from PySide6.QtWidgets import (
     QDoubleSpinBox,
 )
 
-from config import CONFIG_PATH, load_config, save_config
+from config import CONFIG_PATH, default_field_ocr_lang, load_config, save_config
 from ui_qt.speech.speech_prefs import (
     DEFAULT_SPEECH_MODE,
     SPEECH_MODE_APP,
@@ -136,6 +136,22 @@ class SettingsDialog(QDialog):
         engine_row.addWidget(self.engine_openai)
         engine_row.addWidget(self.engine_vision)
         ocr_form.addRow("OCR エンジン", engine_row)
+
+        field_lang_row = QHBoxLayout()
+        self.field_ocr_en = QRadioButton("英語")
+        self.field_ocr_ja = QRadioButton("日本語")
+        if default_field_ocr_lang(cfg) == "ja":
+            self.field_ocr_ja.setChecked(True)
+        else:
+            self.field_ocr_en.setChecked(True)
+        field_lang_row.addWidget(self.field_ocr_en)
+        field_lang_row.addWidget(self.field_ocr_ja)
+        field_lang_row.addStretch()
+        ocr_form.addRow("記述欄のデフォルト言語", field_lang_row)
+        ocr_form.addRow(
+            "",
+            h.caption_label("① 回答欄設定で新規記述欄を追加するときの OCR 言語です。"),
+        )
         lay.addLayout(ocr_form)
 
         lay.addWidget(h.caption_label("API キー"))
@@ -520,6 +536,7 @@ class SettingsDialog(QDialog):
             "vision_api_key": self.vision_edit.text().strip(),
             "openai_api_key": self.openai_edit.text().strip(),
             "ocr_engine": "vision" if self.engine_vision.isChecked() else "openai",
+            "default_field_ocr_lang": "ja" if self.field_ocr_ja.isChecked() else "en",
             "default_orientation": self.orientation_combo.currentText(),
             "startup_test_load": "blank" if self.startup_test_blank.isChecked() else "auto",
             "gemini_api_key": self.gemini_edit.text().strip(),

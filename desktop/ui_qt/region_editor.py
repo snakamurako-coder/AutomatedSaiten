@@ -63,6 +63,8 @@ class _EditorCanvas(QWidget):
         self.replace_same_label = False
         self.click_detect_mode = False
         self.detect_threshold = 128
+        self.require_pending_label_for_detect = False
+        self.default_ocr_lang = "en"
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
@@ -238,7 +240,10 @@ class _EditorCanvas(QWidget):
             self.update()
             self.changed.emit()
             return
-        if self.click_detect_mode and not self.pending_label:
+        if self.click_detect_mode:
+            if self.require_pending_label_for_detect and not self.pending_label:
+                self.status.emit("先に欄種別を選んでください")
+                return
             self._try_detect_region_at(px, py)
             return
         self.selected_idx = -1
@@ -272,7 +277,7 @@ class _EditorCanvas(QWidget):
             self.status.emit(str(e))
             return
         self._add_region(float(x), float(y), float(w), float(h))
-        self.status.emit(f"記述欄を検出しました（{w}×{h}）")
+        self.status.emit(f"欄を検出しました（{w}×{h}）")
 
     def mouseMoveEvent(self, event) -> None:  # noqa: N802
         px, py = self._to_image(event.position())
@@ -334,8 +339,11 @@ class _EditorCanvas(QWidget):
             sx, sy = self._drag["start_x"], self._drag["start_y"]
             w = abs(px - sx)
             h = abs(py - sy)
-            if w <= 4 and h <= 4 and self.click_detect_mode and not self.pending_label:
-                self._try_detect_region_at(sx, sy)
+            if w <= 4 and h <= 4 and self.click_detect_mode:
+                if self.require_pending_label_for_detect and not self.pending_label:
+                    self.status.emit("先に欄種別を選んでください")
+                else:
+                    self._try_detect_region_at(sx, sy)
             elif w > self.MIN_SIZE and h > self.MIN_SIZE:
                 self._add_region(min(px, sx), min(py, sy), w, h)
         else:
@@ -359,7 +367,7 @@ class _EditorCanvas(QWidget):
                 "w": w,
                 "h": h,
                 "order": len(self.regions),
-                "ocrLang": "en",
+                "ocrLang": "ja" if self.default_ocr_lang == "ja" else "en",
             }
         )
         for i, r in enumerate(self.regions):
@@ -499,8 +507,14 @@ class AnswerRegionEditor(QScrollArea):
         self._canvas.click_detect_mode = enabled
         self._canvas.update()
 
+    def set_require_pending_label_for_detect(self, required: bool) -> None:
+        self._canvas.require_pending_label_for_detect = bool(required)
+
     def set_detect_threshold(self, thresh: int) -> None:
         self._canvas.detect_threshold = max(0, min(255, int(thresh)))
+
+    def set_default_ocr_lang(self, lang: str) -> None:
+        self._canvas.default_ocr_lang = "ja" if str(lang or "en").lower() == "ja" else "en"
 
     def clear_all_regions(self) -> None:
         self._canvas.regions = []

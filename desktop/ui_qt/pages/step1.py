@@ -367,7 +367,7 @@ class Step1Page(QWidget):
             self._field_rows = self.editor.get_regions()
             hh, ww = warped.shape[:2]
             self._set_status(
-                f"模範解答を読み込みました（{ww}×{hh}）— 原稿も保存済み — 画像上をドラッグして記述欄を追加"
+                f"模範解答を読み込みました（{ww}×{hh}）— 原稿も保存済み — 記述欄を追加してください"
             )
             self._refresh_field_panel()
 
@@ -417,7 +417,7 @@ class Step1Page(QWidget):
         if not self._field_rows:
             self.field_panel_layout.addWidget(
                 h.muted_label(
-                    "「クリックで欄検出」または\n画像上をドラッグして\n記述欄を追加"
+                    "「自動認識」または\n「手動設定」で\n記述欄を追加"
                 )
             )
             self.field_panel_layout.addStretch()
