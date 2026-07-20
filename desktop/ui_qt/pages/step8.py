@@ -702,13 +702,13 @@ class Step8Page(QWidget):
         try:
             save_ocr_replacements(self.app.active_test_id, fid, self._ocr_replace_rows)
             h.info(self, "保存完了", "OCR置換ルールを保存しました。")
-            except Exception as e:
+        except Exception as e:
             h.error(self, "エラー", str(e))
 
     def _on_apply_ocr(self) -> None:
         fid = self._selected_field_id()
         if not self.app.require_active_test() or not fid:
-                return
+            return
         try:
             res = apply_text_replacements_to_field(
                 self.app.active_test_id, fid, self._ocr_replace_rows
@@ -875,7 +875,7 @@ class Step8Page(QWidget):
             ans = row.get("answer_text", "")
             if canonical and ans == canonical:
                 deemed_item = make_readonly_item("—", center=True)
-        else:
+            else:
                 deemed_item = make_toggle_item(self._is_deemed(fid, ans))
             incorrect_item = make_toggle_item(self._is_incorrect(fid, ans))
             count_item = make_readonly_item(str(row.get("count", 0)), center=True)
