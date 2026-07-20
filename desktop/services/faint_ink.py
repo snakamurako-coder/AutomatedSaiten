@@ -10,7 +10,7 @@ import numpy as np
 from config import faint_thresholds_from_config
 from services.image_warp import crop_region
 
-_EDGE_TRIM_PX = 4
+_EDGE_TRIM_PX = 8
 
 
 def _to_gray(crop_bgr: np.ndarray) -> np.ndarray:
