@@ -982,10 +982,8 @@ class PaletteController:
         if stack is not None and pages is not None:
             page = stack.currentWidget()
             step1 = pages.get(1)
-            if page is step1:
-                delete_btn = getattr(step1, "delete_btn", None)
-                if delete_btn is not None and delete_btn.isEnabled() and delete_btn.isVisible():
-                    delete_btn.click()
+            if page is step1 and hasattr(step1, "_on_delete_selected"):
+                step1._on_delete_selected()
                 return
         if self._tool not in (TOOL_TEXT, TOOL_PHRASE):
             return

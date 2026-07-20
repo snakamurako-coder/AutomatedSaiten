@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -193,7 +193,9 @@ class Step1Page(QWidget):
         toolbar.addWidget(h.button("画像を開く", self._on_open_file))
         toolbar.addWidget(h.button("記述欄を保存", self._on_save_fields, variant="primary"))
         self.delete_btn = h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft")
-        self.delete_btn.setShortcut(QKeySequence.StandardKey.Delete)
+        self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        self.delete_btn.setAutoDefault(False)
+        self.delete_btn.setDefault(False)
         toolbar.addWidget(self.delete_btn)
         toolbar.addWidget(h.button("再読込", self.refresh))
         toolbar.addStretch()
@@ -237,6 +239,11 @@ class Step1Page(QWidget):
 
         self.status_label = h.caption_label("PDF / JPG / PNG をドロップするか「画像を開く」で開始")
         root.addWidget(self.status_label)
+
+        # Del → ボタンと同じ _on_delete_selected（click() はフォーカス移動のみになるため直接呼ぶ）
+        self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self)
+        self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self._delete_shortcut.activated.connect(self._on_delete_selected)
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
