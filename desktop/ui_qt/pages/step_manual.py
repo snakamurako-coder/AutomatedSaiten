@@ -1092,17 +1092,34 @@ class StepManualPage(QWidget):
                 return False
         return True
 
+    def _filtered_items(self) -> list[dict[str, Any]]:
+        return [i for i in self._items if self._item_passes_filter(i)]
+
+    def _current_page_items(self) -> list[dict[str, Any]]:
+        """全件表示ならフィルタ後すべて、指定件数表示なら現在ページのみ。"""
+        visible = self._filtered_items()
+        if self._show_all_pages:
+            return visible
+        size = max(1, self._page_size)
+        total_vis = len(visible)
+        pages = max(1, (total_vis + size - 1) // size) if total_vis else 1
+        if self._page_index >= pages:
+            self._page_index = pages - 1
+        if self._page_index < 0:
+            self._page_index = 0
+        start = self._page_index * size
+        return visible[start : start + size]
+
     def _clear_selection(self) -> None:
         self._selected_ids.clear()
         self._render_grid()
 
     def _select_ungraded(self) -> None:
-        """フィルタ後の一覧のうち、判定なし（未採点）をすべて選択する。"""
+        """表示中の画像のうち、判定なし（未採点）を一括選択する。"""
         ids = {
             int(i.get("result_id") or 0)
-            for i in self._items
-            if self._item_passes_filter(i)
-            and not normalize_judgment(i.get("judgment"))
+            for i in self._current_page_items()
+            if not normalize_judgment(i.get("judgment"))
             and int(i.get("result_id") or 0)
         }
         if not ids:
@@ -1211,20 +1228,14 @@ class StepManualPage(QWidget):
     def _render_grid(self) -> None:
         self._clear_grid()
         self._ink_stacks = []
-        visible = [i for i in self._items if self._item_passes_filter(i)]
+        visible = self._filtered_items()
         total_vis = len(visible)
+        page_items = self._current_page_items()
         if self._show_all_pages:
-            page_items = visible
             self.page_info_label.setText("")
         else:
             size = max(1, self._page_size)
             pages = max(1, (total_vis + size - 1) // size) if total_vis else 1
-            if self._page_index >= pages:
-                self._page_index = pages - 1
-            if self._page_index < 0:
-                self._page_index = 0
-            start = self._page_index * size
-            page_items = visible[start : start + size]
             self.page_info_label.setText(
                 f"{self._page_index + 1} / {pages} ページ（全 {total_vis} 件）"
             )
