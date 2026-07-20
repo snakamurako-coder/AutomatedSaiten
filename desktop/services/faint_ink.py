@@ -179,6 +179,13 @@ def enhance_bgr(
         clahe = cv2.createCLAHE(clipLimit=float(clahe_clip), tileGridSize=(8, 8))
         l2 = clahe.apply(l)
         out = cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2BGR)
+    elif clahe_clip < -0.05:
+        strength = min(1.0, abs(float(clahe_clip)) / 5.0)
+        lab = cv2.cvtColor(out, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l_blur = cv2.GaussianBlur(l, (0, 0), sigmaX=21, sigmaY=21)
+        l2 = cv2.addWeighted(l, 1.0 - strength, l_blur, strength, 0)
+        out = cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2BGR)
     return out
 
 

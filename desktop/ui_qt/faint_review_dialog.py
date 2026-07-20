@@ -177,7 +177,7 @@ class FaintReviewDialog(QDialog):
         controls.addWidget(self._bg_whiten)
         self._contrast = SliderSpinControls(
             label="コントラスト",
-            min_val=100,
+            min_val=50,
             max_val=220,
             value=100,
             label_width=72,
@@ -187,7 +187,7 @@ class FaintReviewDialog(QDialog):
         controls.addWidget(self._contrast)
         self._clahe = SliderSpinControls(
             label="CLAHE",
-            min_val=0,
+            min_val=-50,
             max_val=80,
             value=0,
             label_width=72,

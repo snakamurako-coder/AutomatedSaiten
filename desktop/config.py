@@ -97,7 +97,7 @@ def default_field_ocr_lang(cfg: dict | None = None) -> str:
     return "ja" if lang.lower() == "ja" else "en"
 
 
-# 内蔵プリセット（スライダー整数: contrast 100–220, clahe 0–80, bg_whiten 0–100）
+# 内蔵プリセット（スライダー整数: contrast 50–220, clahe -50–80, bg_whiten 0–100）
 BUILTIN_ENHANCE_PRESETS: list[dict] = [
     {"name": "生画像", "contrast": 100, "clahe": 0, "bg_whiten": 0, "builtin": True},
     {"name": "薄い字", "contrast": 145, "clahe": 30, "bg_whiten": 0, "builtin": True},
@@ -124,8 +124,8 @@ def _normalize_enhance_preset(raw: dict, *, builtin: bool = False) -> dict | Non
         return None
     return {
         "name": name,
-        "contrast": max(100, min(220, contrast)),
-        "clahe": max(0, min(80, clahe)),
+        "contrast": max(50, min(220, contrast)),
+        "clahe": max(-50, min(80, clahe)),
         "bg_whiten": max(0, min(100, bg)),
         "builtin": builtin,
     }
