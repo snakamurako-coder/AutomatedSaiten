@@ -26,7 +26,9 @@ from config import (
     delete_enhance_preset,
     list_enhance_presets,
     save_enhance_preset,
+    test_warped,
 )
+from models.test_repo import normalize_file_name
 from services.faint_ink import enhance_bgr
 from services.image_loader import imread_bgr, imwrite_bgr
 from services.image_warp import warped_file_name
@@ -98,6 +100,7 @@ class FaintReviewDialog(QDialog):
         queue: list[dict[str, Any]],
         fields: list[dict[str, Any]],
         on_ocr: Callable[[list[dict[str, Any]]], None] | None = None,
+        selected_file_names: set[str] | frozenset[str] | None = None,
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("薄い字の目視・強調")
@@ -106,12 +109,16 @@ class FaintReviewDialog(QDialog):
         self._queue = list(queue)
         self._fields = list(fields)
         self._on_ocr = on_ocr
+        self._selected_names = {
+            normalize_file_name(n) for n in (selected_file_names or set()) if n
+        }
         self._index = 0
         self._src_bgr: np.ndarray | None = None
         self._preview_bgr: np.ndarray | None = None
         self._pending_ocr: list[dict[str, Any]] = []
         self._highlight_id = ""
         self._did_flush_ocr = False
+        self._did_bulk_save = False
         self._presets: list[dict[str, Any]] = []
         self.finished.connect(self._flush_pending_ocr)
 
@@ -172,7 +179,7 @@ class FaintReviewDialog(QDialog):
             label="コントラスト",
             min_val=100,
             max_val=220,
-            value=135,
+            value=100,
             label_width=72,
             spin_width=64,
         )
@@ -182,7 +189,7 @@ class FaintReviewDialog(QDialog):
             label="CLAHE",
             min_val=0,
             max_val=80,
-            value=25,
+            value=0,
             label_width=72,
             spin_width=64,
         )
@@ -198,6 +205,13 @@ class FaintReviewDialog(QDialog):
         self._next_btn.clicked.connect(self._go_next)
         btns.addWidget(self._next_btn)
         btns.addStretch()
+        apply_all_btn = QPushButton("この補正を選択中の全てに反映")
+        apply_all_btn.setToolTip(
+            "⑤一覧でチェックしたファイル（未チェック時はこの一覧の全件）に、"
+            "現在のスライダー設定で強調画像を保存します。"
+        )
+        apply_all_btn.clicked.connect(self._apply_correction_to_all_selected)
+        btns.addWidget(apply_all_btn)
         save_only = QPushButton("強調を保存して次へ")
         save_only.setToolTip("強調画像だけ保存し、OCR は行わない")
         save_only.clicked.connect(self._save_and_advance)
@@ -215,7 +229,7 @@ class FaintReviewDialog(QDialog):
         btns.addWidget(close_btn)
         root.addLayout(btns)
 
-        self._reload_presets(select_name="薄い字")
+        self._reload_presets(select_name="生画像")
         self._apply_selected_preset()
         self._load_current()
 
@@ -318,7 +332,117 @@ class FaintReviewDialog(QDialog):
         except ValueError as e:
             QMessageBox.warning(self, "削除不可", str(e))
             return
-        self._reload_presets(select_name="薄い字")
+        self._reload_presets(select_name="生画像")
+
+    def _current_enhance_params(self) -> tuple[float, float, float]:
+        return (
+            self._contrast.value() / 100.0,
+            self._clahe.value() / 10.0,
+            self._bg_whiten.value() / 100.0,
+        )
+
+    def _enhance_image(self, src_bgr: np.ndarray) -> np.ndarray:
+        contrast, clahe, bg = self._current_enhance_params()
+        return enhance_bgr(
+            src_bgr,
+            contrast=contrast,
+            brightness=0.0,
+            clahe_clip=clahe,
+            bg_whiten=bg,
+        )
+
+    def _entry_warped_path(self, entry: dict[str, Any]) -> Path:
+        name = str(entry.get("fileName") or "")
+        warped_path = Path(
+            str(
+                entry.get("warpedPath")
+                or (entry.get("faint") or {}).get("warpedPath")
+                or ""
+            )
+        )
+        if not warped_path.name:
+            warped_path = test_warped(self._test_id) / warped_file_name(name)
+        return warped_path
+
+    def _save_bgr_to_entry(self, entry: dict[str, Any], bgr: np.ndarray) -> str:
+        warped_path = self._entry_warped_path(entry)
+        warped_path.parent.mkdir(parents=True, exist_ok=True)
+        if warped_path.exists():
+            backup = warped_path.with_name(warped_path.stem + "_原" + warped_path.suffix)
+            if not backup.exists():
+                shutil.copy2(str(warped_path), str(backup))
+        imwrite_bgr(warped_path, bgr, quality=90)
+        resolved = str(warped_path.resolve())
+        entry["warpedPath"] = resolved
+        return resolved
+
+    def _targets_for_bulk_apply(self) -> list[dict[str, Any]]:
+        if self._selected_names:
+            return [
+                e
+                for e in self._queue
+                if normalize_file_name(str(e.get("fileName") or "")) in self._selected_names
+            ]
+        return list(self._queue)
+
+    def _apply_correction_to_all_selected(self) -> None:
+        targets = self._targets_for_bulk_apply()
+        if not targets:
+            QMessageBox.warning(
+                self,
+                "反映なし",
+                "⑤一覧でチェックしたファイルが、この目視一覧にありません。",
+            )
+            return
+        label = (
+            f"チェック {len(targets)} 件"
+            if self._selected_names
+            else f"一覧 {len(targets)} 件"
+        )
+        ans = QMessageBox.question(
+            self,
+            "一括反映",
+            f"現在の補正設定を {label} すべての補正画像に保存します。\n"
+            "よろしいですか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ans != QMessageBox.Yes:
+            return
+        saved = 0
+        skipped: list[str] = []
+        for entry in targets:
+            path = self._entry_warped_path(entry)
+            if not path.exists():
+                src_path = str(
+                    entry.get("warpedPath")
+                    or (entry.get("faint") or {}).get("warpedPath")
+                    or ""
+                )
+                if not src_path or not Path(src_path).exists():
+                    skipped.append(str(entry.get("fileName") or ""))
+                    continue
+                path = Path(src_path)
+            loaded = imread_bgr(path)
+            if loaded is None:
+                skipped.append(str(entry.get("fileName") or ""))
+                continue
+            enhanced = self._enhance_image(loaded)
+            self._save_bgr_to_entry(entry, enhanced)
+            saved += 1
+        if self._current() is not None and self._src_bgr is not None:
+            self._refresh_preview()
+        msg = f"{saved} 件に補正を反映しました。"
+        if skipped:
+            msg += f"\n\n読込できなかった {len(skipped)} 件:\n" + "\n".join(skipped[:8])
+            if len(skipped) > 8:
+                msg += f"\n…他 {len(skipped) - 8} 件"
+        QMessageBox.information(self, "一括反映", msg)
+        if saved:
+            self._did_bulk_save = True
+
+    def did_bulk_save(self) -> bool:
+        return self._did_bulk_save
 
     def _current(self) -> dict[str, Any] | None:
         if not self._queue or self._index < 0 or self._index >= len(self._queue):
@@ -395,16 +519,7 @@ class FaintReviewDialog(QDialog):
     def _refresh_preview(self) -> None:
         if self._src_bgr is None:
             return
-        contrast = self._contrast.value() / 100.0
-        clahe = self._clahe.value() / 10.0
-        bg = self._bg_whiten.value() / 100.0
-        self._preview_bgr = enhance_bgr(
-            self._src_bgr,
-            contrast=contrast,
-            brightness=0.0,
-            clahe_clip=clahe,
-            bg_whiten=bg,
-        )
+        self._preview_bgr = self._enhance_image(self._src_bgr)
         self._canvas.set_image(
             self._preview_bgr,
             self._fields,
@@ -413,25 +528,7 @@ class FaintReviewDialog(QDialog):
 
     def _save_enhanced(self, entry: dict[str, Any]) -> str:
         assert self._preview_bgr is not None
-        name = str(entry.get("fileName") or "")
-        warped_path = Path(
-            str(
-                entry.get("warpedPath")
-                or (entry.get("faint") or {}).get("warpedPath")
-                or ""
-            )
-        )
-        if not warped_path.name:
-            from config import test_warped
-
-            warped_path = test_warped(self._test_id) / warped_file_name(name)
-        warped_path.parent.mkdir(parents=True, exist_ok=True)
-        if warped_path.exists():
-            backup = warped_path.with_name(warped_path.stem + "_原" + warped_path.suffix)
-            if not backup.exists():
-                shutil.copy2(str(warped_path), str(backup))
-        imwrite_bgr(warped_path, self._preview_bgr, quality=90)
-        return str(warped_path.resolve())
+        return self._save_bgr_to_entry(entry, self._preview_bgr)
 
     def did_flush_ocr(self) -> bool:
         return self._did_flush_ocr

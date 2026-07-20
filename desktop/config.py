@@ -99,6 +99,7 @@ def default_field_ocr_lang(cfg: dict | None = None) -> str:
 
 # 内蔵プリセット（スライダー整数: contrast 100–220, clahe 0–80, bg_whiten 0–100）
 BUILTIN_ENHANCE_PRESETS: list[dict] = [
+    {"name": "生画像", "contrast": 100, "clahe": 0, "bg_whiten": 0, "builtin": True},
     {"name": "薄い字", "contrast": 145, "clahe": 30, "bg_whiten": 0, "builtin": True},
     {"name": "地色除去", "contrast": 120, "clahe": 15, "bg_whiten": 70, "builtin": True},
     {

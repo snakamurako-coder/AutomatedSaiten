@@ -319,7 +319,7 @@ class Step5Page(QWidget):
 
     def _rebuild_table(self, rows_data: list[dict[str, Any]]) -> None:
         fields = self._fields
-        headers = ["OCR", "状態", "失敗理由", "ファイル名", "生徒ID"]
+        headers = ["選択", "状態", "失敗理由", "ファイル名", "生徒ID"]
         headers.extend(f.get("displayName") or f["id"] for f in fields)
         headers.extend(["DB", "操作"])
 
@@ -989,10 +989,15 @@ class Step5Page(QWidget):
             queue=queue,
             fields=self._fields,
             on_ocr=self._run_compare_ocr,
+            selected_file_names={
+                normalize_file_name(rd.get("fileName") or "")
+                for i, rd in enumerate(self._inventory_rows)
+                if self._row_checked(i)
+            },
         )
         dlg.exec()
         # OCR 比較経路はプレビュー完了後に一覧更新する
-        if self._scanned and not dlg.did_flush_ocr():
+        if self._scanned and (dlg.did_bulk_save() or not dlg.did_flush_ocr()):
             self._scan_folder()
 
     def _on_checked_faint_enhance(self) -> None:
