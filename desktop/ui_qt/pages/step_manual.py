@@ -490,6 +490,12 @@ class StepManualPage(QWidget):
             self._sel_lbl_continuous.setStyleSheet(active)
             self._sel_lbl_parallel.setStyleSheet(idle)
 
+    def _configure_judgment_mark_button(self, btn: QPushButton) -> None:
+        """判定パレットと同じボタンサイズ（高さ固定・幅はラベルに応じて拡張）。"""
+        btn.setFixedHeight(36)
+        btn.setMinimumWidth(44)
+        btn.setCursor(Qt.PointingHandCursor)
+
     def _build_continuous_judge_panel(self) -> QGroupBox:
         judge = QGroupBox("選択への判定反映")
         judge_lay = QHBoxLayout(judge)
@@ -510,19 +516,7 @@ class StepManualPage(QWidget):
             (self.btn_pending, lambda: self._apply_judgment(PENDING_JUDGMENT)),
             (self.btn_unjudged, lambda: self._apply_judgment("")),
         ):
-            if btn is self.btn_unjudged:
-                btn.setFixedSize(64, 36)
-                btn.setStyleSheet(
-                    f"QPushButton {{ font-size: 11px; font-weight: 700;"
-                    f" padding: 0 8px; min-height: 0; min-width: 0;"
-                    f" color: {COLORS['text_secondary']};"
-                    f" border: 2px solid {COLORS['border']}; border-radius: 6px;"
-                    f" background: {COLORS['surface']}; }}"
-                    f"QPushButton:hover {{ background: #f1f5f9; }}"
-                )
-            else:
-                btn.setFixedSize(44, 36)
-            btn.setCursor(Qt.PointingHandCursor)
+            self._configure_judgment_mark_button(btn)
             btn.clicked.connect(handler)
             judge_lay.addWidget(btn)
         self._apply_judgment_button_colors()
@@ -557,7 +551,7 @@ class StepManualPage(QWidget):
         return (
             f"QPushButton {{ background: {soft}; color: {stroke}; font-weight: 800;"
             f" font-size: 16px; border: 2px solid {stroke}; border-radius: 6px;"
-            f" padding: 0; min-height: 0; min-width: 0; }}"
+            f" padding: 0 12px; min-height: 0; min-width: 44px; }}"
             f"QPushButton:hover {{ background: {_mix_hex_with_white(stroke, 0.7)}; }}"
             f"QPushButton:pressed {{ background: {stroke}; color: white; }}"
         )
@@ -574,6 +568,10 @@ class StepManualPage(QWidget):
             self.btn_sankaku.setStyleSheet(self._judgment_button_style(sankaku))
             self.btn_batsu.setStyleSheet(self._judgment_button_style(batsu))
             self.btn_pending.setStyleSheet(self._judgment_button_style(pending))
+        if hasattr(self, "btn_unjudged"):
+            self.btn_unjudged.setStyleSheet(
+                self._palette_button_style(self._CLEAR_JUDGMENT_KEY, active=False)
+            )
         self._update_palette_button_styles()
 
     def _palette_specs(self) -> list[tuple[str, str, str, int]]:
@@ -628,9 +626,7 @@ class StepManualPage(QWidget):
             btn = QPushButton(label)
             btn.setCheckable(True)
             btn.setChecked(key == self._palette_active_key)
-            btn.setFixedHeight(36)
-            btn.setMinimumWidth(44)
-            btn.setCursor(Qt.PointingHandCursor)
+            self._configure_judgment_mark_button(btn)
             btn.toggled.connect(lambda checked, k=key: self._on_palette_toggled(k, checked))
             self._palette_btns[key] = btn
             self.palette_btn_row.addWidget(btn)
