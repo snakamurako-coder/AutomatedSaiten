@@ -101,8 +101,8 @@ class TextSearchDialog(QDialog):
         self.btn_full.clicked.connect(self._open_full)
         actions.addWidget(self.btn_full)
 
-        self.btn_step4 = QPushButton("⑥採点基準の設定")
-        self.btn_step4.setToolTip("⑥へ移動し、その記述欄を選択します")
+        self.btn_step4 = QPushButton("⑧採点基準の設定")
+        self.btn_step4.setToolTip("⑧へ移動し、その記述欄を選択します")
         self.btn_step4.clicked.connect(self._open_step4)
         actions.addWidget(self.btn_step4)
 

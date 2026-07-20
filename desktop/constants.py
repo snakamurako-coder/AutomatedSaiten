@@ -68,17 +68,21 @@ STEPS = [
     {"id": 2, "label": "② 回答欄設定"},
     {"id": 3, "label": "③ 生徒回答用紙取り込み"},
     {"id": 4, "label": "④ 配点決定"},
-    {"id": 5, "label": "⑤ テキスト化"},
-    {"id": 6, "label": "⑥ 採点基準"},
-    {"id": 7, "label": "⑦ 採点実行"},
-    {"id": 8, "label": "⑧ 領域設定"},
-    {"id": 9, "label": "⑨ 合計・外部得点"},
-    {"id": 10, "label": "⑩ 本人欄設定"},
-    {"id": 11, "label": "⑪ ID・氏名照合"},
-    {"id": 12, "label": "⑫ 個票・成績一覧出力"},
+    {"id": 5, "label": "⑤ トリミング"},
+    {"id": 6, "label": "⑥ 薄字補正"},
+    {"id": 7, "label": "⑦ OCR実行"},
+    {"id": 8, "label": "⑧ 採点基準"},
+    {"id": 9, "label": "⑨ 採点実行"},
+    {"id": 10, "label": "⑩ 領域設定"},
+    {"id": 11, "label": "⑪ 合計・外部得点"},
+    {"id": 12, "label": "⑫ 本人欄設定"},
+    {"id": 13, "label": "⑬ ID・氏名照合"},
+    {"id": 14, "label": "⑭ 個票・成績一覧出力"},
 ]
 
 # ④ から分岐する手動採点（⑤⑥⑦ の代替フロー）
-MANUAL_GRADING_STEP_ID = 13
+MANUAL_GRADING_STEP_ID = 15
 
-DESKTOP_READY_STEPS = {1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, MANUAL_GRADING_STEP_ID}
+DESKTOP_READY_STEPS = {
+    1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, MANUAL_GRADING_STEP_ID
+}

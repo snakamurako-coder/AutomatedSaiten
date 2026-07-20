@@ -78,7 +78,7 @@ class Step2Page(QWidget):
         self.use_id_mark_check = QCheckBox("IDマーク欄あり（OMRで生徒ID読取）")
         self.use_id_mark_check.setChecked(True)
         self.use_id_mark_check.setToolTip(
-            "解答用紙ひな形の生徒IDマーク欄を⑤ テキスト化時に OMR で読み取ります。"
+            "解答用紙ひな形の生徒IDマーク欄を⑦ OCR実行時に OMR で読み取ります。"
         )
         toolbar.addWidget(self.use_id_mark_check)
         toolbar.addWidget(QLabel("二値化"))

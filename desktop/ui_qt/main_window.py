@@ -32,14 +32,14 @@ from ui_qt.pages.step1 import Step1Page
 from ui_qt.pages.step2 import Step2Page
 from ui_qt.pages.step3 import Step3Page
 from ui_qt.pages.step4 import Step4Page
-from ui_qt.pages.step5 import Step5Page
-from ui_qt.pages.step6 import Step6Page
-from ui_qt.pages.step7 import Step7Page
+from ui_qt.pages.ocr_pipeline_page import OcrPipelinePage
 from ui_qt.pages.step8 import Step8Page
 from ui_qt.pages.step9 import Step9Page
 from ui_qt.pages.step10 import Step10Page
 from ui_qt.pages.step11 import Step11Page
 from ui_qt.pages.step12 import Step12Page
+from ui_qt.pages.step13 import Step13Page
+from ui_qt.pages.step14 import Step14Page
 from ui_qt.pages.step_manual import StepManualPage
 from ui_qt.floating_palette.palette_controller import PaletteController
 from ui_qt.settings_dialog import open_settings_dialog
@@ -85,22 +85,26 @@ class MainWindow(QMainWindow):
         outer.addWidget(shell)
 
         self.pages: dict[int, QWidget] = {}
+        self.pipeline_page = OcrPipelinePage(self)
         page_classes = {
             1: Step1Page,
             2: Step2Page,
             3: Step3Page,
             4: Step4Page,
-            5: Step5Page,
-            6: Step6Page,
-            7: Step7Page,
             8: Step8Page,
             9: Step9Page,
             10: Step10Page,
             11: Step11Page,
             12: Step12Page,
+            13: Step13Page,
+            14: Step14Page,
         }
+        pipeline_ids = frozenset({5, 6, 7})
         for step in STEPS:
             sid = step["id"]
+            if sid in pipeline_ids:
+                self.pages[sid] = self.pipeline_page
+                continue
             if sid in page_classes:
                 page = page_classes[sid](self)
             else:
@@ -112,6 +116,7 @@ class MainWindow(QMainWindow):
                 lay.addStretch()
             self.pages[sid] = page
             self.stack.addWidget(page)
+        self.stack.addWidget(self.pipeline_page)
         # 手動採点（STEPS リスト外）
         if MANUAL_GRADING_STEP_ID not in self.pages:
             page = StepManualPage(self)
@@ -158,7 +163,7 @@ class MainWindow(QMainWindow):
         self.nav_buttons: dict[int, QPushButton] = {}
 
         for step in STEPS:
-            if step["id"] <= 3:
+            if step["id"] <= 4:
                 self._add_nav_button(lay, step)
 
         fork_lbl = QLabel("▼ 分岐")
@@ -312,8 +317,8 @@ class MainWindow(QMainWindow):
         dlg.exec()
 
     def _text_search_open_crop(self, hit: dict) -> None:
-        self.load_step(6)
-        page = self.pages.get(6)
+        self.load_step(8)
+        page = self.pages.get(8)
         if page is not None and hasattr(page, "show_crop_from_search"):
             page.show_crop_from_search(hit)  # type: ignore[attr-defined]
 
@@ -329,15 +334,19 @@ class MainWindow(QMainWindow):
         )
 
     def _text_search_open_step6(self, hit: dict) -> None:
-        self.load_step(6)
-        page = self.pages.get(6)
+        self.load_step(8)
+        page = self.pages.get(8)
         if page is not None and hasattr(page, "focus_field_from_search"):
             page.focus_field_from_search(str(hit.get("fieldId") or ""))  # type: ignore[attr-defined]
 
     def load_step(self, step_id: int) -> None:
         self._current_step_id = step_id
         self._sync_active_test()
-        page = self.pages.get(step_id)
+        if step_id in (5, 6, 7):
+            self.pipeline_page.set_phase(step_id)
+            page = self.pipeline_page
+        else:
+            page = self.pages.get(step_id)
         if page is None:
             return
         self.stack.setCurrentWidget(page)
@@ -349,11 +358,11 @@ class MainWindow(QMainWindow):
         elif step_id == 1:
             page.refresh()  # type: ignore[attr-defined]
         self._sync_palette(step_id)
-        self.palette_controller.set_delete_hotkey_enabled(self._current_step_id not in (2, 10))
+        self.palette_controller.set_delete_hotkey_enabled(self._current_step_id not in (2, 12))
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if (
-            self._current_step_id in (2, 10)
+            self._current_step_id in (2, 12)
             and event.type() == QEvent.Type.KeyPress
             and isinstance(event, QKeyEvent)
             and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)

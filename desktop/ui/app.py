@@ -578,7 +578,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     # --- Step 3 ---
     def _build_step3(self) -> None:
         f = self.frames[5]
-        ttk.Label(f, text="⑤ テキスト化（OCRバッチ）", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(f, text="⑤〜⑦ テキスト化パイプライン", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
             text="生徒解答フォルダ内の PDF / JPG / PNG を自動補正→OCR→SQLite に一括保存します。",
@@ -728,7 +728,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
         canvas.bind("<Enter>", lambda _e: canvas.bind_all("<MouseWheel>", _on_mousewheel))
         canvas.bind("<Leave>", lambda _e: canvas.unbind_all("<MouseWheel>"))
 
-        ttk.Label(scroll, text="⑥ 採点基準の設定", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(scroll, text="⑧ 採点基準の設定", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             scroll,
             text="OCR置換・みなし採点で解答を整えてから、判定・得点の基準を設定します。",
@@ -1188,7 +1188,7 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
     # --- Step 5 ---
     def _build_step5(self) -> None:
         f = self.frames[7]
-        ttk.Label(f, text="⑦ 採点の実施", style="Title.TLabel").pack(anchor="w")
+        ttk.Label(f, text="⑨ 採点の実施", style="Title.TLabel").pack(anchor="w")
         ttk.Label(
             f,
             text="保存済みの採点基準に従い、全受験者の判定・得点を一括反映し、考査総括を生成します。",

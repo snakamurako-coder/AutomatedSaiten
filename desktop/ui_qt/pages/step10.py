@@ -1,235 +1,128 @@
-"""⑩ 本人欄設定ページ（学年・組・番号・ID・氏名の矩形指定）。"""
+"""⑩ 領域設定ページ（記述欄を大問・範囲・能力にグルーピング）。"""
 
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
-    QButtonGroup,
     QHBoxLayout,
-    QLabel,
-    QMessageBox,
-    QPushButton,
-    QSlider,
+    QSizePolicy,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-from models.identity_repo import IDENTITY_TYPES, get_identity_fields, save_identity_fields
-from models.test_repo import get_test_info
+from models.domain_repo import (
+    calculate_domain_scores,
+    get_domain_settings_for_ui,
+    save_domain_settings,
+)
+from models.grading_status import field_grading_complete_map
 from ui_qt import helpers as h
-from ui_qt.region_editor import AnswerRegionEditor
-from ui_qt.region_mode_widgets import RegionDetectModeToggle, _refresh_segment_button
-from ui_qt.style import set_variant
+from ui_qt.layout_helpers import make_expanding
+from ui_qt.style import COLORS
+from ui_qt.table_cells import make_editable_item, make_readonly_item, wire_excel_edit_columns
 
 
 class Step10Page(QWidget):
     def __init__(self, app: Any) -> None:
         super().__init__()
         self.app = app
-        self._selected_type: str | None = None
+        self._rows: list[dict[str, Any]] = []
 
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(8)
-        root.addWidget(h.title_label("⑩ 本人欄設定"))
+        root.addWidget(h.title_label("⑩ 領域の設定"))
         root.addWidget(
             h.muted_label(
-                "学年・組・番号・ID・氏名のうち 1 つ以上を選び、模範解答上で本人欄を指定します。"
-                "「自動認識」では欄の内側をクリック、「手動設定」ではドラッグで矩形を指定します。"
-                "この枠は ⑪ の照合で切り出し画像として使われます（OCR はしません）。"
+                "記述欄を「大問」「範囲」「能力」のラベルでグルーピングすると、"
+                "領域別の得点が集計され、考査総括・個票に反映されます。"
+                "同じラベルを付けた記述欄が 1 つの領域として合算されます。"
+                "「採点」列は全解答が ○△× で確定しているかを示します（保留?・未採点があると未完）。"
             )
         )
 
-        toolbar = QHBoxLayout()
-        toolbar.addWidget(QLabel("欄種別"))
-        self._type_group = QButtonGroup(self)
-        self._type_group.setExclusive(True)
-        self.type_buttons: dict[str, QPushButton] = {}
-        for t in IDENTITY_TYPES:
-            btn = QPushButton(t)
-            btn.setCheckable(True)
-            btn.setAutoDefault(False)
-            btn.setDefault(False)
-            set_variant(btn, "nav-segment")
-            self._type_group.addButton(btn)
-            btn.clicked.connect(lambda _c=False, tt=t: self._select_type(tt))
-            self.type_buttons[t] = btn
-            toolbar.addWidget(btn)
-        toolbar.addSpacing(12)
-        toolbar.addWidget(QLabel("設定"))
-        self.region_mode_toggle = RegionDetectModeToggle(
-            auto_detect=True,
-            on_change=self._on_region_mode_changed,
-        )
-        self.region_mode_toggle.setToolTip(
-            "自動認識: 欄の内側をクリックして枠を検出。\n"
-            "手動設定: ドラッグで矩形を指定。\n"
-            "検出精度は「二値化」しきい値で調整できます。"
-        )
-        toolbar.addWidget(self.region_mode_toggle)
-        toolbar.addWidget(QLabel("二値化"))
-        self.thresh_slider = QSlider(Qt.Orientation.Horizontal)
-        self.thresh_slider.setRange(0, 255)
-        self.thresh_slider.setValue(128)
-        self.thresh_slider.setFixedWidth(120)
-        self.thresh_slider.valueChanged.connect(self._on_detect_thresh_changed)
-        toolbar.addWidget(self.thresh_slider)
-        self.delete_btn = h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft")
-        self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
-        self.delete_btn.setAutoDefault(False)
-        self.delete_btn.setDefault(False)
-        toolbar.addWidget(self.delete_btn)
-        toolbar.addWidget(h.button("やり直し", self._on_reset, variant="danger-soft"))
-        toolbar.addWidget(h.button("本人欄を保存", self._on_save, variant="primary"))
-        toolbar.addWidget(h.button("再読込", self.refresh))
-        toolbar.addStretch()
-        root.addLayout(toolbar)
+        self.table = QTableWidget(0, 5)
+        self.table.setHorizontalHeaderLabels(["記述欄", "大問", "範囲", "能力", "採点"])
+        self.table.setColumnWidth(0, 220)
+        for c in (1, 2, 3):
+            self.table.setColumnWidth(c, 140)
+        self.table.setColumnWidth(4, 72)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.setSelectionBehavior(QTableWidget.SelectItems)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.verticalHeader().setDefaultSectionSize(32)
+        self.table.verticalHeader().setVisible(False)
+        wire_excel_edit_columns(self.table, (1, 2, 3))
+        make_expanding(self.table)
+        root.addWidget(self.table, 1)
 
-        self.hint_label = h.caption_label("欄種別を選んでから、自動認識または手動設定で枠を指定してください。")
-        root.addWidget(self.hint_label)
-
-        self.editor = AnswerRegionEditor(
-            on_change=self._on_regions_changed,
-            on_status=self._set_status,
+        btns = QHBoxLayout()
+        btns.addWidget(
+            h.button("領域設定を保存・再計算", self._on_save, variant="primary")
         )
-        self.editor.set_detect_threshold(int(self.thresh_slider.value()))
-        self.editor.set_detect_roi_margin(480)
-        self.editor.set_click_detect_mode(True)
-        self.editor.set_require_pending_label_for_detect(True)
-        root.addWidget(self.editor, 1)
+        btns.addWidget(h.button("再読込", self.refresh))
+        btns.addStretch()
+        root.addLayout(btns)
 
         self.status_label = h.caption_label("")
         root.addWidget(self.status_label)
 
-    def handle_delete_key(self) -> None:
-        """Del — キャンバスの選択欄を直接削除。"""
-        canvas = self.editor._canvas
-        if canvas.selected_idx < 0:
-            return
-        canvas._delete_selected_region()
-        self._update_type_buttons()
-
-    def _on_delete_selected(self) -> None:
-        self.handle_delete_key()
-
-    def _set_status(self, message: str) -> None:
-        self.status_label.setText(message)
-
-    def _region_action_hint(self) -> str:
-        if self.region_mode_toggle.is_auto_detect():
-            return "欄の内側をクリックすると自動検出します（再指定で上書き）。"
-        return "画像上をドラッグして指定してください（再ドラッグで上書き）。"
-
-    def _on_region_mode_changed(self, auto_detect: bool) -> None:
-        self.editor.set_click_detect_mode(auto_detect)
-        self.editor.focus_canvas()
-        hint = (
-            "欄の内側をクリックすると自動検出します（再指定で上書き）。"
-            if auto_detect
-            else "画像上をドラッグして指定してください（再ドラッグで上書き）。"
-        )
-        if self._selected_type:
-            self.hint_label.setText(f"「{self._selected_type}」欄 — {hint}")
-        elif auto_detect:
-            self.hint_label.setText("欄種別を選んでから、欄の内側をクリックしてください。")
-        else:
-            self.hint_label.setText("欄種別を選んでから、画像上をドラッグして指定してください。")
-        self._set_status("自動認識モード" if auto_detect else "手動設定モード")
-
-    def _on_detect_thresh_changed(self, value: int) -> None:
-        self.editor.set_detect_threshold(value)
-
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
-        info = get_test_info(self.app.active_test_id)
-        model_path = info.get("modelAnswerPath") or ""
-        if model_path and Path(model_path).exists():
-            try:
-                self.editor.load_image_from_path(model_path)
-            except Exception as e:
-                self.status_label.setText(f"模範解答の表示に失敗: {e}")
-                return
+        self._rows = get_domain_settings_for_ui(self.app.active_test_id)
+        complete_map = field_grading_complete_map(self.app.active_test_id)
+        done_bg = QColor(COLORS["selection_soft"])
+        self.table.setRowCount(len(self._rows))
+        for i, row in enumerate(self._rows):
+            fid = row["fieldId"]
+            done = bool(complete_map.get(fid, False))
+            name_item = QTableWidgetItem(row["displayName"])
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(i, 0, name_item)
+            self.table.setItem(i, 1, make_editable_item(row["daiMon"]))
+            self.table.setItem(i, 2, make_editable_item(row["hanI"]))
+            self.table.setItem(i, 3, make_editable_item(row["noryoku"]))
+            self.table.setItem(i, 4, make_readonly_item("完了" if done else "未完", center=True))
+            if done:
+                for c in range(5):
+                    item = self.table.item(i, c)
+                    if item is not None:
+                        item.setBackground(done_bg)
+        if not self._rows:
+            self.status_label.setText("記述欄がありません。先に ② 回答欄設定を完了してください。")
         else:
-            self.status_label.setText("模範解答が未登録です。先に ② 回答欄設定で読み込んでください。")
-            return
-        fields = get_identity_fields(self.app.active_test_id)
-        self.editor.set_regions(
-            [
-                {
-                    "id": f["type"],
-                    "displayName": f["type"],
-                    "x": f["x"],
-                    "y": f["y"],
-                    "width": f["width"],
-                    "height": f["height"],
-                }
-                for f in fields
-            ]
-        )
-        self._update_type_buttons()
-        if self._selected_type:
-            self.editor.set_pending_label(self._selected_type, replace_same=True)
-        self.status_label.setText(f"設定済み: {len(fields)} 欄")
-
-    def _select_type(self, type_name: str) -> None:
-        self._selected_type = type_name
-        for t, btn in self.type_buttons.items():
-            btn.setChecked(t == type_name)
-            _refresh_segment_button(btn)
-        self.editor.set_pending_label(type_name, replace_same=True)
-        self.editor.focus_canvas()
-        self.hint_label.setText(f"「{type_name}」欄 — {self._region_action_hint()}")
-
-    def _on_regions_changed(self) -> None:
-        QTimer.singleShot(0, self._update_type_buttons)
-
-    def _update_type_buttons(self) -> None:
-        done_types = {r["id"] for r in self.editor.get_regions()}
-        for t, btn in self.type_buttons.items():
-            if t in done_types:
-                set_variant(btn, "success")
-            else:
-                set_variant(btn, "nav-segment")
-            btn.style().unpolish(btn)
-            btn.style().polish(btn)
-            btn.update()
-        done_list = [t for t in IDENTITY_TYPES if t in done_types]
-        if done_list:
-            self.status_label.setText("設定済み: " + "、".join(done_list))
-
-    def _on_reset(self) -> None:
-        if (
-            QMessageBox.question(self, "確認", "設定した本人欄をすべてクリアしますか？")
-            != QMessageBox.Yes
-        ):
-            return
-        self.editor.clear_all_regions()
-        self.status_label.setText("クリアしました。")
+            done_n = sum(1 for r in self._rows if complete_map.get(r["fieldId"]))
+            self.status_label.setText(f"採点完了 {done_n} / {len(self._rows)} 記述欄")
 
     def _on_save(self) -> None:
         if not self.app.require_active_test():
             return
-        regions = self.editor.get_regions()
-        fields = [
-            {
-                "type": r["id"],
-                "x": r["x"],
-                "y": r["y"],
-                "width": r["width"],
-                "height": r["height"],
-            }
-            for r in regions
-            if r["id"] in IDENTITY_TYPES
-        ]
-        if not fields:
-            h.error(self, "保存エラー", "本人確認欄を 1 つ以上設定してください。")
-            return
+        settings = []
+        for i, row in enumerate(self._rows):
+            settings.append(
+                {
+                    "fieldId": row["fieldId"],
+                    "daiMon": self._cell_text(i, 1),
+                    "hanI": self._cell_text(i, 2),
+                    "noryoku": self._cell_text(i, 3),
+                }
+            )
         try:
-            count = save_identity_fields(self.app.active_test_id, fields)
-            h.info(self, "保存完了", f"本人確認欄を {count} 件保存しました。")
+            save_domain_settings(self.app.active_test_id, settings)
+            updated = calculate_domain_scores(self.app.active_test_id)
+            self.status_label.setText(f"領域設定を保存し、{updated} 件の得点を再計算しました。")
+            h.info(self, "保存完了", f"領域設定を保存し、{updated} 件の得点を再計算しました。")
+            self.refresh()
         except Exception as e:
             h.error(self, "エラー", str(e))
+
+    def _cell_text(self, row: int, col: int) -> str:
+        item = self.table.item(row, col)
+        return item.text().strip() if item else ""

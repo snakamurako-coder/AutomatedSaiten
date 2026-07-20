@@ -109,7 +109,7 @@ class Step3Page(QWidget):
         root.addWidget(
             h.muted_label(
                 "スキャンした生徒回答用紙（PDF / JPG / PNG）を作業フォルダ（inbox）へ保存します。"
-                "⑤ テキスト化でこのフォルダ内のファイルを OCR 処理します。"
+                "⑤〜⑦（トリミング・薄字補正・OCR）でこのフォルダ内のファイルを処理します。"
             )
         )
 

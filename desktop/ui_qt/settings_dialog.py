@@ -116,7 +116,7 @@ class SettingsDialog(QDialog):
     def _build_ocr_feature_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page(
             "OCR（光学文字認識）は、答案画像に写っている手書き・活字の文字を"
-            "テキストデータに変換する機能です。③テキスト化ステップで使用します。"
+            "テキストデータに変換する機能です。⑦ OCR実行ステップで使用します。"
         )
 
         ocr_form = QFormLayout()
@@ -185,7 +185,7 @@ class SettingsDialog(QDialog):
         gemini_row.addWidget(self.gemini_edit, 1)
         gemini_row.addWidget(h.button("接続確認", self._test_gemini))
         api_form.addRow("Gemini API キー", gemini_row)
-        api_form.addRow("", h.caption_label("OpenAI / Vision: ③ テキスト化 / Gemini: ④ AI原案 で使用します。"))
+        api_form.addRow("", h.caption_label("OpenAI / Vision: ⑦ OCR実行 / Gemini: ⑧ 採点基準（AI原案）で使用します。"))
         api_form.addRow(
             "",
             h.caption_label(
@@ -200,7 +200,7 @@ class SettingsDialog(QDialog):
 
     def _build_criteria_tab(self, cfg: dict) -> None:
         page, lay = self._tab_page(
-            "③テキスト化の「薄い字を検査」で使う判断基準です。"
+            "⑥薄字補正の「薄い字を検査」で使う判断基準です。"
             "記述欄クロップの指標がいずれか1つでも基準未満なら「要確認（薄い）」になります。"
             "しきい値は実運用で調整してください。"
         )

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from config import faint_thresholds_from_config, load_config, test_archive, test_warped
 from models.test_repo import (
@@ -25,6 +25,7 @@ from services.work_queue import build_ocr_work_queue, find_warped_for_original
 
 ProgressCallback = Callable[[int, int, str], None]
 DetailProgressCallback = Callable[[dict[str, Any]], None]
+WarpPolicy = Literal["never", "if_missing", "always"]
 
 STAGE_LABELS: dict[str, str] = {
     "load_src": "原画像読込",
@@ -89,12 +90,125 @@ def _archive_source(source_path: str, archive_dir: Path) -> None:
     shutil.move(str(src), str(dest))
 
 
+def process_single_warp(
+    test_id: str,
+    item: dict[str, Any],
+    orientation: str = "landscape",
+    *,
+    on_detail: DetailProgressCallback | None = None,
+    index: int = 1,
+    total: int = 1,
+) -> dict[str, Any]:
+    """原画像から角度補正画像を生成する（既存の補正画像は上書き）。"""
+    source_path = item.get("path") or item.get("id") or ""
+    file_name = item["name"]
+    stage = "load_src"
+
+    def fail(exc: Exception) -> None:
+        _emit_detail(
+            on_detail,
+            index=index,
+            total=total,
+            file_name=file_name,
+            stage=stage,
+            status="failed",
+            error=str(exc),
+        )
+        if isinstance(exc, BatchItemError):
+            raise exc
+        raise BatchItemError(stage, str(exc)) from exc
+
+    try:
+        _emit_detail(
+            on_detail,
+            index=index,
+            total=total,
+            file_name=file_name,
+            stage="load_src",
+            status="processing",
+        )
+        if not source_path:
+            raise BatchItemError("load_src", "原画像パスがありません。")
+        stage = "warp"
+        _emit_detail(
+            on_detail,
+            index=index,
+            total=total,
+            file_name=file_name,
+            stage=stage,
+            status="processing",
+        )
+        out_path = test_warped(test_id) / warped_file_name(file_name)
+        warp_image_file(source_path, out_path, orientation=orientation)
+        warped_path = str(out_path.resolve())
+        row = {
+            "fileName": file_name,
+            "sourcePath": source_path,
+            "warpedPath": warped_path,
+        }
+        _emit_detail(
+            on_detail,
+            index=index,
+            total=total,
+            file_name=file_name,
+            stage="done",
+            status="done",
+            result=row,
+        )
+        return row
+    except Exception as e:
+        fail(e)
+        raise AssertionError("unreachable")  # pragma: no cover
+
+
+def run_batch_warp(
+    test_id: str,
+    items: list[dict[str, Any]],
+    on_progress: ProgressCallback | None = None,
+    on_detail: DetailProgressCallback | None = None,
+) -> dict[str, Any]:
+    """チェックした答案を原画像から角度補正（ワープのみ）。"""
+    cfg = load_config()
+    orientation = cfg.get("default_orientation", "landscape")
+    total = len(items)
+    rows: list[dict[str, Any]] = []
+    errors: list[dict[str, str]] = []
+    item_logs: list[dict[str, Any]] = []
+
+    for idx, item in enumerate(items, start=1):
+        file_name = item["name"]
+        if on_progress:
+            on_progress(idx, total, file_name)
+        try:
+            row = process_single_warp(
+                test_id,
+                item,
+                orientation=orientation,
+                on_detail=on_detail,
+                index=idx,
+                total=total,
+            )
+            rows.append(row)
+            item_logs.append({"fileName": file_name, "status": "done", "row": row})
+        except BatchItemError as e:
+            errors.append({"fileName": file_name, "error": str(e), "stage": e.stage})
+            item_logs.append(
+                {"fileName": file_name, "status": "failed", "error": str(e), "stage": e.stage}
+            )
+        except Exception as e:
+            errors.append({"fileName": file_name, "error": str(e), "stage": "unknown"})
+            item_logs.append({"fileName": file_name, "status": "failed", "error": str(e), "stage": "unknown"})
+
+    return {"processed": len(rows), "errors": errors, "itemLogs": item_logs}
+
+
 def process_single_item(
     test_id: str,
     item: dict[str, Any],
     orientation: str = "landscape",
     *,
     use_id_mark: bool | None = None,
+    warp_policy: WarpPolicy = "if_missing",
     on_detail: DetailProgressCallback | None = None,
     index: int = 1,
     total: int = 1,
@@ -134,7 +248,19 @@ def process_single_item(
         )
 
         warped_path = item.get("warpedPath") or ""
-        if item.get("stage") == "warp_and_ocr" or not warped_path:
+        if warp_policy == "never":
+            if not warped_path:
+                found = find_warped_for_original(test_id, file_name)
+                warped_path = found or ""
+            if not warped_path:
+                raise BatchItemError(
+                    "warp",
+                    "補正画像がありません。⑤トリミングで先に補正してください。",
+                )
+        elif warp_policy == "always" or (
+            warp_policy == "if_missing"
+            and (item.get("stage") == "warp_and_ocr" or not warped_path)
+        ):
             stage = "warp"
             _emit_detail(
                 on_detail,
@@ -203,6 +329,8 @@ def run_batch_ocr(
     on_detail: DetailProgressCallback | None = None,
     mode: str = "unprocessed",
     items: list[dict[str, Any]] | None = None,
+    *,
+    warp_policy: WarpPolicy = "if_missing",
 ) -> dict[str, Any]:
     cfg = load_config()
     orientation = cfg.get("default_orientation", "landscape")
@@ -229,6 +357,7 @@ def run_batch_ocr(
                 item,
                 orientation=orientation,
                 use_id_mark=use_id_mark,
+                warp_policy=warp_policy,
                 on_detail=on_detail,
                 index=idx,
                 total=total,
@@ -328,6 +457,7 @@ def run_ocr_for_manual_warp_entries(
                 item,
                 orientation=orientation,
                 use_id_mark=use_id_mark,
+                warp_policy="never",
                 on_detail=on_detail,
                 index=idx,
                 total=total,
@@ -457,7 +587,7 @@ def run_faint_precheck(
     items: list[dict[str, Any]],
     on_progress: ProgressCallback | None = None,
 ) -> dict[str, Any]:
-    """未OCR答案を補正（必要時）し、薄い字指標ではじいたものを記録する。"""
+    """補正済み答案の薄い字指標を検査し、要確認を記録する。"""
     fields = get_answer_fields(test_id)
     if not fields:
         raise ValueError("記述欄が設定されていません。")
@@ -473,7 +603,6 @@ def run_faint_precheck(
             "disabled": True,
         }
 
-    orientation = cfg.get("default_orientation", "landscape")
     total = len(items)
     faint_map = get_step3_faint(test_id)
     errors: list[dict[str, str]] = []
@@ -484,7 +613,6 @@ def run_faint_precheck(
         file_name = str(item.get("name") or item.get("fileName") or "")
         if on_progress:
             on_progress(idx, total, file_name)
-        source_path = item.get("path") or item.get("id") or ""
         key = normalize_file_name(file_name)
         try:
             warped_path = str(item.get("warpedPath") or "").strip()
@@ -492,11 +620,7 @@ def run_faint_precheck(
                 found = find_warped_for_original(test_id, file_name)
                 warped_path = found or ""
             if not warped_path:
-                if not source_path:
-                    raise ValueError("原画像パスがありません。")
-                out_path = test_warped(test_id) / warped_file_name(file_name)
-                warp_image_file(source_path, out_path, orientation=orientation)
-                warped_path = str(out_path.resolve())
+                raise ValueError("補正画像がありません。⑤トリミングで先に補正してください。")
 
             warped_bgr = _load_warped_bgr(warped_path)
             analysis = analyze_warped_fields(warped_bgr, fields, thresholds)

@@ -1138,7 +1138,12 @@ def clear_step3_faint(test_id: str) -> None:
 
 
 def reset_step3_data(test_id: str) -> dict[str, int]:
-    """③ の処理結果を初期化（DB・補正画像・失敗/薄さ記録を消し、原本をフォルダへ戻す）。"""
+    """⑤〜⑦ の処理結果をすべて初期化（後方互換）。"""
+    return reset_step5_trim_data(test_id)
+
+
+def reset_step5_trim_data(test_id: str) -> dict[str, int]:
+    """⑤トリミング以降を初期化（OCR・補正・薄字・失敗記録、原本復元）。"""
     import shutil
     from pathlib import Path
 
@@ -1178,3 +1183,42 @@ def reset_step3_data(test_id: str) -> dict[str, int]:
         "deletedWarped": deleted_warped,
         "deletedResults": deleted_results,
     }
+
+
+def reset_step6_faint_data(test_id: str) -> dict[str, int]:
+    """⑥薄字補正を初期化（薄字記録・強調上書きの巻き戻し）。"""
+    import shutil
+    from pathlib import Path
+
+    warped = test_warped(test_id)
+    restored_enhanced = 0
+    if warped.exists():
+        for backup in warped.glob("補正_*_原.jpg"):
+            if not backup.is_file():
+                continue
+            original_name = backup.stem.replace("_原", "", 1) + backup.suffix
+            dest = backup.parent / original_name
+            shutil.copy2(str(backup), str(dest))
+            backup.unlink()
+            restored_enhanced += 1
+
+    failed = get_step3_failed(test_id)
+    faint_removed = 0
+    for key, entry in list(failed.items()):
+        if str(entry.get("stage") or "") == "faint":
+            failed.pop(key, None)
+            faint_removed += 1
+    save_step3_failed(test_id, failed)
+    clear_step3_faint(test_id)
+
+    return {"restoredEnhanced": restored_enhanced, "faintRemoved": faint_removed}
+
+
+def reset_step7_ocr_data(test_id: str) -> dict[str, int]:
+    """⑦OCR結果のみ削除（補正画像・薄字記録は保持）。"""
+    with connect() as conn:
+        cur = conn.execute("DELETE FROM results WHERE test_id = ?", (test_id,))
+        deleted_results = cur.rowcount
+        touch_progress_conn(conn, test_id, 2, "OCRリセット済み")
+        conn.commit()
+    return {"deletedResults": deleted_results}

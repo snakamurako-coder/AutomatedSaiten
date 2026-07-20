@@ -1,10 +1,10 @@
-"""薄い字の目視確認・強調補正・OCR ダイアログ。"""
+"""薄い字の目視確認・強調補正ダイアログ。"""
 
 from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 
 import numpy as np
 from PySide6.QtCore import Qt
@@ -90,7 +90,7 @@ class _PreviewCanvas(QWidget):
 
 
 class FaintReviewDialog(QDialog):
-    """要確認（薄い）答案の目視・強調・OCR。"""
+    """要確認（薄い）答案の目視・強調。"""
 
     def __init__(
         self,
@@ -99,7 +99,6 @@ class FaintReviewDialog(QDialog):
         test_id: str,
         queue: list[dict[str, Any]],
         fields: list[dict[str, Any]],
-        on_ocr: Callable[[list[dict[str, Any]]], None] | None = None,
         selected_file_names: set[str] | frozenset[str] | None = None,
     ) -> None:
         super().__init__(parent)
@@ -108,19 +107,15 @@ class FaintReviewDialog(QDialog):
         self._test_id = test_id
         self._queue = list(queue)
         self._fields = list(fields)
-        self._on_ocr = on_ocr
         self._selected_names = {
             normalize_file_name(n) for n in (selected_file_names or set()) if n
         }
         self._index = 0
         self._src_bgr: np.ndarray | None = None
         self._preview_bgr: np.ndarray | None = None
-        self._pending_ocr: list[dict[str, Any]] = []
         self._highlight_id = ""
-        self._did_flush_ocr = False
         self._did_bulk_save = False
         self._presets: list[dict[str, Any]] = []
-        self.finished.connect(self._flush_pending_ocr)
 
         root = QVBoxLayout(self)
         self._title = QLabel("")
@@ -207,23 +202,15 @@ class FaintReviewDialog(QDialog):
         btns.addStretch()
         apply_all_btn = QPushButton("この補正を選択中の全てに反映")
         apply_all_btn.setToolTip(
-            "⑤一覧でチェックしたファイル（未チェック時はこの一覧の全件）に、"
+            "⑥一覧でチェックしたファイル（未チェック時はこの一覧の全件）に、"
             "現在のスライダー設定で強調画像を保存します。"
         )
         apply_all_btn.clicked.connect(self._apply_correction_to_all_selected)
         btns.addWidget(apply_all_btn)
         save_only = QPushButton("強調を保存して次へ")
-        save_only.setToolTip("強調画像だけ保存し、OCR は行わない")
+        save_only.setToolTip("強調画像を保存して次のファイルへ")
         save_only.clicked.connect(self._save_and_advance)
         btns.addWidget(save_only)
-        ocr_plain = QPushButton("このまま OCR")
-        ocr_plain.setToolTip("強調せず現在の補正画像で OCR（比較画面へ）")
-        ocr_plain.clicked.connect(lambda: self._run_ocr(enhance=False))
-        btns.addWidget(ocr_plain)
-        save_ocr = QPushButton("強調を保存して OCR")
-        save_ocr.setObjectName("PrimaryBtn")
-        save_ocr.clicked.connect(lambda: self._run_ocr(enhance=True))
-        btns.addWidget(save_ocr)
         close_btn = QPushButton("閉じる")
         close_btn.clicked.connect(self.accept)
         btns.addWidget(close_btn)
@@ -391,7 +378,7 @@ class FaintReviewDialog(QDialog):
             QMessageBox.warning(
                 self,
                 "反映なし",
-                "⑤一覧でチェックしたファイルが、この目視一覧にありません。",
+                "⑥一覧でチェックしたファイルが、この目視一覧にありません。",
             )
             return
         label = (
@@ -530,9 +517,6 @@ class FaintReviewDialog(QDialog):
         assert self._preview_bgr is not None
         return self._save_bgr_to_entry(entry, self._preview_bgr)
 
-    def did_flush_ocr(self) -> bool:
-        return self._did_flush_ocr
-
     def _save_and_advance(self) -> None:
         entry = self._current()
         if entry is None or self._preview_bgr is None:
@@ -541,43 +525,9 @@ class FaintReviewDialog(QDialog):
         entry["warpedPath"] = warped
         self._advance_after_queue()
 
-    def _flush_pending_ocr(self, _result: int = 0) -> None:
-        if not self._pending_ocr or not self._on_ocr:
-            return
-        payload = list(self._pending_ocr)
-        self._pending_ocr = []
-        self._did_flush_ocr = True
-        self._on_ocr(payload)
-
     def _advance_after_queue(self) -> None:
         if self._index < len(self._queue) - 1:
             self._index += 1
             self._load_current()
         else:
             self.accept()
-
-    def _run_ocr(self, *, enhance: bool) -> None:
-        entry = self._current()
-        if entry is None:
-            return
-        if enhance:
-            if self._preview_bgr is None:
-                return
-            warped = self._save_enhanced(entry)
-            entry["warpedPath"] = warped
-        else:
-            warped = str(
-                entry.get("warpedPath")
-                or (entry.get("faint") or {}).get("warpedPath")
-                or ""
-            )
-            if not warped or not Path(warped).exists():
-                return
-        self._pending_ocr.append(
-            {
-                "fileName": str(entry.get("fileName") or ""),
-                "sourcePath": str(entry.get("sourcePath") or entry.get("path") or ""),
-                "warpedPath": warped,
-            }
-        )
-        self._advance_after_queue()

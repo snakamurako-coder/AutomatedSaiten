@@ -761,7 +761,7 @@ class StepManualPage(QWidget):
         if not results:
             self._items = []
             self._render_grid()
-            self.status_label.setText("採点結果がありません。⑤ テキスト化で画像を登録してください。")
+            self.status_label.setText("採点結果がありません。⑦ OCR実行でテキスト化してください。")
             return
         rows = [
             {
