@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QShortcut
+from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -36,6 +36,7 @@ from services.image_loader import is_supported_input_path
 from services.image_warp import warp_image_from_path
 from ui_qt import helpers as h
 from ui_qt.region_editor import AnswerRegionEditor
+from ui_qt.region_mode_widgets import RegionDetectModeToggle
 from ui_qt.style import COLORS
 
 
@@ -139,7 +140,7 @@ class Step1Page(QWidget):
         title_col.addWidget(
             h.muted_label(
                 "PDF / JPG / PNG をドロップするか「画像を開く」で模範解答を読み込み、"
-                "記述欄はドラッグ指定または「クリックで欄検出」で追加します。"
+                "記述欄は「自動認識」または「手動設定」で追加します。"
             )
         )
         header.addLayout(title_col, 1)
@@ -181,15 +182,17 @@ class Step1Page(QWidget):
         self.thresh_slider.setFixedWidth(120)
         self.thresh_slider.valueChanged.connect(self._on_detect_thresh_changed)
         toolbar.addWidget(self.thresh_slider)
-        self.click_detect_check = QCheckBox("クリックで欄検出")
-        self.click_detect_check.setChecked(True)
-        self.click_detect_check.setToolTip(
-            "オン: 解答欄の内側をクリックすると枠を自動検出。"
-            "オフ: 従来どおりドラッグで矩形を指定。"
+        toolbar.addWidget(QLabel("設定"))
+        self.region_mode_toggle = RegionDetectModeToggle(
+            auto_detect=True,
+            on_change=self._on_region_mode_changed,
+        )
+        self.region_mode_toggle.setToolTip(
+            "自動認識: 欄の内側をクリックして枠を検出。\n"
+            "手動設定: ドラッグで矩形を指定。\n"
             "検出精度は「二値化」しきい値で調整できます。"
         )
-        self.click_detect_check.toggled.connect(self._on_click_detect_toggled)
-        toolbar.addWidget(self.click_detect_check)
+        toolbar.addWidget(self.region_mode_toggle)
         toolbar.addWidget(h.button("画像を開く", self._on_open_file))
         toolbar.addWidget(h.button("記述欄を保存", self._on_save_fields, variant="primary"))
         self.delete_btn = h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft")
@@ -240,20 +243,24 @@ class Step1Page(QWidget):
         self.status_label = h.caption_label("PDF / JPG / PNG をドロップするか「画像を開く」で開始")
         root.addWidget(self.status_label)
 
-        # Del → ボタンと同じ _on_delete_selected（click() はフォーカス移動のみになるため直接呼ぶ）
-        self._delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self)
-        self._delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        self._delete_shortcut.activated.connect(self._on_delete_selected)
+    def handle_delete_key(self) -> None:
+        """Del — キャンバスの選択欄を直接削除。"""
+        canvas = self.editor._canvas
+        if canvas.selected_idx < 0:
+            return
+        canvas._delete_selected_region()
+        self._refresh_field_panel()
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
 
-    def _on_click_detect_toggled(self, checked: bool) -> None:
-        self.editor.set_click_detect_mode(checked)
-        if checked:
-            self._set_status("クリックで欄検出モード — 解答欄の内側をクリックしてください。")
+    def _on_region_mode_changed(self, auto_detect: bool) -> None:
+        self.editor.set_click_detect_mode(auto_detect)
+        self.editor.focus_canvas()
+        if auto_detect:
+            self._set_status("自動認識モード — 解答欄の内側をクリックしてください。")
         else:
-            self._set_status("ドラッグで記述欄を指定できます。")
+            self._set_status("手動設定モード — ドラッグで記述欄を指定できます。")
 
     def _on_detect_thresh_changed(self, value: int) -> None:
         self.editor.set_detect_threshold(value)
@@ -374,10 +381,7 @@ class Step1Page(QWidget):
         h.run_in_thread(self, task, done)
 
     def _on_delete_selected(self) -> None:
-        if not self.editor.has_selection():
-            return
-        self.editor.delete_selected()
-        self._refresh_field_panel()
+        self.handle_delete_key()
 
     def refresh(self) -> None:
         if not self.app.require_active_test():

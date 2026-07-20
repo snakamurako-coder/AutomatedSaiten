@@ -7,6 +7,7 @@ from typing import Any
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QHBoxLayout,
     QLabel,
     QMessageBox,
@@ -44,10 +45,16 @@ class Step8Page(QWidget):
 
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("欄種別"))
+        self._type_group = QButtonGroup(self)
+        self._type_group.setExclusive(True)
         self.type_buttons: dict[str, QPushButton] = {}
         for t in IDENTITY_TYPES:
             btn = QPushButton(t)
             btn.setCheckable(True)
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            set_variant(btn, "nav")
+            self._type_group.addButton(btn)
             btn.clicked.connect(lambda _c=False, tt=t: self._select_type(tt))
             self.type_buttons[t] = btn
             toolbar.addWidget(btn)
@@ -101,14 +108,19 @@ class Step8Page(QWidget):
 
     def _on_region_mode_changed(self, auto_detect: bool) -> None:
         self.editor.set_click_detect_mode(auto_detect)
+        self.editor.focus_canvas()
+        hint = (
+            "欄の内側をクリックすると自動検出します（再指定で上書き）。"
+            if auto_detect
+            else "画像上をドラッグして指定してください（再ドラッグで上書き）。"
+        )
         if self._selected_type:
-            self.hint_label.setText(
-                f"「{self._selected_type}」欄 — {self._region_action_hint()}"
-            )
+            self.hint_label.setText(f"「{self._selected_type}」欄 — {hint}")
         elif auto_detect:
             self.hint_label.setText("欄種別を選んでから、欄の内側をクリックしてください。")
         else:
             self.hint_label.setText("欄種別を選んでから、画像上をドラッグして指定してください。")
+        self._set_status("自動認識モード" if auto_detect else "手動設定モード")
 
     def _on_detect_thresh_changed(self, value: int) -> None:
         self.editor.set_detect_threshold(value)
@@ -142,13 +154,18 @@ class Step8Page(QWidget):
             ]
         )
         self._update_type_buttons()
+        if self._selected_type:
+            self.editor.set_pending_label(self._selected_type, replace_same=True)
         self.status_label.setText(f"設定済み: {len(fields)} 欄")
 
     def _select_type(self, type_name: str) -> None:
         self._selected_type = type_name
         for t, btn in self.type_buttons.items():
             btn.setChecked(t == type_name)
+            btn.style().unpolish(btn)
+            btn.style().polish(btn)
         self.editor.set_pending_label(type_name, replace_same=True)
+        self.editor.focus_canvas()
         self.hint_label.setText(f"「{type_name}」欄 — {self._region_action_hint()}")
 
     def _on_regions_changed(self) -> None:
@@ -160,9 +177,10 @@ class Step8Page(QWidget):
             if t in done_types:
                 set_variant(btn, "success")
             else:
-                btn.setProperty("variant", None)
+                set_variant(btn, "nav")
             btn.style().unpolish(btn)
             btn.style().polish(btn)
+            btn.update()
         done_list = [t for t in IDENTITY_TYPES if t in done_types]
         if done_list:
             self.status_label.setText("設定済み: " + "、".join(done_list))

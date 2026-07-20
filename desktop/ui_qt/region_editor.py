@@ -230,6 +230,13 @@ class _EditorCanvas(QWidget):
                 return
         idx = self._hit_region(px, py)
         if idx >= 0:
+            if (
+                self.click_detect_mode
+                and self.pending_label
+                and self.regions[idx].get("id") == self.pending_label
+            ):
+                self._try_detect_region_at(px, py)
+                return
             self.selected_idx = idx
             self._drag = {
                 "type": "move",
