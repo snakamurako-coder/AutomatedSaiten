@@ -2,16 +2,24 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QEvent, Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QButtonGroup,
+    QComboBox,
+    QDoubleSpinBox,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
+    QPlainTextEdit,
     QPushButton,
+    QSpinBox,
     QSizePolicy,
     QStackedWidget,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -46,7 +54,12 @@ class MainWindow(QMainWindow):
 
         init_db()
         self.active_test_id: str | None = None
+        self._current_step_id = 0
         self._apply_startup_test_load()
+
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -320,6 +333,7 @@ class MainWindow(QMainWindow):
             page.focus_field_from_search(str(hit.get("fieldId") or ""))  # type: ignore[attr-defined]
 
     def load_step(self, step_id: int) -> None:
+        self._current_step_id = step_id
         self._sync_active_test()
         page = self.pages.get(step_id)
         if page is None:
@@ -333,6 +347,32 @@ class MainWindow(QMainWindow):
         elif step_id == 0:
             page.refresh()  # type: ignore[attr-defined]
         self._sync_palette(step_id)
+        self.palette_controller.set_delete_hotkey_enabled(step_id != 1)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if (
+            self._current_step_id == 1
+            and event.type() == QEvent.Type.KeyPress
+            and isinstance(event, QKeyEvent)
+            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            and not self._step1_delete_hotkey_blocked()
+        ):
+            page = self.pages.get(1)
+            if page is not None and hasattr(page, "handle_delete_key"):
+                page.handle_delete_key()  # type: ignore[attr-defined]
+                return True
+        return super().eventFilter(obj, event)
+
+    @staticmethod
+    def _step1_delete_hotkey_blocked() -> bool:
+        fw = QApplication.focusWidget()
+        if fw is None:
+            return False
+        if isinstance(fw, (QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox)):
+            return True
+        if isinstance(fw, QComboBox) and fw.isEditable():
+            return True
+        return False
 
     def _sync_palette(self, step_id: int) -> None:
         if step_id in PaletteController.ACTIVE_STEPS:

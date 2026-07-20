@@ -178,10 +178,12 @@ class PaletteController:
         self.tool_window.undo_requested.connect(self._on_undo_requested)
         self.tool_window.redo_requested.connect(self._on_redo_requested)
 
+        self._delete_hotkeys: list[QShortcut] = []
         for parent in (self._main, self.tool_window):
             shortcut = QShortcut(QKeySequence.StandardKey.Delete, parent)
             shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             shortcut.activated.connect(self._on_delete_selected_text_hotkey)
+            self._delete_hotkeys.append(shortcut)
             undo_shortcut = QShortcut(QKeySequence.StandardKey.Undo, parent)
             undo_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
             undo_shortcut.activated.connect(self._on_undo_requested)
@@ -219,6 +221,11 @@ class PaletteController:
         if tool not in (TOOL_PEN, TOOL_ERASER, TOOL_TEXT, TOOL_PHRASE, TOOL_NONE):
             return TOOL_NONE
         return tool
+
+    def set_delete_hotkey_enabled(self, enabled: bool) -> None:
+        """①回答欄設定など、MainWindow 側で Del を処理するステップでは無効化する。"""
+        for shortcut in self._delete_hotkeys:
+            shortcut.setEnabled(bool(enabled))
 
     def ensure_palette_visible(self) -> None:
         """描画ツールまたは FAB を前面表示（グリッド描画後などに呼ぶ）。"""
@@ -977,14 +984,8 @@ class PaletteController:
     def _on_delete_selected_text_hotkey(self) -> None:
         """選択中のテキストボックスを Del で削除（文字編集中はエディタに任せる）。"""
         main = self._main
-        stack = getattr(main, "stack", None)
-        pages = getattr(main, "pages", None)
-        if stack is not None and pages is not None:
-            page = stack.currentWidget()
-            step1 = pages.get(1)
-            if page is step1 and hasattr(step1, "_on_delete_selected"):
-                step1._on_delete_selected()
-                return
+        if getattr(main, "_current_step_id", None) == 1:
+            return
         if self._tool not in (TOOL_TEXT, TOOL_PHRASE):
             return
         if any(stack.text_layer.has_editing_focus() for stack in self._stacks()):
