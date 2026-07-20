@@ -15,7 +15,7 @@ from models.test_repo import (
     normalize_file_name,
     save_step3_faint,
 )
-from services.faint_ink import analyze_warped_fields
+from services.faint_ink import analyze_warped_fields, format_ok_summary
 from services.image_loader import imread_bgr
 from services.image_warp import warp_image_file, warped_file_name
 from services.ocr import run_ocr_on_warped_image
@@ -624,10 +624,11 @@ def run_faint_precheck(
 
             warped_bgr = _load_warped_bgr(warped_path)
             analysis = analyze_warped_fields(warped_bgr, fields, thresholds)
+            worst = analysis.get("worstField") or {}
             if analysis["isFaint"]:
-                worst = analysis.get("worstField") or {}
                 faint_map[key] = {
                     "fileName": file_name,
+                    "isFaint": True,
                     "reason": analysis.get("reason") or "",
                     "fieldId": str(worst.get("fieldId") or ""),
                     "metrics": dict(worst.get("metrics") or {}),
@@ -636,7 +637,19 @@ def run_faint_precheck(
                 }
                 faint_count_new += 1
             else:
-                faint_map.pop(key, None)
+                faint_map[key] = {
+                    "fileName": file_name,
+                    "isFaint": False,
+                    "reason": format_ok_summary(
+                        dict(worst.get("metrics") or {}),
+                        thresholds,
+                        display_name=str(worst.get("displayName") or ""),
+                    ),
+                    "fieldId": str(worst.get("fieldId") or ""),
+                    "metrics": dict(worst.get("metrics") or {}),
+                    "failedCriteria": [],
+                    "warpedPath": warped_path,
+                }
                 ok_count += 1
         except Exception as e:
             errors.append({"fileName": file_name, "error": str(e)})
@@ -650,7 +663,8 @@ def run_faint_precheck(
         "faintFiles": [
             v["fileName"]
             for k, v in faint_map.items()
-            if normalize_file_name(v.get("fileName") or "")
+            if v.get("isFaint", True)
+            and normalize_file_name(v.get("fileName") or "")
             in {normalize_file_name(i.get("name") or i.get("fileName") or "") for i in items}
         ],
         "disabled": False,

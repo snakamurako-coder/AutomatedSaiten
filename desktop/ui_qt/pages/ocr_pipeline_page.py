@@ -49,6 +49,7 @@ from services.batch_processor import (
     run_batch_warp,
     run_faint_precheck,
 )
+from services.faint_ink import faint_entry_is_faint
 from services.work_queue import build_file_inventory, find_warped_for_original
 from ui_qt import helpers as h
 from ui_qt.faint_review_dialog import FaintReviewDialog
@@ -70,7 +71,7 @@ _COL_FILE = 3
 _COL_STUDENT = 4
 _COL_FIELD_START = 5
 
-_DEFAULT_CHECK = frozenset({"未処理", "補正済", "失敗"})
+_DEFAULT_CHECK = frozenset({"未処理", "補正済", "検査済", "失敗"})
 
 _PHASE_META: dict[int, dict[str, str]] = {
     5: {
@@ -351,7 +352,8 @@ class OcrPipelinePage(QWidget):
         st = inv["stats"]
         self.queue_stats.setText(
             f"合計 {st['total']} 件 — 未処理 {st['unprocessed']} / 補正済 {st['warped']} / "
-            f"要確認 {st.get('faint', 0)} / 反映済 {st['processed']} / 失敗 {st['failed']}"
+            f"要確認 {st.get('faint', 0)} / 検査済 {st.get('faintOk', 0)} / "
+            f"反映済 {st['processed']} / 失敗 {st['failed']}"
         )
         self._inventory_rows = inv["rows"]
         self._rebuild_table(self._inventory_rows)
@@ -386,7 +388,7 @@ class OcrPipelinePage(QWidget):
         if key == "warped":
             return status == "補正済"
         if key == "faint":
-            return status == "要確認（薄い）" or bool(rd.get("faint"))
+            return rd.get("status") == "要確認（薄い）" or faint_entry_is_faint(rd.get("faint"))
         if key == "processed":
             return status == "反映済"
         if key == "failed":
@@ -456,7 +458,7 @@ class OcrPipelinePage(QWidget):
         q = data.get("queueItem")
         has_path = bool(q and q.get("path"))
         has_warped = bool(str(data.get("warpedPath") or "").strip())
-        is_faint = data.get("status") == "要確認（薄い）" or bool(data.get("faint"))
+        is_faint = data.get("status") == "要確認（薄い）" or faint_entry_is_faint(data.get("faint"))
         host = QWidget()
         lay = QHBoxLayout(host)
         lay.setContentsMargins(2, 0, 2, 0)
@@ -493,6 +495,8 @@ class OcrPipelinePage(QWidget):
             return QColor(COLORS["danger"])
         if status == "要確認（薄い）":
             return QColor("#d97706")
+        if status == "検査済":
+            return QColor(COLORS["success"])
         if status in ("処理中", "原画像読込", "枠検出・補正", "OCRテキスト化"):
             return QColor(COLORS["accent"])
         if status == "補正済":
@@ -700,6 +704,7 @@ class OcrPipelinePage(QWidget):
         for log in result.get("itemLogs") or []:
             if log.get("status") == "done" and test_id:
                 clear_step3_failed_entry(test_id, log["fileName"])
+                clear_step3_faint_entry(test_id, log["fileName"])
         self._scan_folder()
         self.log.appendPlainText(f"--- 自動トリミング完了: {result.get('processed', 0)} 件 ---")
 
@@ -862,11 +867,29 @@ class OcrPipelinePage(QWidget):
             h.warn(self, "選択なし", "薄字検査するファイルにチェックを入れてください。")
             return
         test_id = self.app.active_test_id
-        items, skipped = self._get_checked_items()
+        items, skipped = self._get_checked_items(require_path=False)
         if skipped:
             h.warn(self, "反映済みはスキップ", "反映済みのファイルは薄字検査しません。")
-        if not items:
-            h.warn(self, "選択なし", "検査できるチェック行がありません（原画像または補正画像が必要です）。")
+        no_warp: list[str] = []
+        faint_items: list[dict[str, Any]] = []
+        for item in items:
+            warped = str(item.get("warpedPath") or "").strip()
+            if not warped:
+                no_warp.append(str(item.get("name") or ""))
+                continue
+            faint_items.append(item)
+        if no_warp:
+            h.warn(
+                self,
+                "補正画像なし",
+                f"補正画像がない {len(no_warp)} 件はスキップしました。⑤トリミングを先に実行してください。",
+            )
+        if not faint_items:
+            h.warn(
+                self,
+                "選択なし",
+                "検査できるチェック行がありません（補正画像が必要です）。",
+            )
             return
         self._set_primary_enabled(False)
         bridge = ProgressBridge(self)
@@ -874,7 +897,7 @@ class OcrPipelinePage(QWidget):
 
         def task():
             return run_faint_precheck(
-                test_id, items, on_progress=lambda c, t, n: bridge.updated.emit(c, t, n)
+                test_id, faint_items, on_progress=lambda c, t, n: bridge.updated.emit(c, t, n)
             )
 
         h.run_in_thread(self, task, self._on_faint_precheck_done)
@@ -945,7 +968,10 @@ class OcrPipelinePage(QWidget):
         cfg = load_config()
         return cfg.get("default_orientation", "landscape"), 128
 
-    def _on_manual_warp_saved(self, _entry: dict[str, Any] | None = None) -> None:
+    def _on_manual_warp_saved(self, entry: dict[str, Any] | None = None) -> None:
+        test_id = self.app.active_test_id
+        if test_id and entry and entry.get("fileName"):
+            clear_step3_faint_entry(test_id, str(entry["fileName"]))
         if self._scanned:
             self._scan_folder()
 
