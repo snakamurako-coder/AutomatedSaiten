@@ -94,7 +94,7 @@ class StepManualBootstrapPage(QWidget):
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
         wire_toggle_columns(self.table, (_COL_CHECK,), lambda _r, _c, _v: None)
-        root.addWidget(main_table_frame(self.table), 1)
+        root.addWidget(main_table_frame("ファイル一覧", self.table), 1)
 
         self.log = QPlainTextEdit()
         self.log.setReadOnly(True)
