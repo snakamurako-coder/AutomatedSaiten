@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import copy
 from typing import Any, Callable
 
 import numpy as np
@@ -463,13 +462,11 @@ class ManualWarpDialog(QDialog):
         test_id: str,
         orientation: Orientation | str = "landscape",
         on_saved: Callable[[dict[str, Any]], None] | None = None,
-        on_batch_done: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__(parent)
         self._test_id = test_id
         self._orientation: Orientation = orientation  # type: ignore[assignment]
         self._on_saved = on_saved
-        self._on_batch_done = on_batch_done
         self._file_meta: dict[str, Any] | None = None
         self._image_bgr: np.ndarray | None = None
         self._preview_bgr: np.ndarray | None = None
@@ -673,9 +670,7 @@ class ManualWarpDialog(QDialog):
     def _update_save_button(self) -> None:
         if self._continuous_mode:
             is_last = self._queue_index >= len(self._continuous_queue) - 1
-            self.save_btn.setText(
-                "保存して一括OCR開始" if is_last else "保存・次の画像に移る"
-            )
+            self.save_btn.setText("保存" if is_last else "保存・次の画像に移る")
         else:
             self.save_btn.setText("保存してOCR再実行")
 
@@ -799,9 +794,8 @@ class ManualWarpDialog(QDialog):
         if not self._saved_entries:
             self._set_status("保存に成功した画像がありません")
             return
-        self._set_status(f"OCR一括実行中...（{len(self._saved_entries)} 件）")
-        if self._on_batch_done:
-            self._on_batch_done({"entries": copy.deepcopy(self._saved_entries)})
+        if self._on_saved:
+            self._on_saved({})
         self.accept()
 
     def _on_close(self) -> None:

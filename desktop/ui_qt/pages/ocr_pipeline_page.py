@@ -986,7 +986,7 @@ class OcrPipelinePage(QWidget):
             self,
             test_id=self.app.active_test_id,
             orientation=orientation,
-            on_batch_done=lambda _p: self._on_manual_warp_saved(),
+            on_saved=lambda e: self._on_manual_warp_saved(e),
         )
         dlg.open_continuous(queue, thresh=thresh)
         dlg.exec()
