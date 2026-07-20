@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -182,6 +182,7 @@ class Step1Page(QWidget):
         self.thresh_slider.valueChanged.connect(self._on_detect_thresh_changed)
         toolbar.addWidget(self.thresh_slider)
         self.click_detect_check = QCheckBox("クリックで欄検出")
+        self.click_detect_check.setChecked(True)
         self.click_detect_check.setToolTip(
             "オン: 解答欄の内側をクリックすると枠を自動検出。"
             "オフ: 従来どおりドラッグで矩形を指定。"
@@ -205,6 +206,7 @@ class Step1Page(QWidget):
             on_status=self._set_status,
         )
         self.editor.set_detect_threshold(int(self.thresh_slider.value()))
+        self.editor.set_click_detect_mode(True)
         body.addWidget(self.editor, 1)
 
         side = QFrame()
@@ -233,6 +235,10 @@ class Step1Page(QWidget):
 
         self.status_label = h.caption_label("PDF / JPG / PNG をドロップするか「画像を開く」で開始")
         root.addWidget(self.status_label)
+
+        delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        delete_shortcut.activated.connect(self._on_delete_selected)
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
@@ -362,6 +368,12 @@ class Step1Page(QWidget):
 
         h.run_in_thread(self, task, done)
 
+    def _on_delete_selected(self) -> None:
+        if not self.editor.has_selection():
+            return
+        self.editor.delete_selected()
+        self._refresh_field_panel()
+
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
@@ -444,9 +456,7 @@ class Step1Page(QWidget):
 
     def _select_field(self, index: int) -> None:
         self.editor.select_region(index)
-
-    def _on_delete_selected(self) -> None:
-        self.editor.delete_selected()
+        self.editor.setFocus()
 
     def _on_save_fields(self) -> None:
         if not self.app.require_active_test():

@@ -63,6 +63,7 @@ class _EditorCanvas(QWidget):
         self.replace_same_label = False
         self.click_detect_mode = False
         self.detect_threshold = 128
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
         self.setMinimumSize(480, 360)
@@ -209,6 +210,7 @@ class _EditorCanvas(QWidget):
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.LeftButton:
             return
+        self.setFocus()
         if self._image_bgr is None:
             self.status.emit("先に PDF / JPG / PNG の模範解答を読み込んでください")
             return
@@ -240,8 +242,28 @@ class _EditorCanvas(QWidget):
             self._try_detect_region_at(px, py)
             return
         self.selected_idx = -1
-        self._drag = {"type": "create", "start_x": px, "start_y": py}
+        self._drag = {"type": "create", "start_x": px, "start_y": py, "cur_x": px, "cur_y": py}
         self.update()
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self.selected_idx >= 0:
+                self._delete_selected_region()
+                event.accept()
+                return
+        super().keyPressEvent(event)
+
+    def _delete_selected_region(self) -> None:
+        if self.selected_idx < 0:
+            return
+        name = self.regions[self.selected_idx].get("displayName") or self.regions[self.selected_idx]["id"]
+        self.regions.pop(self.selected_idx)
+        self.selected_idx = -1
+        for i, r in enumerate(self.regions):
+            r["order"] = i + 1
+        self.update()
+        self.changed.emit()
+        self.status.emit(f"「{name}」を削除しました")
 
     def _try_detect_region_at(self, px: float, py: float) -> None:
         from services.region_detect import detect_region_at_point
@@ -317,15 +339,13 @@ class _EditorCanvas(QWidget):
             return
         if self._drag["type"] == "create":
             px, py = self._to_image(event.position())
-            w = abs(px - self._drag["start_x"])
-            h = abs(py - self._drag["start_y"])
-            if w > self.MIN_SIZE and h > self.MIN_SIZE:
-                self._add_region(
-                    min(px, self._drag["start_x"]),
-                    min(py, self._drag["start_y"]),
-                    w,
-                    h,
-                )
+            sx, sy = self._drag["start_x"], self._drag["start_y"]
+            w = abs(px - sx)
+            h = abs(py - sy)
+            if w <= 4 and h <= 4 and self.click_detect_mode and not self.pending_label:
+                self._try_detect_region_at(sx, sy)
+            elif w > self.MIN_SIZE and h > self.MIN_SIZE:
+                self._add_region(min(px, sx), min(py, sy), w, h)
         else:
             self.changed.emit()
         self._drag = None
@@ -371,6 +391,7 @@ class AnswerRegionEditor(QScrollArea):
         self._fit_height_to_image = fit_height_to_image
         self._canvas = _EditorCanvas()
         self.setWidget(self._canvas)
+        self.setFocusPolicy(Qt.StrongFocus)
         self.setWidgetResizable(False)
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.setStyleSheet(
@@ -458,17 +479,28 @@ class AnswerRegionEditor(QScrollArea):
         c = self._canvas
         if c.selected_idx < 0:
             return
-        c.regions.pop(c.selected_idx)
-        c.selected_idx = -1
-        for i, r in enumerate(c.regions):
-            r["order"] = i + 1
-        c.update()
-        c.changed.emit()
+        c._delete_selected_region()
+
+    def has_selection(self) -> bool:
+        return self._canvas.selected_idx >= 0
+
+    def keyPressEvent(self, event) -> None:  # noqa: N802
+        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+            if self._canvas.selected_idx >= 0:
+                self._canvas._delete_selected_region()
+                event.accept()
+                return
+        super().keyPressEvent(event)
 
     def select_region(self, index: int) -> None:
         if 0 <= index < len(self._canvas.regions):
             self._canvas.selected_idx = index
+            self._canvas.setFocus()
             self._canvas.update()
+
+    def setFocus(self) -> None:  # noqa: N802
+        self._canvas.setFocus()
+        super().setFocus()
 
     def set_region_ocr_lang(self, index: int, lang: str) -> None:
         if 0 <= index < len(self._canvas.regions):
