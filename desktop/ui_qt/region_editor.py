@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
+from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap, QShortcut
 from PySide6.QtWidgets import QScrollArea, QWidget
 
 from services.compositor import (
@@ -210,7 +210,7 @@ class _EditorCanvas(QWidget):
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() != Qt.LeftButton:
             return
-        self.setFocus()
+        self.setFocus(Qt.MouseFocusReason)
         if self._image_bgr is None:
             self.status.emit("先に PDF / JPG / PNG の模範解答を読み込んでください")
             return
@@ -391,13 +391,20 @@ class AnswerRegionEditor(QScrollArea):
         self._fit_height_to_image = fit_height_to_image
         self._canvas = _EditorCanvas()
         self.setWidget(self._canvas)
-        self.setFocusPolicy(Qt.StrongFocus)
+        self.setFocusPolicy(Qt.NoFocus)
+        self.viewport().setFocusPolicy(Qt.NoFocus)
         self.setWidgetResizable(False)
         self.setAlignment(Qt.AlignLeft | Qt.AlignTop)
         self.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
+        delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._canvas)
+        delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        delete_shortcut.activated.connect(self.delete_selected)
+        backspace_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self._canvas)
+        backspace_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        backspace_shortcut.activated.connect(self.delete_selected)
         if fit_height_to_image:
             self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -495,12 +502,11 @@ class AnswerRegionEditor(QScrollArea):
     def select_region(self, index: int) -> None:
         if 0 <= index < len(self._canvas.regions):
             self._canvas.selected_idx = index
-            self._canvas.setFocus()
+            self._canvas.setFocus(Qt.OtherFocusReason)
             self._canvas.update()
 
-    def setFocus(self) -> None:  # noqa: N802
-        self._canvas.setFocus()
-        super().setFocus()
+    def focus_canvas(self) -> None:
+        self._canvas.setFocus(Qt.OtherFocusReason)
 
     def set_region_ocr_lang(self, index: int, lang: str) -> None:
         if 0 <= index < len(self._canvas.regions):

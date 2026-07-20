@@ -5,17 +5,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeySequence, QShortcut
+from PySide6.QtCore import QEvent, Qt, Signal
+from PySide6.QtGui import QDragEnterEvent, QDropEvent, QKeyEvent, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QCheckBox,
     QComboBox,
+    QDoubleSpinBox,
     QFileDialog,
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPlainTextEdit,
     QScrollArea,
     QSlider,
+    QSpinBox,
+    QTextEdit,
     QVBoxLayout,
     QWidget,
 )
@@ -236,9 +242,44 @@ class Step1Page(QWidget):
         self.status_label = h.caption_label("PDF / JPG / PNG をドロップするか「画像を開く」で開始")
         root.addWidget(self.status_label)
 
-        delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self)
+        delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self)
         delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         delete_shortcut.activated.connect(self._on_delete_selected)
+
+    def showEvent(self, event) -> None:  # noqa: N802
+        super().showEvent(event)
+        app = QApplication.instance()
+        if app is not None:
+            app.installEventFilter(self)
+
+    def hideEvent(self, event) -> None:  # noqa: N802
+        app = QApplication.instance()
+        if app is not None:
+            app.removeEventFilter(self)
+        super().hideEvent(event)
+
+    def eventFilter(self, obj, event) -> bool:  # noqa: N802
+        if (
+            self.isVisible()
+            and event.type() == QEvent.Type.KeyPress
+            and isinstance(event, QKeyEvent)
+            and event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace)
+            and self._delete_hotkey_allowed()
+            and self.editor.has_selection()
+        ):
+            self._on_delete_selected()
+            return True
+        return super().eventFilter(obj, event)
+
+    def _delete_hotkey_allowed(self) -> bool:
+        fw = QApplication.focusWidget()
+        if fw is None:
+            return True
+        if isinstance(fw, (QLineEdit, QPlainTextEdit, QTextEdit, QSpinBox, QDoubleSpinBox)):
+            return False
+        if isinstance(fw, QComboBox) and fw.isEditable():
+            return False
+        return True
 
     def _set_status(self, message: str) -> None:
         self.status_label.setText(message)
@@ -456,7 +497,7 @@ class Step1Page(QWidget):
 
     def _select_field(self, index: int) -> None:
         self.editor.select_region(index)
-        self.editor.setFocus()
+        self.editor.focus_canvas()
 
     def _on_save_fields(self) -> None:
         if not self.app.require_active_test():
