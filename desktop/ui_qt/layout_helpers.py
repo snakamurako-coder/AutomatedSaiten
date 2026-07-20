@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QPoint, QRect, QSize, Qt
 from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLayout,
+    QLayoutItem,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -114,54 +117,138 @@ def main_table_frame(title: str, table: QWidget) -> QFrame:
     return frame
 
 
+def configure_crop_image_scroll(scroll: QScrollArea) -> None:
+    """回答画像一覧: 横スクロールなし・縦スクロール可。"""
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+
+
+class FlowLayout(QLayout):
+    """左→右に並べ、幅不足時は改行するレイアウト。"""
+
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        h_spacing: int = 6,
+        v_spacing: int = 6,
+    ) -> None:
+        super().__init__(parent)
+        self._items: list[QLayoutItem] = []
+        self._h_spacing = h_spacing
+        self._v_spacing = v_spacing
+
+    def addItem(self, item: QLayoutItem) -> None:
+        self._items.append(item)
+
+    def count(self) -> int:
+        return len(self._items)
+
+    def itemAt(self, index: int) -> QLayoutItem | None:
+        if 0 <= index < len(self._items):
+            return self._items[index]
+        return None
+
+    def takeAt(self, index: int) -> QLayoutItem | None:
+        if 0 <= index < len(self._items):
+            return self._items.pop(index)
+        return None
+
+    def expandingDirections(self) -> Qt.Orientations:
+        return Qt.Orientation(0)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self._layout_items(QRect(0, 0, width, 0), test_only=True)
+
+    def setGeometry(self, rect: QRect) -> None:
+        super().setGeometry(rect)
+        self._layout_items(rect, test_only=False)
+
+    def sizeHint(self) -> QSize:
+        return self.minimumSize()
+
+    def minimumSize(self) -> QSize:
+        size = QSize()
+        for item in self._items:
+            size = size.expandedTo(item.minimumSize())
+        margins = self.contentsMargins()
+        size += QSize(margins.left() + margins.right(), margins.top() + margins.bottom())
+        return size
+
+    def _layout_items(self, rect: QRect, *, test_only: bool) -> int:
+        margins = self.contentsMargins()
+        effective = rect.adjusted(
+            margins.left(), margins.top(), -margins.right(), -margins.bottom()
+        )
+        x = effective.x()
+        y = effective.y()
+        line_height = 0
+        for item in self._items:
+            hint = item.sizeHint()
+            w = hint.width()
+            h = hint.height()
+            if (
+                x + w > effective.right() + 1
+                and line_height > 0
+                and x > effective.x()
+            ):
+                x = effective.x()
+                y += line_height + self._v_spacing
+                line_height = 0
+            if not test_only:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += w + self._h_spacing
+            line_height = max(line_height, h)
+        return y + line_height - rect.y() + margins.bottom()
+
+
 class CropTileColumnPanel(QWidget):
-    """クロップタイルを列ごとに縦積み（行同期グリッドの高さ余白を作らない）。"""
+    """クロップタイルを折り返し配置（横スクロールなし・縦スクロール可）。"""
 
     def __init__(
         self,
         *,
-        columns: int = 4,
         margins: tuple[int, int, int, int] = (6, 6, 6, 6),
         spacing: int = 6,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
-        self._columns_count = max(1, int(columns))
         self.setStyleSheet("background: transparent;")
-        root = QHBoxLayout(self)
-        root.setContentsMargins(*margins)
-        root.setSpacing(spacing)
-        root.setAlignment(Qt.AlignmentFlag.AlignTop)
-        self._column_layouts: list[QVBoxLayout] = []
-        for _ in range(self._columns_count):
-            host = QWidget()
-            host.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Minimum)
-            col = QVBoxLayout(host)
-            col.setContentsMargins(0, 0, 0, 0)
-            col.setSpacing(spacing)
-            col.setAlignment(Qt.AlignmentFlag.AlignTop)
-            self._column_layouts.append(col)
-            root.addWidget(host, 1)
+        self.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Preferred)
+        self._flow = FlowLayout(self, h_spacing=spacing, v_spacing=spacing)
+        self._flow.setContentsMargins(*margins)
+
+    def heightForWidth(self, width: int) -> int:
+        return self._flow.heightForWidth(width)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
 
     def clear_tiles(self) -> None:
-        for col in self._column_layouts:
-            while col.count():
-                item = col.takeAt(0)
-                widget = item.widget()
-                if widget is not None:
-                    widget.deleteLater()
+        while self._flow.count():
+            item = self._flow.takeAt(0)
+            if item is None:
+                continue
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        self.updateGeometry()
 
     def add_tile(self, widget: QWidget, index: int) -> None:
+        del index
         widget.setSizePolicy(
             QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum
         )
-        col_idx = int(index) % self._columns_count
-        self._column_layouts[col_idx].addWidget(
-            widget, 0, Qt.AlignmentFlag.AlignTop
-        )
+        self._flow.addWidget(widget)
+        self.updateGeometry()
 
     def set_message(self, text: str) -> None:
         self.clear_tiles()
         lbl = h.muted_label(text)
         lbl.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
-        self._column_layouts[0].addWidget(lbl, 0, Qt.AlignmentFlag.AlignTop)
+        lbl.setWordWrap(True)
+        self._flow.addWidget(lbl)
+        self.updateGeometry()

@@ -56,7 +56,7 @@ from services.feedback_renderer import composite_mark_on_image
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
-from ui_qt.layout_helpers import CropTileColumnPanel, make_expanding
+from ui_qt.layout_helpers import CropTileColumnPanel, configure_crop_image_scroll, make_expanding
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.style import COLORS
 
@@ -110,6 +110,8 @@ class StepManualPage(QWidget):
         work_lay.setContentsMargins(0, 0, 0, 4)
         work_lay.setSpacing(4)
 
+        self._create_page_controls()
+
         # タイトル行＝全件/指定件数トグルを同じ高さに
         title_row = QHBoxLayout()
         title_row.setSpacing(12)
@@ -152,6 +154,7 @@ class StepManualPage(QWidget):
         self.status_label.setWordWrap(False)
         info_row.addWidget(self.selection_label, 0)
         info_row.addWidget(self.status_label, 0)
+        info_row.addWidget(self._build_page_nav_row(), 0)
         info_row.addWidget(self._build_selection_mode_switch(), 0)
         info_row.addStretch()
         left_hdr.addLayout(info_row)
@@ -161,13 +164,14 @@ class StepManualPage(QWidget):
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
+        configure_crop_image_scroll(self.crop_scroll)
         self.crop_scroll.viewport().setAttribute(Qt.WA_TabletTracking, True)
         self.crop_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
         make_expanding(self.crop_scroll)
-        self.crop_panel = CropTileColumnPanel(columns=4, margins=(6, 6, 6, 6), spacing=6)
+        self.crop_panel = CropTileColumnPanel(margins=(6, 6, 6, 6), spacing=6)
         self.crop_scroll.setWidget(self.crop_panel)
         work_lay.addWidget(self.crop_scroll, 1)
         root.addWidget(work, 1)
@@ -232,6 +236,35 @@ class StepManualPage(QWidget):
             self._mode_lbl_text.setStyleSheet(active)
             self._mode_lbl_print.setStyleSheet(idle)
 
+    def _create_page_controls(self) -> None:
+        self.page_size_spin = QSpinBox()
+        self.page_size_spin.setRange(1, 500)
+        self.page_size_spin.setValue(self._page_size)
+        self.page_size_spin.setSuffix(" 件ごと")
+        self.page_size_spin.setMinimumWidth(108)
+        self.page_size_spin.setToolTip("一度に表示する件数（クリックして直接入力可）")
+        self.page_size_spin.valueChanged.connect(self._on_page_size_changed)
+
+        self.page_prev_btn = h.button("◀ 前", self._on_page_prev)
+        self.page_prev_btn.setObjectName("PageNavBtn")
+        self.page_next_btn = h.button("次 ▶", self._on_page_next)
+        self.page_next_btn.setObjectName("PageNavBtn")
+        self.page_prev_btn.setStyleSheet(
+            "QPushButton#PageNavBtn { padding: 4px 10px; min-width: 52px; }"
+        )
+        self.page_next_btn.setStyleSheet(
+            "QPushButton#PageNavBtn { padding: 4px 10px; min-width: 52px; }"
+        )
+
+        self.page_info_label = h.caption_label("", wrap=False)
+        self.page_info_label.setAlignment(
+            Qt.AlignmentFlag.AlignCenter | Qt.AlignmentFlag.AlignVCenter
+        )
+        sample = "999 / 999 ページ（全 9999 件）"
+        self.page_info_label.setMinimumWidth(
+            self.page_info_label.fontMetrics().horizontalAdvance(sample) + 8
+        )
+
     def _build_page_mode_row(self) -> QWidget:
         wrap = QWidget()
         lay = QHBoxLayout(wrap)
@@ -262,30 +295,25 @@ class StepManualPage(QWidget):
         lay.addWidget(self._page_lbl_all)
         lay.addWidget(self.page_mode_switch)
         lay.addWidget(self._page_lbl_chunk)
+        lay.addStretch()
+        self._update_page_mode_labels()
+        wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        return wrap
 
-        self.page_size_spin = QSpinBox()
-        self.page_size_spin.setRange(1, 500)
-        self.page_size_spin.setValue(self._page_size)
-        self.page_size_spin.setSuffix(" 件ごと")
-        self.page_size_spin.setFixedWidth(100)
-        self.page_size_spin.setToolTip("一度に表示する件数（クリックして直接入力可）")
-        self.page_size_spin.valueChanged.connect(self._on_page_size_changed)
+    def _build_page_nav_row(self) -> QWidget:
+        self._page_nav_wrap = QWidget()
+        lay = QHBoxLayout(self._page_nav_wrap)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
         lay.addWidget(self.page_size_spin)
-
-        self.page_prev_btn = h.button("◀", self._on_page_prev)
-        self.page_prev_btn.setFixedWidth(32)
-        self.page_next_btn = h.button("▶", self._on_page_next)
-        self.page_next_btn.setFixedWidth(32)
-        self.page_info_label = h.caption_label("")
         lay.addWidget(self.page_prev_btn)
         lay.addWidget(self.page_info_label)
         lay.addWidget(self.page_next_btn)
-        lay.addStretch()
-        self._update_page_mode_labels()
         self._update_page_controls_enabled()
-        # タイトル行に並べるため縦方向は中央寄せ
-        wrap.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
-        return wrap
+        self._page_nav_wrap.setSizePolicy(
+            QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Fixed
+        )
+        return self._page_nav_wrap
 
     def _on_page_mode_toggled(self, checked: bool) -> None:
         # checked=True → 指定件数表示, False → 全件表示
@@ -307,10 +335,8 @@ class StepManualPage(QWidget):
 
     def _update_page_controls_enabled(self) -> None:
         chunk = not self._show_all_pages
-        self.page_size_spin.setVisible(chunk)
-        self.page_prev_btn.setVisible(chunk)
-        self.page_next_btn.setVisible(chunk)
-        self.page_info_label.setVisible(chunk)
+        if hasattr(self, "_page_nav_wrap"):
+            self._page_nav_wrap.setVisible(chunk)
 
     def _on_page_size_changed(self, value: int) -> None:
         self._page_size = max(1, int(value))

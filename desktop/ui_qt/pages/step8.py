@@ -74,6 +74,7 @@ from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.layout_helpers import (
     CollapsibleSection,
     CropTileColumnPanel,
+    configure_crop_image_scroll,
     main_table_frame,
     make_expanding,
     viewport_work_height,
@@ -395,12 +396,13 @@ class Step8Page(QWidget):
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
+        configure_crop_image_scroll(self.crop_scroll)
         self.crop_scroll.viewport().setAttribute(Qt.WA_TabletTracking, True)
         self.crop_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
-        self.crop_panel = CropTileColumnPanel(columns=4, margins=(8, 8, 8, 8), spacing=8)
+        self.crop_panel = CropTileColumnPanel(margins=(8, 8, 8, 8), spacing=8)
         self.crop_scroll.setWidget(self.crop_panel)
         lay.addWidget(self.crop_scroll)
         return box
