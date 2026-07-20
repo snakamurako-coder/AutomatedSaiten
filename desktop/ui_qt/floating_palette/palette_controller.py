@@ -976,6 +976,17 @@ class PaletteController:
 
     def _on_delete_selected_text_hotkey(self) -> None:
         """選択中のテキストボックスを Del で削除（文字編集中はエディタに任せる）。"""
+        main = self._main
+        stack = getattr(main, "stack", None)
+        pages = getattr(main, "pages", None)
+        if stack is not None and pages is not None:
+            page = stack.currentWidget()
+            step1 = pages.get(1)
+            if page is step1:
+                delete_btn = getattr(step1, "delete_btn", None)
+                if delete_btn is not None and delete_btn.isEnabled() and delete_btn.isVisible():
+                    delete_btn.click()
+                return
         if self._tool not in (TOOL_TEXT, TOOL_PHRASE):
             return
         if any(stack.text_layer.has_editing_focus() for stack in self._stacks()):

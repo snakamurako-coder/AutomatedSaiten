@@ -11,7 +11,7 @@ from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
-from PySide6.QtGui import QColor, QKeySequence, QPainter, QPen, QPixmap, QShortcut
+from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QScrollArea, QWidget
 
 from services.compositor import (
@@ -245,14 +245,6 @@ class _EditorCanvas(QWidget):
         self._drag = {"type": "create", "start_x": px, "start_y": py, "cur_x": px, "cur_y": py}
         self.update()
 
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            if self.selected_idx >= 0:
-                self._delete_selected_region()
-                event.accept()
-                return
-        super().keyPressEvent(event)
-
     def _delete_selected_region(self) -> None:
         if self.selected_idx < 0:
             return
@@ -399,12 +391,6 @@ class AnswerRegionEditor(QScrollArea):
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
-        delete_shortcut = QShortcut(QKeySequence.StandardKey.Delete, self._canvas)
-        delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        delete_shortcut.activated.connect(self.delete_selected)
-        backspace_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Backspace), self._canvas)
-        backspace_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
-        backspace_shortcut.activated.connect(self.delete_selected)
         if fit_height_to_image:
             self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
             self.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
@@ -490,14 +476,6 @@ class AnswerRegionEditor(QScrollArea):
 
     def has_selection(self) -> bool:
         return self._canvas.selected_idx >= 0
-
-    def keyPressEvent(self, event) -> None:  # noqa: N802
-        if event.key() in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
-            if self._canvas.selected_idx >= 0:
-                self._canvas._delete_selected_region()
-                event.accept()
-                return
-        super().keyPressEvent(event)
 
     def select_region(self, index: int) -> None:
         if 0 <= index < len(self._canvas.regions):
