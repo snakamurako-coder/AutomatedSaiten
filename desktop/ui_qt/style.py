@@ -171,6 +171,25 @@ QPushButton[variant="nav-segment"]:disabled {{
         stop:0 #fef9c3, stop:1 #facc15);
 }}
 
+#ManualTopGrabber {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #fef08a, stop:1 #fde047);
+    border: 1px solid #eab308;
+    border-top: none;
+    color: #713f12;
+    font-size: 11px;
+    font-weight: 700;
+    padding: 0 8px;
+}}
+#ManualTopGrabber:hover {{
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #fef9c3, stop:1 #facc15);
+}}
+#ManualTopToolbarPanel {{
+    background: {COLORS["surface"]};
+    border-bottom: 1px solid {COLORS["border_strong"]};
+}}
+
 /* --- コンテンツ --- */
 #ContentArea {{
     background: {COLORS["surface"]};

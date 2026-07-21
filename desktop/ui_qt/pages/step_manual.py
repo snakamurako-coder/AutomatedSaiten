@@ -56,7 +56,9 @@ from services.feedback_renderer import composite_mark_on_image
 from ui_qt import helpers as h
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
+from ui_qt.hover_top_toolbar import HoverTopToolbar, ManualGradingWorkOverlay
 from ui_qt.layout_helpers import CropTileColumnPanel, configure_crop_image_scroll, make_expanding
+from ui_qt.manual_grading_prefs import manual_grading_hover_toolbar_enabled
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.style import COLORS
 
@@ -106,24 +108,26 @@ class StepManualPage(QWidget):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        # --- 上部作業エリア（コンパクトにして画像領域を最大化）---
-        work = QWidget()
-        work_lay = QVBoxLayout(work)
-        work_lay.setContentsMargins(0, 0, 0, 4)
-        work_lay.setSpacing(4)
-
         self._create_page_controls()
 
-        # タイトル行＝全件/指定件数トグルを同じ高さに
+        self._work_host = QWidget()
+        self._work_host_layout = QVBoxLayout(self._work_host)
+        self._work_host_layout.setContentsMargins(0, 0, 0, 4)
+        self._work_host_layout.setSpacing(4)
+
+        self._top_toolbar_content = QWidget()
+        top_lay = QVBoxLayout(self._top_toolbar_content)
+        top_lay.setContentsMargins(0, 0, 0, 0)
+        top_lay.setSpacing(4)
+
         title_row = QHBoxLayout()
         title_row.setSpacing(12)
         title_row.setAlignment(Qt.AlignVCenter)
         title_lbl = h.title_label("手動採点")
         title_row.addWidget(title_lbl, 0, Qt.AlignVCenter)
         title_row.addWidget(self._build_page_mode_row(), 1, Qt.AlignVCenter)
-        work_lay.addLayout(title_row)
+        top_lay.addLayout(title_row)
 
-        # 記述欄・並べ替え（直下に選択件数＋判定件数）／右にフィルタ
         header = QHBoxLayout()
         header.setSpacing(8)
         left_hdr = QVBoxLayout()
@@ -163,7 +167,7 @@ class StepManualPage(QWidget):
         left_hdr.addLayout(info_row)
         header.addLayout(left_hdr, 1)
         header.addWidget(self._build_filter_box(), 0)
-        work_lay.addLayout(header)
+        top_lay.addLayout(header)
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
@@ -176,12 +180,55 @@ class StepManualPage(QWidget):
         make_expanding(self.crop_scroll)
         self.crop_panel = CropTileColumnPanel(margins=(6, 6, 6, 6), spacing=6)
         self.crop_scroll.setWidget(self.crop_panel)
-        work_lay.addWidget(self.crop_scroll, 1)
-        root.addWidget(work, 1)
+
+        self._hover_toolbar_mode: bool | None = None
+        self._hover_toolbar: HoverTopToolbar | None = None
+        self._work_overlay: ManualGradingWorkOverlay | None = None
+        self._apply_toolbar_layout_mode()
+
+        make_expanding(self._work_host)
+        root.addWidget(self._work_host, 1)
 
         # --- 最下部固定オーバーレイ ---
         self.grade_footer = self._build_footer_overlay()
         root.addWidget(self.grade_footer)
+
+    def apply_layout_prefs(self) -> None:
+        """詳細設定の手動採点レイアウト変更を反映する。"""
+        self._apply_toolbar_layout_mode()
+
+    def _apply_toolbar_layout_mode(self) -> None:
+        enabled = manual_grading_hover_toolbar_enabled()
+        if enabled == self._hover_toolbar_mode:
+            return
+        self._hover_toolbar_mode = enabled
+
+        while self._work_host_layout.count():
+            item = self._work_host_layout.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+
+        if enabled:
+            if self._hover_toolbar is None:
+                self._hover_toolbar = HoverTopToolbar(self._top_toolbar_content)
+                self._work_overlay = ManualGradingWorkOverlay(
+                    self.crop_scroll, self._hover_toolbar
+                )
+            else:
+                self._top_toolbar_content.setParent(None)
+                host_lay = self._hover_toolbar._content_host.layout()  # noqa: SLF001
+                if host_lay.indexOf(self._top_toolbar_content) < 0:
+                    host_lay.addWidget(self._top_toolbar_content)
+                self.crop_scroll.setParent(self._work_overlay)
+                self._hover_toolbar.setParent(self._work_overlay)
+            self._work_host_layout.addWidget(self._work_overlay, 1)
+            make_expanding(self._work_overlay)
+        else:
+            self._top_toolbar_content.setParent(self._work_host)
+            self._crop_scroll.setParent(self._work_host)
+            self._work_host_layout.addWidget(self._top_toolbar_content)
+            self._work_host_layout.addWidget(self.crop_scroll, 1)
 
     def _build_mark_mode_switch(self) -> QWidget:
         """判定表示（文字/印字）— 下部固定メニュー用。"""

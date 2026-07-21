@@ -327,6 +327,9 @@ class MainWindow(QMainWindow):
             self._refresh_ocr_status()
             self._refresh_stylus_prefs()
             self.palette_controller.refresh_speech_prefs()
+            manual_page = self.pages.get(MANUAL_GRADING_STEP_ID)
+            if manual_page is not None and hasattr(manual_page, "apply_layout_prefs"):
+                manual_page.apply_layout_prefs()
 
         open_settings_dialog(self, on_saved=on_saved)
 

@@ -442,6 +442,19 @@ class SettingsDialog(QDialog):
         startup_row.addWidget(self.startup_test_blank)
         form.addRow("⓪ テスト作成（起動時）", startup_row)
 
+        self.manual_hover_toolbar_check = QCheckBox(
+            "手動採点: 上部操作パネルをホバー展開（画像領域を最大化）"
+        )
+        self.manual_hover_toolbar_check.setToolTip(
+            "ON: 記述欄選択・フィルタ等を上部グラバーに格納し、"
+            "マウスを乗せると画像の上にオーバーレイ表示。\n"
+            "OFF（既定）: 従来どおり常時表示。"
+        )
+        self.manual_hover_toolbar_check.setChecked(
+            bool(cfg.get("manual_grading_hover_toolbar"))
+        )
+        form.addRow("手動採点 UI", self.manual_hover_toolbar_check)
+
         lay.addLayout(form)
         lay.addStretch()
         self._tabs.addTab(page, "その他")
@@ -531,6 +544,7 @@ class SettingsDialog(QDialog):
             "speech_pause_seconds": clamp_speech_pause_seconds(self.speech_pause_spin.value()),
             "faint_check_enabled": self.faint_enabled.isChecked(),
             "faint_min_weber_contrast": float(self.faint_weber.value()),
+            "manual_grading_hover_toolbar": self.manual_hover_toolbar_check.isChecked(),
         }
 
     def _persist_settings(self) -> bool:

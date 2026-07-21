@@ -59,6 +59,8 @@ DEFAULT_CONFIG: dict = {
     "faint_check_enabled": True,
     "faint_min_weber_contrast": 0.14,
     "faint_gamma_default": 2.5,
+    # 手動採点: 画像上の操作パネルをホバー展開（既定オフ＝従来レイアウト）
+    "manual_grading_hover_toolbar": False,
     # 目視・強調ダイアログのユーザー定義プリセット
     # [{name, contrast, clahe, bg_whiten, gamma}]  ※gamma は ×10（25 = γ2.5）
     "enhance_presets": [],
