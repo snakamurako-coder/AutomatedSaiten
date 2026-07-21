@@ -177,9 +177,11 @@ QPushButton[variant="nav-segment"]:disabled {{
     border: 1px solid #eab308;
     border-top: none;
     color: #713f12;
-    font-size: 11px;
+    font-size: 10px;
     font-weight: 700;
-    padding: 0 8px;
+    padding: 0 6px;
+    min-height: 22px;
+    max-height: 22px;
 }}
 #ManualTopGrabber:hover {{
     background: qlineargradient(x1:0, y1:0, x2:0, y2:1,

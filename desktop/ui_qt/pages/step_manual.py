@@ -173,12 +173,24 @@ class StepManualPage(QWidget):
         self.crop_scroll.setWidgetResizable(True)
         configure_crop_image_scroll(self.crop_scroll)
         self.crop_scroll.viewport().setAttribute(Qt.WA_TabletTracking, True)
-        self.crop_scroll.setStyleSheet(
+        self._crop_scroll_style_normal = (
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
+        self._crop_scroll_style_hover = (
+            f"QScrollArea {{ border: none; border-radius: 0;"
+            f" background: {COLORS['surface']}; }}"
+        )
+        self.crop_scroll.setStyleSheet(self._crop_scroll_style_normal)
         make_expanding(self.crop_scroll)
-        self.crop_panel = CropTileColumnPanel(margins=(6, 6, 6, 6), spacing=6)
+        self._crop_panel_margins_normal = (4, 4, 4, 4)
+        self._crop_panel_margins_hover = (4, 2, 4, 4)
+        self._crop_panel_spacing_normal = 4
+        self._crop_panel_spacing_hover = 3
+        self.crop_panel = CropTileColumnPanel(
+            margins=self._crop_panel_margins_normal,
+            spacing=self._crop_panel_spacing_normal,
+        )
         self.crop_scroll.setWidget(self.crop_panel)
 
         self._hover_toolbar_mode: bool | None = None
@@ -195,11 +207,13 @@ class StepManualPage(QWidget):
 
     def apply_layout_prefs(self) -> None:
         """詳細設定の手動採点レイアウト変更を反映する。"""
-        self._apply_toolbar_layout_mode()
+        self._apply_toolbar_layout_mode(force=True)
 
-    def _apply_toolbar_layout_mode(self) -> None:
+    def _apply_toolbar_layout_mode(self, *, force: bool = False) -> None:
         enabled = manual_grading_hover_toolbar_enabled()
-        if enabled == self._hover_toolbar_mode:
+        if not force and enabled == self._hover_toolbar_mode:
+            self._apply_toolbar_visuals(enabled)
+            self._sync_content_area_margins(enabled)
             return
         self._hover_toolbar_mode = enabled
 
@@ -222,13 +236,40 @@ class StepManualPage(QWidget):
                     host_lay.addWidget(self._top_toolbar_content)
                 self.crop_scroll.setParent(self._work_overlay)
                 self._hover_toolbar.setParent(self._work_overlay)
+            self._work_host_layout.setContentsMargins(0, 0, 0, 0)
+            self._work_host_layout.setSpacing(0)
             self._work_host_layout.addWidget(self._work_overlay, 1)
             make_expanding(self._work_overlay)
         else:
             self._top_toolbar_content.setParent(self._work_host)
             self.crop_scroll.setParent(self._work_host)
+            self._work_host_layout.setContentsMargins(0, 0, 0, 4)
+            self._work_host_layout.setSpacing(4)
             self._work_host_layout.addWidget(self._top_toolbar_content)
             self._work_host_layout.addWidget(self.crop_scroll, 1)
+
+        self._apply_toolbar_visuals(enabled)
+        self._sync_content_area_margins(enabled)
+
+    def _apply_toolbar_visuals(self, hover: bool) -> None:
+        if hover:
+            self.crop_scroll.setStyleSheet(self._crop_scroll_style_hover)
+            self.crop_panel.configure_layout(
+                margins=self._crop_panel_margins_hover,
+                spacing=self._crop_panel_spacing_hover,
+            )
+        else:
+            self.crop_scroll.setStyleSheet(self._crop_scroll_style_normal)
+            self.crop_panel.configure_layout(
+                margins=self._crop_panel_margins_normal,
+                spacing=self._crop_panel_spacing_normal,
+            )
+
+    def _sync_content_area_margins(self, hover: bool) -> None:
+        del hover
+        fn = getattr(self.app, "apply_manual_grading_content_margins", None)
+        if callable(fn):
+            fn()
 
     def _build_mark_mode_switch(self) -> QWidget:
         """判定表示（文字/印字）— 下部固定メニュー用。"""
@@ -1498,10 +1539,10 @@ class StepManualPage(QWidget):
         j = normalize_judgment(item.get("judgment"))
         sc = item.get("score")
         tile = QFrame()
-        pad = 4 if self._print_mark_mode else 6
+        pad = 2 if self._print_mark_mode else 3
         lay = QVBoxLayout(tile)
         lay.setContentsMargins(pad, pad, pad, pad)
-        lay.setSpacing(2)
+        lay.setSpacing(1)
 
         if not item.get("ok"):
             tile.setStyleSheet(

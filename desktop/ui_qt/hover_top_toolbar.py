@@ -15,7 +15,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-_COLLAPSED_H = 28
+_COLLAPSED_H = 22
 _COLLAPSE_MS = 280
 
 
@@ -135,8 +135,9 @@ class ManualGradingWorkOverlay(QWidget):
 
     def _relayout(self) -> None:
         w, h = self.width(), self.height()
-        self._image_area.setGeometry(0, 0, w, h)
+        reserve = HoverTopToolbar.GRABBER_RESERVE
         self._toolbar.adjustSize()
-        th = max(HoverTopToolbar.GRABBER_RESERVE, self._toolbar.sizeHint().height())
+        th = max(reserve, self._toolbar.sizeHint().height())
         self._toolbar.setGeometry(0, 0, w, th)
+        self._image_area.setGeometry(0, reserve, w, max(0, h - reserve))
         self._toolbar.raise_()

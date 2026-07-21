@@ -80,7 +80,10 @@ class MainWindow(QMainWindow):
         content_wrap.setObjectName("ContentArea")
         content_layout = QVBoxLayout(content_wrap)
         # 左端グラバー分の余白（GAS の main-workspace padding-left 相当）
-        content_layout.setContentsMargins(36, 18, 20, 14)
+        self._content_margins_default = (36, 18, 20, 14)
+        self._content_margins_manual_hover = (36, 0, 20, 4)
+        content_layout.setContentsMargins(*self._content_margins_default)
+        self._content_layout = content_layout
         self.stack = QStackedWidget()
         self.stack.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         content_layout.addWidget(self.stack, 1)
@@ -330,6 +333,7 @@ class MainWindow(QMainWindow):
             manual_page = self.pages.get(MANUAL_GRADING_STEP_ID)
             if manual_page is not None and hasattr(manual_page, "apply_layout_prefs"):
                 manual_page.apply_layout_prefs()
+            self.apply_manual_grading_content_margins()
 
         open_settings_dialog(self, on_saved=on_saved)
 
@@ -391,6 +395,24 @@ class MainWindow(QMainWindow):
             page.refresh()  # type: ignore[attr-defined]
         self._sync_palette(step_id)
         self.palette_controller.set_delete_hotkey_enabled(self._current_step_id not in (2, 12))
+        self._apply_content_margins_for_step(step_id)
+
+    def _apply_content_margins_for_step(self, step_id: int) -> None:
+        from ui_qt.manual_grading_prefs import manual_grading_hover_toolbar_enabled
+
+        if (
+            step_id == MANUAL_GRADING_STEP_ID
+            and manual_grading_hover_toolbar_enabled()
+        ):
+            margins = self._content_margins_manual_hover
+        else:
+            margins = self._content_margins_default
+        self._content_layout.setContentsMargins(*margins)
+
+    def apply_manual_grading_content_margins(self) -> None:
+        """手動採点のホバーツールバー設定変更時に余白を再適用。"""
+        if self._current_step_id == MANUAL_GRADING_STEP_ID:
+            self._apply_content_margins_for_step(MANUAL_GRADING_STEP_ID)
 
     def eventFilter(self, obj, event) -> bool:  # noqa: N802
         if (

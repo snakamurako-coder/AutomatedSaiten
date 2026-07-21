@@ -211,8 +211,8 @@ class CropTileColumnPanel(QWidget):
     def __init__(
         self,
         *,
-        margins: tuple[int, int, int, int] = (6, 6, 6, 6),
-        spacing: int = 6,
+        margins: tuple[int, int, int, int] = (4, 4, 4, 4),
+        spacing: int = 4,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -226,6 +226,17 @@ class CropTileColumnPanel(QWidget):
 
     def hasHeightForWidth(self) -> bool:
         return True
+
+    def configure_layout(
+        self,
+        *,
+        margins: tuple[int, int, int, int],
+        spacing: int,
+    ) -> None:
+        self._flow.setContentsMargins(*margins)
+        self._flow._h_spacing = spacing
+        self._flow._v_spacing = spacing
+        self.updateGeometry()
 
     def clear_tiles(self) -> None:
         while self._flow.count():
