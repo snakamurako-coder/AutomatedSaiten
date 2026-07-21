@@ -46,6 +46,7 @@ class TextSearchDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setMinimumSize(780, 520)
         self.resize(880, 560)
+        h.enable_dialog_maximize(self)
 
         root = QVBoxLayout(self)
         root.setSpacing(10)

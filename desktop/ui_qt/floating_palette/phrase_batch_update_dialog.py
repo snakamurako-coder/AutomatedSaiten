@@ -26,6 +26,7 @@ from models.text_annotation_repo import (
     find_phrase_placements,
 )
 from ui_qt import helpers as h
+from ui_qt.helpers import enable_dialog_maximize
 from ui_qt.floating_palette.phrase_template_prefs import (
     phrase_display_label,
     phrase_palette_detail_html,
@@ -57,6 +58,7 @@ class PhraseBatchUpdateDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setMinimumSize(520, 480)
+        enable_dialog_maximize(self)
 
         root = QVBoxLayout(self)
         root.setSpacing(10)

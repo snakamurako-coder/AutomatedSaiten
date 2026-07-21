@@ -20,6 +20,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui_qt.crop_widgets import ZoomControls, fit_zoom_pct
+from ui_qt.helpers import enable_dialog_maximize
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.stylus_prefs import (
     FIT_MODE_CONTAIN,
@@ -197,13 +198,7 @@ class MaximizeWriteDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("最大化書き込み")
         self.setWindowModality(Qt.WindowModality.WindowModal)
-        self.setWindowFlags(
-            self.windowFlags()
-            | Qt.WindowType.Window
-            | Qt.WindowType.WindowMinimizeButtonHint
-            | Qt.WindowType.WindowMaximizeButtonHint
-            | Qt.WindowType.WindowCloseButtonHint
-        )
+        enable_dialog_maximize(self)
 
         prefs = load_stylus_prefs()
         saved_fit = str(prefs.get("maximize_write_fit_mode") or FIT_MODE_CONTAIN)

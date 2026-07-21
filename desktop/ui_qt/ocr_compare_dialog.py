@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from ui_qt.style import COLORS
+from ui_qt.helpers import enable_dialog_maximize
 
 
 def _norm_text(value: Any) -> str:
@@ -40,6 +41,8 @@ class OcrCompareDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("OCR結果の比較・採用")
         self.resize(780, 560)
+        self.setMinimumSize(640, 420)
+        enable_dialog_maximize(self)
         self._fields = list(fields)
         self._previews = list(previews)
         self._on_commit = on_commit

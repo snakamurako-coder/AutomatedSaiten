@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 from services.uniform_feedback_apply import apply_uniform_feedback
 from services.uniform_feedback_placement import resolve_uniform_feedback_placement
 from ui_qt import helpers as h
+from ui_qt.helpers import enable_dialog_maximize
 from ui_qt.floating_palette.format_palette_panel import FormatPalettePanel
 from ui_qt.floating_palette.phrase_edit_preview_panel import PhraseEditPreviewPanel
 from models.text_annotation_repo import TEXT_STYLE_TEMPLATE_A, resolve_text_style
@@ -62,6 +63,7 @@ class UniformFeedbackDialog(QDialog):
         self.setWindowModality(Qt.WindowModality.ApplicationModal)
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setMinimumSize(760, 620)
+        enable_dialog_maximize(self)
 
         root = QVBoxLayout(self)
         root.addWidget(QLabel(f"対象回答: {self._answer_text}"))

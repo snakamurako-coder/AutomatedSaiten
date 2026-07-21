@@ -53,6 +53,7 @@ class RosterImportDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("名簿の列マッピング")
         self.resize(720, 480)
+        h.enable_dialog_maximize(self)
         self._raw_rows = raw_rows
         self.imported_name: str | None = None
 
@@ -134,6 +135,7 @@ class RosterImportFromTestDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("名簿・未受験者のインポート")
         self.resize(640, 360)
+        h.enable_dialog_maximize(self)
         self._sources = sources
         self.selected_test_id: str | None = None
 
@@ -551,6 +553,7 @@ class Step11Page(QWidget):
         dlg = QDialog(self)
         dlg.setWindowTitle("名簿 TSV 貼り付け")
         dlg.resize(560, 360)
+        h.enable_dialog_maximize(dlg)
         lay = QVBoxLayout(dlg)
         lay.addWidget(h.muted_label("Excel などから名簿をコピーして貼り付けてください（タブ/カンマ区切り）。"))
         text = QPlainTextEdit()

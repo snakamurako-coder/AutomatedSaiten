@@ -50,6 +50,7 @@ from services.feedback_exporter import gather_row_render_data
 from services.feedback_renderer import render_feedback_overlay_layer
 from services.image_loader import imread_bgr
 from ui_qt.crop_widgets import ZoomControls
+from ui_qt.helpers import enable_dialog_maximize
 from ui_qt.style import COLORS
 from ui_qt.stylus_overlay import (
     TOOL_NONE,
@@ -201,13 +202,7 @@ class FullSheetGradeDialog(QDialog):
         self.resize(1100, 760)
         # WindowModal: メインはブロックしつつ、子にしたフローティングパレットは操作可能
         self.setWindowModality(Qt.WindowModality.WindowModal)
-        self.setWindowFlags(
-            self.windowFlags()
-            | Qt.Window
-            | Qt.WindowMinimizeButtonHint
-            | Qt.WindowMaximizeButtonHint
-            | Qt.WindowCloseButtonHint
-        )
+        enable_dialog_maximize(self)
 
         self._test_id = test_id
         self._row = copy.deepcopy(result_row)

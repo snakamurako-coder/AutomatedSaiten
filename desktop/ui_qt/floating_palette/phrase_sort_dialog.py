@@ -39,6 +39,7 @@ from ui_qt.floating_palette.phrase_template_prefs import (
     sort_phrase_templates,
 )
 from ui_qt.floating_palette.text_rich import palette_fill_background
+from ui_qt.helpers import enable_dialog_maximize
 from ui_qt.style import COLORS
 
 
@@ -228,6 +229,7 @@ class PhraseSortDialog(QDialog):
         self.setWindowTitle("定型文並び替え")
         self.resize(420, 520)
         self.setModal(True)
+        enable_dialog_maximize(self)
         self._templates = list(templates or [])
         self._by_id = {str(t.get("id") or ""): t for t in self._templates}
 

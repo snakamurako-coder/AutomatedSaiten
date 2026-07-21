@@ -15,13 +15,13 @@ from PySide6.QtWidgets import (
 from ui_qt import helpers as h
 from models.excel_export_prefs import load_excel_export_prefs, save_excel_export_prefs
 
-
 class ExcelExportSettingsDialog(QDialog):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("エクセル出力詳細設定")
         self.setWindowModality(Qt.WindowModality.WindowModal)
         self.resize(420, 200)
+        h.enable_dialog_maximize(self)
         prefs = load_excel_export_prefs()
 
         root = QVBoxLayout(self)

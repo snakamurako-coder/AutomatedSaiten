@@ -30,7 +30,7 @@ from services.image_warp import (
     warp_from_corners,
 )
 from ui_qt.crop_widgets import ZoomControls
-from ui_qt.helpers import bgr_to_qpixmap
+from ui_qt.helpers import bgr_to_qpixmap, enable_dialog_maximize, scroll_viewport_size
 from ui_qt.style import COLORS
 
 _CORNER_KEYS = ("tl", "tr", "br", "bl")
@@ -152,10 +152,10 @@ class _SourceCanvas(QWidget):
     def _apply_scale(self) -> None:
         if self._pixmap is None:
             return
-        parent = self.parentWidget()
-        avail_w = max(320, (parent.width() - 24) if parent else 520)
-        avail_h = 520
-        self._fit_scale = min(avail_w / self._pixmap.width(), avail_h / self._pixmap.height(), 1.0)
+        avail_w, avail_h = scroll_viewport_size(self)
+        self._fit_scale = min(
+            avail_w / self._pixmap.width(), avail_h / self._pixmap.height(), 1.0
+        )
         self._scale = self._fit_scale * (self._zoom_pct / 100.0)
         w = max(1, int(self._pixmap.width() * self._scale))
         h = max(1, int(self._pixmap.height() * self._scale))
@@ -422,10 +422,10 @@ class _PreviewCanvas(QWidget):
     def _apply_scale(self) -> None:
         if self._pixmap is None:
             return
-        parent = self.parentWidget()
-        avail_w = max(320, (parent.width() - 24) if parent else 520)
-        avail_h = 520
-        self._fit_scale = min(avail_w / self._pixmap.width(), avail_h / self._pixmap.height(), 1.0)
+        avail_w, avail_h = scroll_viewport_size(self)
+        self._fit_scale = min(
+            avail_w / self._pixmap.width(), avail_h / self._pixmap.height(), 1.0
+        )
         scale = self._fit_scale * (self._zoom_pct / 100.0)
         w = max(1, int(self._pixmap.width() * scale))
         h = max(1, int(self._pixmap.height() * scale))
@@ -480,6 +480,7 @@ class ManualWarpDialog(QDialog):
         self.setWindowTitle("手動補正")
         self.setMinimumSize(980, 680)
         self.resize(1100, 760)
+        enable_dialog_maximize(self)
 
         root = QVBoxLayout(self)
         root.setSpacing(8)
@@ -578,6 +579,11 @@ class ManualWarpDialog(QDialog):
         btn = QPushButton(text)
         btn.clicked.connect(handler)
         return btn
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self.source_canvas._apply_scale()
+        self.preview_canvas._apply_scale()
 
     def _set_status(self, text: str) -> None:
         self.status_label.setText(text)

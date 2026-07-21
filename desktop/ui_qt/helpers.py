@@ -131,6 +131,40 @@ def button(text: str, on_click: Callable[[], None] | None = None, variant: str |
     return btn
 
 
+def enable_dialog_maximize(widget: QWidget) -> None:
+    """モーダルダイアログに最小化・最大化ボタンを付与する。"""
+    flags = widget.windowFlags()
+    flags |= (
+        Qt.WindowType.Window
+        | Qt.WindowType.WindowMinimizeButtonHint
+        | Qt.WindowType.WindowMaximizeButtonHint
+        | Qt.WindowType.WindowCloseButtonHint
+    )
+    flags &= ~Qt.WindowType.WindowContextHelpButtonHint
+    widget.setWindowFlags(flags)
+
+
+def scroll_viewport_size(widget: QWidget, *, min_w: int = 320, min_h: int = 240) -> tuple[int, int]:
+    """スクロール領域内キャンバス向けの利用可能サイズ（最大化時の再計算用）。"""
+    from PySide6.QtWidgets import QScrollArea
+
+    w, h = min_w, min_h
+    parent = widget.parentWidget()
+    if parent is not None:
+        w = max(min_w, parent.width() - 24)
+        h = max(min_h, parent.height() - 8)
+    p = widget.parentWidget()
+    while p is not None:
+        if isinstance(p, QScrollArea):
+            vp = p.viewport()
+            if vp is not None:
+                w = max(min_w, vp.width() - 8)
+                h = max(min_h, vp.height() - 8)
+            break
+        p = p.parentWidget()
+    return w, h
+
+
 def open_in_file_manager(path: str | Path, *, parent: QWidget | None = None) -> bool:
     """ファイルまたはフォルダを OS のファイルマネージャで開く。
 

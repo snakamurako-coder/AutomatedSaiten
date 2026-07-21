@@ -34,7 +34,7 @@ from services.faint_ink import enhance_bgr
 from services.image_loader import imread_bgr, imwrite_bgr
 from services.image_warp import warped_file_name
 from ui_qt.crop_widgets import SliderSpinControls, ZoomControls
-from ui_qt.helpers import bgr_to_qpixmap
+from ui_qt.helpers import bgr_to_qpixmap, enable_dialog_maximize, scroll_viewport_size
 from ui_qt.style import COLORS
 
 
@@ -63,10 +63,18 @@ class _PreviewCanvas(QWidget):
     def _recompute_size(self) -> None:
         if self._pixmap is None:
             return
-        self._scale = self._zoom_pct / 100.0
+        avail_w, avail_h = scroll_viewport_size(self, min_w=400, min_h=280)
+        fit_scale = min(
+            avail_w / self._pixmap.width(), avail_h / self._pixmap.height(), 1.0
+        )
+        self._scale = fit_scale * (self._zoom_pct / 100.0)
         w = max(1, int(self._pixmap.width() * self._scale))
         h = max(1, int(self._pixmap.height() * self._scale))
         self.setFixedSize(w, h)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._recompute_size()
 
     def paintEvent(self, event) -> None:  # noqa: N802
         painter = QPainter(self)
@@ -106,6 +114,8 @@ class FaintReviewDialog(QDialog):
         super().__init__(parent)
         self.setWindowTitle("薄い字の目視・強調")
         self.resize(960, 720)
+        self.setMinimumSize(720, 560)
+        enable_dialog_maximize(self)
         self._test_id = test_id
         self._queue = list(queue)
         self._fields = list(fields)
@@ -130,7 +140,7 @@ class FaintReviewDialog(QDialog):
         root.addWidget(self._reason)
 
         scroll = QScrollArea()
-        scroll.setWidgetResizable(False)
+        scroll.setWidgetResizable(True)
         scroll.setAlignment(Qt.AlignCenter)
         self._canvas = _PreviewCanvas()
         scroll.setWidget(self._canvas)
@@ -234,6 +244,10 @@ class FaintReviewDialog(QDialog):
         self._reload_presets(select_name="ガンマ強調")
         self._apply_selected_preset()
         self._load_current()
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        self._canvas._recompute_size()
 
     def _reload_presets(self, select_name: str | None = None) -> None:
         current = select_name or self._preset_combo.currentText()
