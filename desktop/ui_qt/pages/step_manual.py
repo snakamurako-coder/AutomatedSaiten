@@ -226,7 +226,7 @@ class StepManualPage(QWidget):
             make_expanding(self._work_overlay)
         else:
             self._top_toolbar_content.setParent(self._work_host)
-            self._crop_scroll.setParent(self._work_host)
+            self.crop_scroll.setParent(self._work_host)
             self._work_host_layout.addWidget(self._top_toolbar_content)
             self._work_host_layout.addWidget(self.crop_scroll, 1)
 
