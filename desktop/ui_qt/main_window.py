@@ -81,7 +81,8 @@ class MainWindow(QMainWindow):
         content_layout = QVBoxLayout(content_wrap)
         # 左端グラバー分の余白（GAS の main-workspace padding-left 相当）
         self._content_margins_default = (36, 18, 20, 14)
-        self._content_margins_manual_hover = (36, 0, 20, 4)
+        self._content_margins_manual = (36, 18, 0, 14)
+        self._content_margins_manual_hover = (36, 0, 0, 4)
         content_layout.setContentsMargins(*self._content_margins_default)
         self._content_layout = content_layout
         self.stack = QStackedWidget()
@@ -400,11 +401,11 @@ class MainWindow(QMainWindow):
     def _apply_content_margins_for_step(self, step_id: int) -> None:
         from ui_qt.manual_grading_prefs import manual_grading_hover_toolbar_enabled
 
-        if (
-            step_id == MANUAL_GRADING_STEP_ID
-            and manual_grading_hover_toolbar_enabled()
-        ):
-            margins = self._content_margins_manual_hover
+        if step_id == MANUAL_GRADING_STEP_ID:
+            if manual_grading_hover_toolbar_enabled():
+                margins = self._content_margins_manual_hover
+            else:
+                margins = self._content_margins_manual
         else:
             margins = self._content_margins_default
         self._content_layout.setContentsMargins(*margins)

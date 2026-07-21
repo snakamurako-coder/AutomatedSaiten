@@ -81,8 +81,16 @@ class ZoomControls(QWidget):
     def zoom_value(self) -> int:
         return self.zoom_slider.value()
 
-    def set_zoom_value(self, value: int) -> None:
-        self.zoom_slider.setValue(value)
+    def set_zoom_value(self, value: int, *, block_signals: bool = False) -> None:
+        if block_signals:
+            self.zoom_slider.blockSignals(True)
+            self.zoom_spin.blockSignals(True)
+        clamped = max(self.zoom_slider.minimum(), min(self.zoom_slider.maximum(), int(value)))
+        self.zoom_slider.setValue(clamped)
+        self.zoom_spin.setValue(clamped)
+        if block_signals:
+            self.zoom_slider.blockSignals(False)
+            self.zoom_spin.blockSignals(False)
 
     def connect_zoom_changed(self, callback: Callable[[], None]) -> None:
         self.zoom_slider.valueChanged.connect(lambda _v: callback())
@@ -207,6 +215,33 @@ class CropDisplayControls(QWidget):
 
     def zoom_value(self) -> int:
         return self._zoom.zoom_value()
+
+    def set_zoom_value(self, value: int, *, block_signals: bool = False) -> None:
+        self._zoom.set_zoom_value(value, block_signals=block_signals)
+
+    def apply_display_prefs(
+        self,
+        *,
+        show_id: bool,
+        show_file: bool,
+        show_ocr: bool,
+    ) -> None:
+        self.show_id_check.blockSignals(True)
+        self.show_file_check.blockSignals(True)
+        self.show_ocr_check.blockSignals(True)
+        self.show_id_check.setChecked(show_id)
+        self.show_file_check.setChecked(show_file)
+        self.show_ocr_check.setChecked(show_ocr)
+        self.show_id_check.blockSignals(False)
+        self.show_file_check.blockSignals(False)
+        self.show_ocr_check.blockSignals(False)
+
+    def display_prefs(self) -> dict[str, bool]:
+        return {
+            "showId": self.show_id_check.isChecked(),
+            "showFileName": self.show_file_check.isChecked(),
+            "showOcrText": self.show_ocr_check.isChecked(),
+        }
 
     def show_id(self) -> bool:
         return self.show_id_check.isChecked()

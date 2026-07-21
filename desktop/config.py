@@ -61,6 +61,18 @@ DEFAULT_CONFIG: dict = {
     "faint_gamma_default": 2.5,
     # 手動採点: 画像上の操作パネルをホバー展開（既定オフ＝従来レイアウト）
     "manual_grading_hover_toolbar": False,
+    # 手動採点: 表示メタ・判定表示モード（記述欄共通）
+    "manual_grading_display": {
+        "showId": True,
+        "showFileName": True,
+        "showOcrText": True,
+        "printMarkMode": False,
+    },
+    # 手動採点: 記述欄ごとの表示倍率（キー "<test_id>:<field_id>" → 30–400）
+    "manual_grading_field_zoom_pct": {},
+    # 手動採点: 記述欄ごとの表示・選択モード
+    # キー "<test_id>:<field_id>" → {showAllPages, pageSize, parallelPaletteMode}
+    "manual_grading_field_view_prefs": {},
     # 目視・強調ダイアログのユーザー定義プリセット
     # [{name, contrast, clahe, bg_whiten, gamma}]  ※gamma は ×10（25 = γ2.5）
     "enhance_presets": [],

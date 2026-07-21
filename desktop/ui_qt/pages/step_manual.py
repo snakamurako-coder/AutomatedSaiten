@@ -58,7 +58,15 @@ from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.hover_top_toolbar import HoverTopToolbar, ManualGradingWorkOverlay
 from ui_qt.layout_helpers import CropTileColumnPanel, configure_crop_image_scroll, make_expanding
-from ui_qt.manual_grading_prefs import manual_grading_hover_toolbar_enabled
+from ui_qt.manual_grading_prefs import (
+    load_field_view_prefs,
+    load_field_zoom_pct,
+    load_manual_grading_display_prefs,
+    manual_grading_hover_toolbar_enabled,
+    save_field_view_prefs,
+    save_field_zoom_pct,
+    save_manual_grading_display_prefs,
+)
 from ui_qt.stylus_overlay import CropInkImageStack
 from ui_qt.style import COLORS
 
@@ -94,6 +102,7 @@ class StepManualPage(QWidget):
         self._sort_mode = "file"
         self._filter_snapshot_ids: set[int] | None = None
         self._print_mark_mode = False  # False=文字情報 / True=個票と同じ印字
+        self._zoom_field_id: str | None = None  # 現在 UI 設定が紐づく記述欄
         self._feedback_style: dict[str, Any] = get_feedback_style()
         self._show_all_pages = False  # False=指定件数表示 / True=全件表示
         self._page_size = 20
@@ -182,9 +191,11 @@ class StepManualPage(QWidget):
             f" background: {COLORS['surface']}; }}"
         )
         self.crop_scroll.setStyleSheet(self._crop_scroll_style_normal)
+        self.crop_scroll.setViewportMargins(0, 0, 0, 0)
+        self.crop_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
         make_expanding(self.crop_scroll)
-        self._crop_panel_margins_normal = (4, 4, 4, 4)
-        self._crop_panel_margins_hover = (4, 2, 4, 4)
+        self._crop_panel_margins_normal = (4, 4, 0, 4)
+        self._crop_panel_margins_hover = (4, 2, 0, 4)
         self._crop_panel_spacing_normal = 4
         self._crop_panel_spacing_hover = 3
         self.crop_panel = CropTileColumnPanel(
@@ -254,12 +265,17 @@ class StepManualPage(QWidget):
     def _apply_toolbar_visuals(self, hover: bool) -> None:
         if hover:
             self.crop_scroll.setStyleSheet(self._crop_scroll_style_hover)
+            self.crop_scroll.setFrameShape(QScrollArea.Shape.NoFrame)
+        else:
+            self.crop_scroll.setStyleSheet(self._crop_scroll_style_normal)
+            self.crop_scroll.setFrameShape(QScrollArea.Shape.StyledPanel)
+        self.crop_scroll.setViewportMargins(0, 0, 0, 0)
+        if hover:
             self.crop_panel.configure_layout(
                 margins=self._crop_panel_margins_hover,
                 spacing=self._crop_panel_spacing_hover,
             )
         else:
-            self.crop_scroll.setStyleSheet(self._crop_scroll_style_normal)
             self.crop_panel.configure_layout(
                 margins=self._crop_panel_margins_normal,
                 spacing=self._crop_panel_spacing_normal,
@@ -315,6 +331,89 @@ class StepManualPage(QWidget):
     def _on_mark_mode_toggled(self, checked: bool) -> None:
         self._print_mark_mode = bool(checked)
         self._update_mode_labels()
+        self._save_manual_display_prefs()
+        self._render_grid()
+
+    def _apply_manual_display_prefs(self) -> None:
+        if not hasattr(self, "crop_controls"):
+            return
+        prefs = load_manual_grading_display_prefs()
+        self.crop_controls.apply_display_prefs(
+            show_id=prefs["showId"],
+            show_file=prefs["showFileName"],
+            show_ocr=prefs["showOcrText"],
+        )
+        self._print_mark_mode = prefs["printMarkMode"]
+        self.mark_mode_switch.blockSignals(True)
+        self.mark_mode_switch.setChecked(self._print_mark_mode)
+        self.mark_mode_switch.blockSignals(False)
+        self._update_mode_labels()
+
+    def _save_manual_display_prefs(self) -> None:
+        if not hasattr(self, "crop_controls"):
+            return
+        save_manual_grading_display_prefs(
+            {
+                **self.crop_controls.display_prefs(),
+                "printMarkMode": self._print_mark_mode,
+            }
+        )
+
+    def _persist_field_prefs(self) -> None:
+        fid = self._zoom_field_id
+        test_id = self.app.active_test_id
+        if not fid or not test_id:
+            return
+        if hasattr(self, "crop_controls"):
+            save_field_zoom_pct(test_id, fid, self.crop_controls.zoom_value())
+        save_field_view_prefs(
+            test_id,
+            fid,
+            show_all_pages=self._show_all_pages,
+            page_size=self._page_size,
+            parallel_palette_mode=self._parallel_palette_mode,
+        )
+
+    def _apply_saved_field_prefs(self) -> None:
+        fid = self._selected_field_id()
+        test_id = self.app.active_test_id
+        if not fid or not test_id:
+            return
+        if hasattr(self, "crop_controls"):
+            pct = load_field_zoom_pct(test_id, fid, 100)
+            self.crop_controls.set_zoom_value(pct, block_signals=True)
+        view = load_field_view_prefs(test_id, fid)
+        self._show_all_pages = bool(view["showAllPages"])
+        self._page_size = int(view["pageSize"])
+        self._parallel_palette_mode = bool(view["parallelPaletteMode"])
+        if hasattr(self, "page_mode_switch"):
+            self.page_mode_switch.blockSignals(True)
+            self.page_mode_switch.setChecked(not self._show_all_pages)
+            self.page_mode_switch.blockSignals(False)
+            self._update_page_mode_labels()
+            self._update_page_controls_enabled()
+        if hasattr(self, "page_size_spin"):
+            self.page_size_spin.blockSignals(True)
+            self.page_size_spin.setValue(self._page_size)
+            self.page_size_spin.blockSignals(False)
+        if hasattr(self, "selection_mode_switch"):
+            self.selection_mode_switch.blockSignals(True)
+            self.selection_mode_switch.setChecked(self._parallel_palette_mode)
+            self.selection_mode_switch.blockSignals(False)
+            self._update_selection_mode_labels()
+        if hasattr(self, "judge_stack"):
+            self.judge_stack.setCurrentIndex(1 if self._parallel_palette_mode else 0)
+        self._zoom_field_id = fid
+
+    def _on_zoom_changed(self) -> None:
+        fid = self._selected_field_id()
+        if fid:
+            self._zoom_field_id = fid
+            self._persist_field_prefs()
+        self._render_grid()
+
+    def _on_display_meta_changed(self) -> None:
+        self._save_manual_display_prefs()
         self._render_grid()
 
     def _update_mode_labels(self) -> None:
@@ -412,6 +511,10 @@ class StepManualPage(QWidget):
         self._page_index = 0
         self._update_page_mode_labels()
         self._update_page_controls_enabled()
+        fid = self._selected_field_id()
+        if fid:
+            self._zoom_field_id = fid
+            self._persist_field_prefs()
         self._render_grid()
 
     def _update_page_mode_labels(self) -> None:
@@ -432,6 +535,10 @@ class StepManualPage(QWidget):
     def _on_page_size_changed(self, value: int) -> None:
         self._page_size = max(1, int(value))
         self._page_index = 0
+        fid = self._selected_field_id()
+        if fid:
+            self._zoom_field_id = fid
+            self._persist_field_prefs()
         self._render_grid()
 
     def _on_page_prev(self) -> None:
@@ -513,10 +620,11 @@ class StepManualPage(QWidget):
         left_lay.setContentsMargins(0, 0, 0, 0)
         left_lay.setSpacing(2)
         self.crop_controls = CropDisplayControls(slider_max_width=140)
-        self.crop_controls.connect_zoom_changed(self._render_grid)
-        self.crop_controls.connect_meta_changed(self._render_grid)
+        self.crop_controls.connect_zoom_changed(self._on_zoom_changed)
+        self.crop_controls.connect_meta_changed(self._on_display_meta_changed)
         left_lay.addWidget(self.crop_controls)
         left_lay.addWidget(self._build_mark_mode_switch())
+        self._apply_manual_display_prefs()
         lay.addWidget(left, 0)
 
         # 右: 採点モードに応じて「選択への判定反映」または「判定パレット」
@@ -566,6 +674,10 @@ class StepManualPage(QWidget):
         self._update_selection_mode_labels()
         self.judge_stack.setCurrentIndex(1 if self._parallel_palette_mode else 0)
         self._rebuild_palette_buttons()
+        fid = self._selected_field_id()
+        if fid:
+            self._zoom_field_id = fid
+            self._persist_field_prefs()
         self._render_grid()
 
     def _update_selection_mode_labels(self) -> None:
@@ -756,8 +868,9 @@ class StepManualPage(QWidget):
         self._rebuild_field_combo(prefer_fid=current_fid)
         self._rebuild_triangle_filters()
         self._update_judge_buttons()
-        self._rebuild_palette_buttons()
         if self._fields:
+            self._apply_saved_field_prefs()
+            self._rebuild_palette_buttons()
             self._load_crops_async()
         else:
             self._items = []
@@ -809,11 +922,14 @@ class StepManualPage(QWidget):
         return max(1, int(pts.get(fid, 1)))
 
     def _on_field_changed(self, _index: int) -> None:
+        self._persist_field_prefs()
         self._selected_ids.clear()
         self._page_index = 0
         self._filter_snapshot_ids = None
         self._rebuild_triangle_filters()
         self._update_judge_buttons()
+        self._apply_saved_field_prefs()
+        self._rebuild_palette_buttons()
         self._load_crops_async()
 
     def _on_sort_changed(self, _index: int) -> None:
