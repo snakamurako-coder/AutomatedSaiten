@@ -139,7 +139,7 @@ class SettingsDialog(QDialog):
         openai_block.setSpacing(2)
         openai_block.addWidget(self.engine_openai)
         openai_desc = h.caption_label(
-            "文脈からスペルミスを補正し、不自然な改行による文章崩れも防げる。"
+            "文脈からスペルミスを補正し、不自然な改行による文章崩れも防げる。長い文章向き。"
         )
         openai_desc.setContentsMargins(22, 0, 0, 0)
         openai_block.addWidget(openai_desc)
@@ -150,6 +150,7 @@ class SettingsDialog(QDialog):
         vision_block.addWidget(self.engine_vision)
         vision_desc = h.caption_label(
             "スペルミスも忠実に拾う反面、改行位置の判断ミスで文章が崩れることがある。"
+            "単語・句（文の一部）向き。"
         )
         vision_desc.setContentsMargins(22, 0, 0, 0)
         vision_block.addWidget(vision_desc)

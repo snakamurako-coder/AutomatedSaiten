@@ -81,7 +81,7 @@ class SettingsDialog(tk.Toplevel):
         ).pack(anchor="w")
         ttk.Label(
             engine_row,
-            text="文脈からスペルミスを補正し、不自然な改行による文章崩れも防げる。",
+            text="文脈からスペルミスを補正し、不自然な改行による文章崩れも防げる。長い文章向き。",
             style="Caption.TLabel",
             wraplength=420,
         ).pack(anchor="w", padx=(22, 0), pady=(0, 6))
@@ -93,7 +93,7 @@ class SettingsDialog(tk.Toplevel):
         ).pack(anchor="w")
         ttk.Label(
             engine_row,
-            text="スペルミスも忠実に拾う反面、改行位置の判断ミスで文章が崩れることがある。",
+            text="スペルミスも忠実に拾う反面、改行位置の判断ミスで文章が崩れることがある。単語・句（文の一部）向き。",
             style="Caption.TLabel",
             wraplength=420,
         ).pack(anchor="w", padx=(22, 0))
