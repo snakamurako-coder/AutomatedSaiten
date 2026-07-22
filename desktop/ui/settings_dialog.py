@@ -79,12 +79,24 @@ class SettingsDialog(tk.Toplevel):
             variable=self.ocr_engine_var,
             value="openai",
         ).pack(anchor="w")
+        ttk.Label(
+            engine_row,
+            text="文脈からスペルミスを補正し、不自然な改行による文章崩れも防げる。",
+            style="Caption.TLabel",
+            wraplength=420,
+        ).pack(anchor="w", padx=(22, 0), pady=(0, 6))
         ttk.Radiobutton(
             engine_row,
             text="Google Vision API（クラウド）",
             variable=self.ocr_engine_var,
             value="vision",
         ).pack(anchor="w")
+        ttk.Label(
+            engine_row,
+            text="スペルミスも忠実に拾う反面、改行位置の判断ミスで文章が崩れることがある。",
+            style="Caption.TLabel",
+            wraplength=420,
+        ).pack(anchor="w", padx=(22, 0))
 
         api_frame = ttk.LabelFrame(body, text="API キー", padding=8)
         api_frame.pack(fill="x", pady=(0, 8))

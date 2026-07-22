@@ -124,6 +124,7 @@ class SettingsDialog(QDialog):
         ocr_form.setSpacing(10)
 
         engine_row = QVBoxLayout()
+        engine_row.setSpacing(8)
         self.engine_openai = QRadioButton("OpenAI API（クラウド・手書き向け）")
         self.engine_vision = QRadioButton("Google Vision API（クラウド）")
         engine = str(cfg.get("ocr_engine") or "openai").strip().lower()
@@ -133,8 +134,26 @@ class SettingsDialog(QDialog):
             self.engine_vision.setChecked(True)
         else:
             self.engine_openai.setChecked(True)
-        engine_row.addWidget(self.engine_openai)
-        engine_row.addWidget(self.engine_vision)
+
+        openai_block = QVBoxLayout()
+        openai_block.setSpacing(2)
+        openai_block.addWidget(self.engine_openai)
+        openai_desc = h.caption_label(
+            "文脈からスペルミスを補正し、不自然な改行による文章崩れも防げる。"
+        )
+        openai_desc.setContentsMargins(22, 0, 0, 0)
+        openai_block.addWidget(openai_desc)
+        engine_row.addLayout(openai_block)
+
+        vision_block = QVBoxLayout()
+        vision_block.setSpacing(2)
+        vision_block.addWidget(self.engine_vision)
+        vision_desc = h.caption_label(
+            "スペルミスも忠実に拾う反面、改行位置の判断ミスで文章が崩れることがある。"
+        )
+        vision_desc.setContentsMargins(22, 0, 0, 0)
+        vision_block.addWidget(vision_desc)
+        engine_row.addLayout(vision_block)
         ocr_form.addRow("OCR エンジン", engine_row)
 
         field_lang_row = QHBoxLayout()
