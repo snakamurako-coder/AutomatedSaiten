@@ -4,9 +4,64 @@ from __future__ import annotations
 
 from collections.abc import Callable
 
-from PySide6.QtWidgets import QButtonGroup, QHBoxLayout, QPushButton, QWidget
+from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QPushButton, QWidget
 
-from ui_qt.region_mode_widgets import _refresh_segment_button
+from ui_qt.style import COLORS
+
+_FIELD_SEGMENT_STYLE = f"""
+QFrame#OcrFieldSegmentTrack {{
+    background: #e5e7eb;
+    border: 1px solid {COLORS["border_strong"]};
+    border-radius: 8px;
+}}
+QFrame#OcrFieldSegmentTrack QPushButton {{
+    background: transparent;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    padding: 3px 8px;
+    text-align: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: {COLORS["text_secondary"]};
+    min-height: 24px;
+    min-width: 48px;
+}}
+QFrame#OcrFieldSegmentTrack QPushButton:hover {{
+    background: rgba(255, 255, 255, 0.45);
+    color: {COLORS["text"]};
+}}
+QFrame#OcrFieldSegmentTrack QPushButton:checked {{
+    background: {COLORS["accent"]};
+    border-color: {COLORS["accent_hover"]};
+    color: white;
+    font-weight: 700;
+}}
+"""
+
+
+def _refresh_field_segment_buttons(*buttons: QPushButton) -> None:
+    for btn in buttons:
+        style = btn.style()
+        style.unpolish(btn)
+        style.polish(btn)
+        btn.update()
+
+
+class _FieldSegmentBar(QFrame):
+    """記述欄一覧向け — 背景トラック付きセグメントトグル。"""
+
+    def __init__(self, buttons: list[QPushButton], parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("OcrFieldSegmentTrack")
+        self.setStyleSheet(_FIELD_SEGMENT_STYLE)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(3, 3, 3, 3)
+        lay.setSpacing(2)
+        for btn in buttons:
+            btn.setCheckable(True)
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            lay.addWidget(btn)
 
 
 class OcrLangToggle(QWidget):
@@ -24,19 +79,16 @@ class OcrLangToggle(QWidget):
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay.setSpacing(0)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._btn_en = QPushButton("英語")
         self._btn_ja = QPushButton("日本語")
-        for btn in (self._btn_en, self._btn_ja):
-            btn.setCheckable(True)
-            btn.setAutoDefault(False)
-            btn.setDefault(False)
-            _refresh_segment_button(btn)
-            self._group.addButton(btn)
-            lay.addWidget(btn)
+        self._group.addButton(self._btn_en)
+        self._group.addButton(self._btn_ja)
+        self._track = _FieldSegmentBar([self._btn_en, self._btn_ja], self)
+        lay.addWidget(self._track)
 
         self._btn_en.clicked.connect(lambda: self._emit_if("en"))
         self._btn_ja.clicked.connect(lambda: self._emit_if("ja"))
@@ -50,8 +102,7 @@ class OcrLangToggle(QWidget):
         self._btn_en.setChecked(not ja)
         self._group.blockSignals(False)
         self._updating = False
-        _refresh_segment_button(self._btn_en)
-        _refresh_segment_button(self._btn_ja)
+        _refresh_field_segment_buttons(self._btn_en, self._btn_ja)
 
     def lang(self) -> str:
         return "ja" if self._btn_ja.isChecked() else "en"
@@ -59,8 +110,7 @@ class OcrLangToggle(QWidget):
     def _emit_if(self, lang: str) -> None:
         if self._updating:
             return
-        _refresh_segment_button(self._btn_en)
-        _refresh_segment_button(self._btn_ja)
+        _refresh_field_segment_buttons(self._btn_en, self._btn_ja)
         if self._on_change is not None:
             self._on_change(lang)
 
@@ -80,19 +130,16 @@ class OcrEngineToggle(QWidget):
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
-        lay.setSpacing(2)
+        lay.setSpacing(0)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._btn_openai = QPushButton("OpenAI")
         self._btn_vision = QPushButton("Vision")
-        for btn in (self._btn_openai, self._btn_vision):
-            btn.setCheckable(True)
-            btn.setAutoDefault(False)
-            btn.setDefault(False)
-            _refresh_segment_button(btn)
-            self._group.addButton(btn)
-            lay.addWidget(btn)
+        self._group.addButton(self._btn_openai)
+        self._group.addButton(self._btn_vision)
+        self._track = _FieldSegmentBar([self._btn_openai, self._btn_vision], self)
+        lay.addWidget(self._track)
 
         self._btn_openai.clicked.connect(lambda: self._emit_if("openai"))
         self._btn_vision.clicked.connect(lambda: self._emit_if("vision"))
@@ -106,8 +153,7 @@ class OcrEngineToggle(QWidget):
         self._btn_openai.setChecked(not vision)
         self._group.blockSignals(False)
         self._updating = False
-        _refresh_segment_button(self._btn_openai)
-        _refresh_segment_button(self._btn_vision)
+        _refresh_field_segment_buttons(self._btn_openai, self._btn_vision)
 
     def engine(self) -> str:
         return "vision" if self._btn_vision.isChecked() else "openai"
@@ -115,7 +161,6 @@ class OcrEngineToggle(QWidget):
     def _emit_if(self, engine: str) -> None:
         if self._updating:
             return
-        _refresh_segment_button(self._btn_openai)
-        _refresh_segment_button(self._btn_vision)
+        _refresh_field_segment_buttons(self._btn_openai, self._btn_vision)
         if self._on_change is not None:
             self._on_change(engine)

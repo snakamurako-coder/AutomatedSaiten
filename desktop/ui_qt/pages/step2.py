@@ -307,27 +307,30 @@ class Step2Page(QWidget):
             lay.addWidget(name)
             lang_row = QHBoxLayout()
             lang_label = QLabel("言語")
-            lang_label.setStyleSheet("border: none; font-size: 10px; color: #9ca3af;")
+            lang_label.setStyleSheet(
+                f"border: none; font-size: 10px; font-weight: 600; color: {COLORS['text_secondary']};"
+            )
             lang_label.setFixedWidth(28)
             lang_row.addWidget(lang_label)
             lang_toggle = OcrLangToggle(
                 lang=row.get("ocrLang") or "en",
                 on_change=lambda lang, i=idx: self._on_lang_changed(i, lang),
             )
-            lang_row.addWidget(lang_toggle)
-            lang_row.addStretch()
+            lang_row.addWidget(lang_toggle, 1)
             lay.addLayout(lang_row)
 
             api_row = QHBoxLayout()
             api_label = QLabel("API")
-            api_label.setStyleSheet("border: none; font-size: 10px; color: #9ca3af;")
+            api_label.setStyleSheet(
+                f"border: none; font-size: 10px; font-weight: 600; color: {COLORS['text_secondary']};"
+            )
             api_label.setFixedWidth(28)
             api_row.addWidget(api_label)
             engine_toggle = OcrEngineToggle(
                 engine=row.get("ocrEngine") or default_field_ocr_engine(),
                 on_change=lambda engine, i=idx: self._on_engine_changed(i, engine),
             )
-            api_row.addWidget(engine_toggle)
+            api_row.addWidget(engine_toggle, 1)
             api_row.addStretch()
             select_btn = h.button("選択", lambda _=False, i=idx: self._select_field(i))
             select_btn.setFixedWidth(52)
