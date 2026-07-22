@@ -8,6 +8,12 @@ from PySide6.QtWidgets import QButtonGroup, QFrame, QHBoxLayout, QPushButton, QW
 
 from ui_qt.style import COLORS
 
+# 記述欄一覧 — 選択肢ごとに色分け
+_LANG_EN = ("#dc2626", "#b91c1c", "#fee2e2")
+_LANG_JA = ("#2563eb", "#1d4ed8", "#dbeafe")
+_ENGINE_OPENAI = ("#16a34a", "#15803d", "#dcfce7")
+_ENGINE_VISION = ("#ea580c", "#c2410c", "#ffedd5")
+
 _FIELD_SEGMENT_STYLE = f"""
 QFrame#OcrFieldSegmentTrack {{
     background: #e5e7eb;
@@ -22,19 +28,90 @@ QFrame#OcrFieldSegmentTrack QPushButton {{
     text-align: center;
     font-size: 11px;
     font-weight: 600;
-    color: {COLORS["text_secondary"]};
     min-height: 24px;
     min-width: 48px;
 }}
-QFrame#OcrFieldSegmentTrack QPushButton:hover {{
-    background: rgba(255, 255, 255, 0.45);
-    color: {COLORS["text"]};
+QPushButton#OcrFieldLangEn {{
+    color: {_LANG_EN[0]};
 }}
-QFrame#OcrFieldSegmentTrack QPushButton:checked {{
-    background: {COLORS["accent"]};
-    border-color: {COLORS["accent_hover"]};
+QPushButton#OcrFieldLangEn:hover {{
+    background: {_LANG_EN[2]};
+    border-color: #fca5a5;
+}}
+QPushButton#OcrFieldLangEn:checked {{
+    background: {_LANG_EN[0]};
+    border-color: {_LANG_EN[1]};
     color: white;
+}}
+QPushButton#OcrFieldLangEn:checked:hover {{
+    background: {_LANG_EN[1]};
+}}
+QPushButton#OcrFieldLangJa {{
+    color: {_LANG_JA[0]};
+}}
+QPushButton#OcrFieldLangJa:hover {{
+    background: {_LANG_JA[2]};
+    border-color: #93c5fd;
+}}
+QPushButton#OcrFieldLangJa:checked {{
+    background: {_LANG_JA[0]};
+    border-color: {_LANG_JA[1]};
+    color: white;
+}}
+QPushButton#OcrFieldLangJa:checked:hover {{
+    background: {_LANG_JA[1]};
+}}
+QPushButton#OcrFieldEngineOpenai {{
+    color: {_ENGINE_OPENAI[0]};
+}}
+QPushButton#OcrFieldEngineOpenai:hover {{
+    background: {_ENGINE_OPENAI[2]};
+    border-color: #86efac;
+}}
+QPushButton#OcrFieldEngineOpenai:checked {{
+    background: {_ENGINE_OPENAI[0]};
+    border-color: {_ENGINE_OPENAI[1]};
+    color: white;
+}}
+QPushButton#OcrFieldEngineOpenai:checked:hover {{
+    background: {_ENGINE_OPENAI[1]};
+}}
+QPushButton#OcrFieldEngineVision {{
+    color: {_ENGINE_VISION[0]};
+}}
+QPushButton#OcrFieldEngineVision:hover {{
+    background: {_ENGINE_VISION[2]};
+    border-color: #fdba74;
+}}
+QPushButton#OcrFieldEngineVision:checked {{
+    background: {_ENGINE_VISION[0]};
+    border-color: {_ENGINE_VISION[1]};
+    color: white;
+}}
+QPushButton#OcrFieldEngineVision:checked:hover {{
+    background: {_ENGINE_VISION[1]};
+}}
+"""
+
+FIELD_LIST_SELECT_BTN_STYLE = f"""
+QPushButton#FieldListSelectBtn {{
+    background: {COLORS["accent_soft"]};
+    border: 1px solid #93c5fd;
+    border-radius: 6px;
+    padding: 3px 8px;
+    font-size: 11px;
     font-weight: 700;
+    color: {COLORS["accent_hover"]};
+    min-height: 24px;
+}}
+QPushButton#FieldListSelectBtn:hover {{
+    background: #dbeafe;
+    border-color: {COLORS["accent"]};
+    color: {COLORS["accent_hover"]};
+}}
+QPushButton#FieldListSelectBtn:pressed {{
+    background: #bfdbfe;
+    border-color: {COLORS["accent_hover"]};
 }}
 """
 
@@ -84,7 +161,9 @@ class OcrLangToggle(QWidget):
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._btn_en = QPushButton("英語")
+        self._btn_en.setObjectName("OcrFieldLangEn")
         self._btn_ja = QPushButton("日本語")
+        self._btn_ja.setObjectName("OcrFieldLangJa")
         self._group.addButton(self._btn_en)
         self._group.addButton(self._btn_ja)
         self._track = _FieldSegmentBar([self._btn_en, self._btn_ja], self)
@@ -135,7 +214,9 @@ class OcrEngineToggle(QWidget):
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._btn_openai = QPushButton("OpenAI")
+        self._btn_openai.setObjectName("OcrFieldEngineOpenai")
         self._btn_vision = QPushButton("Vision")
+        self._btn_vision.setObjectName("OcrFieldEngineVision")
         self._group.addButton(self._btn_openai)
         self._group.addButton(self._btn_vision)
         self._track = _FieldSegmentBar([self._btn_openai, self._btn_vision], self)

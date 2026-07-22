@@ -33,7 +33,7 @@ from services.image_loader import is_supported_input_path
 from services.image_warp import warp_image_from_path
 from ui_qt import helpers as h
 from ui_qt.region_editor import AnswerRegionEditor
-from ui_qt.ocr_lang_widgets import OcrEngineToggle, OcrLangToggle
+from ui_qt.ocr_lang_widgets import FIELD_LIST_SELECT_BTN_STYLE, OcrEngineToggle, OcrLangToggle
 from ui_qt.region_mode_widgets import RegionDetectModeToggle
 from ui_qt.style import COLORS
 
@@ -333,6 +333,8 @@ class Step2Page(QWidget):
             api_row.addWidget(engine_toggle, 1)
             api_row.addStretch()
             select_btn = h.button("選択", lambda _=False, i=idx: self._select_field(i))
+            select_btn.setObjectName("FieldListSelectBtn")
+            select_btn.setStyleSheet(FIELD_LIST_SELECT_BTN_STYLE)
             select_btn.setFixedWidth(52)
             api_row.addWidget(select_btn)
             lay.addLayout(api_row)
