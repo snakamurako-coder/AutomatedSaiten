@@ -6,8 +6,7 @@ QPainter はネイティブにアルファ合成できるため、画面は Qt �
 
 from __future__ import annotations
 
-import copy
-from typing import Any, Callable
+from config import default_field_ocr_engine
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
@@ -23,6 +22,15 @@ from services.compositor import (
 from services.image_loader import load_image_bgr
 from ui_qt.helpers import bgr_to_qpixmap
 from ui_qt.style import COLORS
+
+
+def _normalize_region_ocr_engine(value: str | None) -> str:
+    engine = str(value or "").strip().lower()
+    if engine == "tesseract":
+        return "openai"
+    if engine in ("vision", "openai"):
+        return engine
+    return default_field_ocr_engine()
 
 _CURSORS = {
     "nw": Qt.SizeFDiagCursor,
@@ -68,6 +76,7 @@ class _EditorCanvas(QWidget):
         self.detect_roi_margin: int | None = None
         self.require_pending_label_for_detect = False
         self.default_ocr_lang = "en"
+        self.default_ocr_engine = "openai"
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
@@ -410,6 +419,7 @@ class _EditorCanvas(QWidget):
                 "h": h,
                 "order": len(self.regions),
                 "ocrLang": "ja" if self.default_ocr_lang == "ja" else "en",
+                "ocrEngine": _normalize_region_ocr_engine(self.default_ocr_engine),
             }
         )
         for i, r in enumerate(self.regions):
@@ -496,6 +506,7 @@ class AnswerRegionEditor(QScrollArea):
                     "h": float(r.get("height") or r.get("h") or 0),
                     "order": int(r.get("order") or i + 1),
                     "ocrLang": "ja" if str(r.get("ocrLang") or "").lower() == "ja" else "en",
+                    "ocrEngine": _normalize_region_ocr_engine(r.get("ocrEngine")),
                 }
             )
         self._canvas.regions = rows
@@ -515,6 +526,7 @@ class AnswerRegionEditor(QScrollArea):
                     "height": int(round(r["h"])),
                     "order": int(r.get("order") or i + 1),
                     "ocrLang": "ja" if str(r.get("ocrLang") or "").lower() == "ja" else "en",
+                    "ocrEngine": _normalize_region_ocr_engine(r.get("ocrEngine")),
                 }
             )
         return out
@@ -541,6 +553,10 @@ class AnswerRegionEditor(QScrollArea):
         if 0 <= index < len(self._canvas.regions):
             self._canvas.regions[index]["ocrLang"] = "ja" if lang == "ja" else "en"
 
+    def set_region_ocr_engine(self, index: int, engine: str) -> None:
+        if 0 <= index < len(self._canvas.regions):
+            self._canvas.regions[index]["ocrEngine"] = _normalize_region_ocr_engine(engine)
+
     def set_pending_label(self, label: str | None, *, replace_same: bool = True) -> None:
         """次にドラッグで作る矩形の ID を指定する（⑩欄種別 / ⑫slotKey 用）。"""
         self._canvas.pending_label = label
@@ -562,6 +578,9 @@ class AnswerRegionEditor(QScrollArea):
 
     def set_default_ocr_lang(self, lang: str) -> None:
         self._canvas.default_ocr_lang = "ja" if str(lang or "en").lower() == "ja" else "en"
+
+    def set_default_ocr_engine(self, engine: str) -> None:
+        self._canvas.default_ocr_engine = _normalize_region_ocr_engine(engine)
 
     def clear_all_regions(self) -> None:
         self._canvas.regions = []

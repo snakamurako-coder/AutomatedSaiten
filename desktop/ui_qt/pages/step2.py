@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from config import load_config, save_config, test_model_source
+from config import default_field_ocr_engine, default_field_ocr_lang, load_config, save_config, test_model_source
 from models.test_repo import (
     archive_model_answer_source,
     get_answer_fields,
@@ -33,6 +33,7 @@ from services.image_loader import is_supported_input_path
 from services.image_warp import warp_image_from_path
 from ui_qt import helpers as h
 from ui_qt.region_editor import AnswerRegionEditor
+from ui_qt.ocr_lang_widgets import OcrEngineToggle, OcrLangToggle
 from ui_qt.region_mode_widgets import RegionDetectModeToggle
 from ui_qt.style import COLORS
 
@@ -118,12 +119,15 @@ class Step2Page(QWidget):
             on_change=self._refresh_field_panel,
             on_status=self._set_status,
         )
+        init_cfg = load_config()
+        self.editor.set_default_ocr_lang(default_field_ocr_lang(init_cfg))
+        self.editor.set_default_ocr_engine(default_field_ocr_engine(init_cfg))
         self.editor.set_detect_threshold(int(self.thresh_slider.value()))
         self.editor.set_click_detect_mode(True)
         body.addWidget(self.editor, 1)
 
         side = QFrame()
-        side.setFixedWidth(230)
+        side.setFixedWidth(260)
         side.setStyleSheet(
             f"QFrame {{ background: {COLORS['sidebar']}; border: 1px solid {COLORS['border']};"
             f" border-radius: 8px; }}"
@@ -248,6 +252,9 @@ class Step2Page(QWidget):
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
+        cfg = load_config()
+        self.editor.set_default_ocr_lang(default_field_ocr_lang(cfg))
+        self.editor.set_default_ocr_engine(default_field_ocr_engine(cfg))
         self._field_rows = get_answer_fields(self.app.active_test_id)
         info = get_test_info(self.app.active_test_id)
         self.use_id_mark_check.setChecked(bool(info.get("useIdMark", True)))
@@ -298,28 +305,43 @@ class Step2Page(QWidget):
             name = QLabel(f"{row['displayName']}  {row['width']}×{row['height']}")
             name.setStyleSheet("border: none; font-weight: 600; font-size: 12px;")
             lay.addWidget(name)
-            ctrl = QHBoxLayout()
-            ocr_label = QLabel("OCR")
-            ocr_label.setStyleSheet("border: none; font-size: 10px; color: #9ca3af;")
-            ctrl.addWidget(ocr_label)
-            combo = QComboBox()
-            combo.addItems(["en", "ja"])
-            combo.setCurrentText(row.get("ocrLang") or "en")
-            combo.setFixedWidth(64)
-            combo.currentTextChanged.connect(
-                lambda lang, i=idx: self._on_lang_changed(i, lang)
+            lang_row = QHBoxLayout()
+            lang_label = QLabel("言語")
+            lang_label.setStyleSheet("border: none; font-size: 10px; color: #9ca3af;")
+            lang_label.setFixedWidth(28)
+            lang_row.addWidget(lang_label)
+            lang_toggle = OcrLangToggle(
+                lang=row.get("ocrLang") or "en",
+                on_change=lambda lang, i=idx: self._on_lang_changed(i, lang),
             )
-            ctrl.addWidget(combo)
-            ctrl.addStretch()
+            lang_row.addWidget(lang_toggle)
+            lang_row.addStretch()
+            lay.addLayout(lang_row)
+
+            api_row = QHBoxLayout()
+            api_label = QLabel("API")
+            api_label.setStyleSheet("border: none; font-size: 10px; color: #9ca3af;")
+            api_label.setFixedWidth(28)
+            api_row.addWidget(api_label)
+            engine_toggle = OcrEngineToggle(
+                engine=row.get("ocrEngine") or default_field_ocr_engine(),
+                on_change=lambda engine, i=idx: self._on_engine_changed(i, engine),
+            )
+            api_row.addWidget(engine_toggle)
+            api_row.addStretch()
             select_btn = h.button("選択", lambda _=False, i=idx: self._select_field(i))
             select_btn.setFixedWidth(52)
-            ctrl.addWidget(select_btn)
-            lay.addLayout(ctrl)
+            api_row.addWidget(select_btn)
+            lay.addLayout(api_row)
             self.field_panel_layout.addWidget(card)
         self.field_panel_layout.addStretch()
 
     def _on_lang_changed(self, index: int, lang: str) -> None:
         self.editor.set_region_ocr_lang(index, lang)
+        self._field_rows = self.editor.get_regions()
+
+    def _on_engine_changed(self, index: int, engine: str) -> None:
+        self.editor.set_region_ocr_engine(index, engine)
         self._field_rows = self.editor.get_regions()
 
     def _select_field(self, index: int) -> None:

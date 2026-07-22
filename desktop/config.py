@@ -106,9 +106,20 @@ def faint_thresholds_from_config(cfg: dict | None = None) -> dict[str, float | b
 
 
 def default_field_ocr_lang(cfg: dict | None = None) -> str:
-    """①記述欄設定で新規欄に付与する OCR 言語（en / ja）。"""
+    """②回答欄設定で新規欄に付与する OCR 言語（en / ja）。"""
     lang = str((cfg if cfg is not None else load_config()).get("default_field_ocr_lang") or "en")
     return "ja" if lang.lower() == "ja" else "en"
+
+
+def default_field_ocr_engine(cfg: dict | None = None) -> str:
+    """②回答欄設定で新規欄に付与する OCR エンジン（openai / vision）。"""
+    engine = str((cfg if cfg is not None else load_config()).get("ocr_engine") or "openai")
+    engine = engine.strip().lower()
+    if engine == "tesseract":
+        return "openai"
+    if engine in ("vision", "openai"):
+        return engine
+    return "openai"
 
 
 # 内蔵プリセット（contrast 50–220, clahe -50–80, bg_whiten 0–100, gamma 10–40 = ×10）

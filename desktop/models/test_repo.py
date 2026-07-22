@@ -373,7 +373,7 @@ def archive_model_answer_source(test_id: str, source_path: str | Path) -> str:
 def get_answer_fields_conn(conn, test_id: str) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT field_id, display_name, x, y, width, height, sort_order, ocr_lang
+        SELECT field_id, display_name, x, y, width, height, sort_order, ocr_lang, ocr_engine
         FROM answer_fields WHERE test_id = ?
         ORDER BY sort_order, field_id
         """,
@@ -389,6 +389,7 @@ def get_answer_fields_conn(conn, test_id: str) -> list[dict[str, Any]]:
             "height": r["height"],
             "order": r["sort_order"],
             "ocrLang": _normalize_ocr_lang(r["ocr_lang"]),
+            "ocrEngine": _normalize_ocr_engine(r["ocr_engine"]),
         }
         for r in rows
     ]
@@ -405,6 +406,17 @@ def get_answer_fields(test_id: str | None = None) -> list[dict[str, Any]]:
 
 def _normalize_ocr_lang(value: str | None) -> str:
     return "ja" if str(value or "").lower() == "ja" else "en"
+
+
+def _normalize_ocr_engine(value: str | None) -> str:
+    engine = str(value or "").strip().lower()
+    if engine == "tesseract":
+        return "openai"
+    if engine in ("vision", "openai"):
+        return engine
+    from config import default_field_ocr_engine
+
+    return default_field_ocr_engine()
 
 
 def save_answer_fields(test_id: str, fields: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -425,6 +437,7 @@ def save_answer_fields(test_id: str, fields: list[dict[str, Any]]) -> list[dict[
                 "height": int(f.get("height") or 0),
                 "order": int(f.get("order") or i + 1),
                 "ocrLang": _normalize_ocr_lang(f.get("ocrLang")),
+                "ocrEngine": _normalize_ocr_engine(f.get("ocrEngine")),
             }
         )
     with connect() as conn:
@@ -433,8 +446,8 @@ def save_answer_fields(test_id: str, fields: list[dict[str, Any]]) -> list[dict[
             conn.execute(
                 """
                 INSERT INTO answer_fields(
-                    test_id, field_id, display_name, x, y, width, height, sort_order, ocr_lang
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    test_id, field_id, display_name, x, y, width, height, sort_order, ocr_lang, ocr_engine
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     test_id,
@@ -446,6 +459,7 @@ def save_answer_fields(test_id: str, fields: list[dict[str, Any]]) -> list[dict[
                     f["height"],
                     f["order"],
                     f["ocrLang"],
+                    f["ocrEngine"],
                 ),
             )
         touch_progress_conn(conn, test_id, 1)

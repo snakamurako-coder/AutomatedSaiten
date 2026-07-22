@@ -155,7 +155,14 @@ class SettingsDialog(QDialog):
         vision_desc.setContentsMargins(22, 0, 0, 0)
         vision_block.addWidget(vision_desc)
         engine_row.addLayout(vision_block)
-        ocr_form.addRow("OCR エンジン", engine_row)
+        ocr_form.addRow("OCR エンジン（既定）", engine_row)
+        ocr_form.addRow(
+            "",
+            h.caption_label(
+                "② 回答欄設定で新規記述欄を追加するとき、"
+                "および記述欄ごとに API 未指定のときの OCR API です。"
+            ),
+        )
 
         field_lang_row = QHBoxLayout()
         self.field_ocr_en = QRadioButton("英語")
@@ -170,7 +177,7 @@ class SettingsDialog(QDialog):
         ocr_form.addRow("記述欄のデフォルト言語", field_lang_row)
         ocr_form.addRow(
             "",
-            h.caption_label("① 回答欄設定で新規記述欄を追加するときの OCR 言語です。"),
+            h.caption_label("② 回答欄設定で新規記述欄を追加するときの OCR 言語です。"),
         )
         lay.addLayout(ocr_form)
 

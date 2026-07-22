@@ -46,11 +46,21 @@ def ocr_lang_to_hints(ocr_lang: str) -> list[str]:
     return ["ja"] if normalize_ocr_lang(ocr_lang) == "ja" else ["en"]
 
 
-def fields_need_per_crop_ocr(fields: list[dict[str, Any]]) -> bool:
+def field_ocr_engine(field: dict[str, Any], cfg: dict | None = None) -> str:
+    c = cfg if cfg is not None else load_config()
+    default_engine = normalize_ocr_engine(c.get("ocr_engine"))
+    return normalize_ocr_engine(field.get("ocrEngine") or default_engine)
+
+
+def fields_need_per_crop_ocr(fields: list[dict[str, Any]], cfg: dict | None = None) -> bool:
     if len(fields) <= 1:
         return False
-    first = normalize_ocr_lang(fields[0].get("ocrLang"))
-    return any(normalize_ocr_lang(f.get("ocrLang")) != first for f in fields[1:])
+    c = cfg if cfg is not None else load_config()
+    first_lang = normalize_ocr_lang(fields[0].get("ocrLang"))
+    if any(normalize_ocr_lang(f.get("ocrLang")) != first_lang for f in fields[1:]):
+        return True
+    first_engine = field_ocr_engine(fields[0], c)
+    return any(field_ocr_engine(f, c) != first_engine for f in fields[1:])
 
 
 def _image_to_jpeg_bytes(image_bgr: np.ndarray) -> bytes:
@@ -181,17 +191,6 @@ def extract_text_from_boxes(
     return mapping
 
 
-def _run_openai_ocr_on_fields(
-    warped_bgr: np.ndarray,
-    fields: list[dict[str, Any]],
-) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for f in fields:
-        crop = crop_region(warped_bgr, f["x"], f["y"], f["width"], f["height"])
-        mapping[f["id"]] = call_openai_ocr(crop, f.get("ocrLang", "en"))
-    return mapping
-
-
 def run_ocr_on_warped_image(
     warped_bgr: np.ndarray,
     fields: list[dict[str, Any]],
@@ -200,32 +199,41 @@ def run_ocr_on_warped_image(
         raise ValueError("記述欄が設定されていません。")
 
     cfg = load_config()
-    engine = normalize_ocr_engine(cfg.get("ocr_engine"))
+    mapping: dict[str, str] = {}
 
-    if engine == OCR_ENGINE_OPENAI:
-        return _run_openai_ocr_on_fields(warped_bgr, fields)
+    openai_fields = [f for f in fields if field_ocr_engine(f, cfg) == OCR_ENGINE_OPENAI]
+    vision_fields = [f for f in fields if field_ocr_engine(f, cfg) == OCR_ENGINE_VISION]
 
-    if fields_need_per_crop_ocr(fields):
-        mapping: dict[str, str] = {}
-        for f in fields:
-            crop = crop_region(warped_bgr, f["x"], f["y"], f["width"], f["height"])
-            result = call_vision_api(
-                _image_to_jpeg_bytes(crop),
-                ocr_lang_to_hints(f.get("ocrLang")),
+    for f in openai_fields:
+        crop = crop_region(warped_bgr, f["x"], f["y"], f["width"], f["height"])
+        mapping[f["id"]] = call_openai_ocr(crop, f.get("ocrLang", "en"))
+
+    if vision_fields:
+        if len(vision_fields) == len(fields) and not fields_need_per_crop_ocr(vision_fields, cfg):
+            unified_lang = vision_fields[0].get("ocrLang", "en")
+            vision_result = call_vision_api(
+                _image_to_jpeg_bytes(warped_bgr),
+                ocr_lang_to_hints(unified_lang),
             )
-            mapping[f["id"]] = extract_text_from_single_crop(result)
-        return mapping
-
-    unified_lang = fields[0].get("ocrLang", "en")
-    vision_result = call_vision_api(
-        _image_to_jpeg_bytes(warped_bgr),
-        ocr_lang_to_hints(unified_lang),
-    )
-    boxes = [
-        {"id": f["id"], "x": f["x"], "y": f["y"], "w": f["width"], "h": f["height"]}
-        for f in fields
-    ]
-    mapping = extract_text_from_boxes(vision_result, boxes)
+            boxes = [
+                {
+                    "id": f["id"],
+                    "x": f["x"],
+                    "y": f["y"],
+                    "w": f["width"],
+                    "h": f["height"],
+                }
+                for f in vision_fields
+            ]
+            mapping.update(extract_text_from_boxes(vision_result, boxes))
+        else:
+            for f in vision_fields:
+                crop = crop_region(warped_bgr, f["x"], f["y"], f["width"], f["height"])
+                result = call_vision_api(
+                    _image_to_jpeg_bytes(crop),
+                    ocr_lang_to_hints(f.get("ocrLang")),
+                )
+                mapping[f["id"]] = extract_text_from_single_crop(result)
 
     for f in fields:
         mapping.setdefault(f["id"], "なし")

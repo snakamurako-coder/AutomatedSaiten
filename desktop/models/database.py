@@ -226,6 +226,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE grading_criteria ADD COLUMN uniform_feedback_json TEXT DEFAULT ''"
         )
+    field_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(answer_fields)").fetchall()
+    }
+    if "ocr_engine" not in field_cols:
+        conn.execute("ALTER TABLE answer_fields ADD COLUMN ocr_engine TEXT DEFAULT ''")
 
 
 def init_db() -> None:
