@@ -128,16 +128,53 @@ def detect_paper_corners(image_bgr: np.ndarray, thresh_val: int = 128) -> Corner
     return Corners(tl=top[0], tr=top[1], br=bottom[0], bl=bottom[1])
 
 
+def _edge_length(
+    a: tuple[float, float], b: tuple[float, float]
+) -> float:
+    return float(np.hypot(a[0] - b[0], a[1] - b[1]))
+
+
+def corner_quad_size(corners: Corners) -> tuple[float, float]:
+    """四隅の対辺長から切り取り領域の幅・高さを推定する（アスペクト比保持用）。"""
+    width = max(
+        _edge_length(corners.tl, corners.tr),
+        _edge_length(corners.bl, corners.br),
+    )
+    height = max(
+        _edge_length(corners.tl, corners.bl),
+        _edge_length(corners.tr, corners.br),
+    )
+    return max(width, 1.0), max(height, 1.0)
+
+
+def warp_output_size(
+    corners: Corners,
+    orientation: Orientation = "landscape",
+) -> tuple[int, int]:
+    """切り取り領域の縦横比を保った出力サイズ。
+
+    A4 想定の基準ピクセル枠（orientation）に収まる最大サイズへ
+    等方スケールするだけで、縦横比は変えない。
+    """
+    width, height = corner_quad_size(corners)
+    cfg = get_paper_config(orientation)
+    scale = min(cfg.warp_w / width, cfg.warp_h / height)
+    out_w = max(1, int(round(width * scale)))
+    out_h = max(1, int(round(height * scale)))
+    return out_w, out_h
+
+
 def warp_from_corners(
     image_bgr: np.ndarray,
     corners: Corners,
     orientation: Orientation = "landscape",
 ) -> np.ndarray:
-    cfg = get_paper_config(orientation)
+    """四隅を矩形へ透視変換する。出力は切り取り領域のアスペクト比を保つ。"""
+    out_w, out_h = warp_output_size(corners, orientation)
     src = np.float32([corners.tl, corners.tr, corners.br, corners.bl])
-    dst = np.float32([[0, 0], [cfg.warp_w, 0], [cfg.warp_w, cfg.warp_h], [0, cfg.warp_h]])
+    dst = np.float32([[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]])
     matrix = cv2.getPerspectiveTransform(src, dst)
-    return cv2.warpPerspective(image_bgr, matrix, (cfg.warp_w, cfg.warp_h))
+    return cv2.warpPerspective(image_bgr, matrix, (out_w, out_h))
 
 
 def warp_image_file(
