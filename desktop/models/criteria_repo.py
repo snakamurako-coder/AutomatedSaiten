@@ -10,6 +10,31 @@ from models.database import connect, init_db
 from models.test_repo import get_all_results, touch_progress_conn
 
 
+_JUDGMENT_RANK = {"○": 0, "△": 1, "×": 2}
+
+
+def criteria_display_sort_key(row: dict[str, Any]) -> tuple:
+    """採点基準の表示順: ○ → △ → ×、同一判定は配点の高い順。"""
+    judgment = str(row.get("judgment") or "").strip()
+    rank = _JUDGMENT_RANK.get(judgment, 8 if judgment else 9)
+    raw_score = row.get("score")
+    try:
+        score = int(raw_score) if raw_score not in ("", None) else -(10**9)
+    except (TypeError, ValueError):
+        score = -(10**9)
+    return (
+        rank,
+        -score,
+        -int(row.get("count") or 0),
+        str(row.get("answer_text") or ""),
+    )
+
+
+def sort_criteria_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    rows.sort(key=criteria_display_sort_key)
+    return rows
+
+
 def get_unique_answers(test_id: str, field_id: str) -> list[dict[str, Any]]:
     """OCR 結果から記述欄ごとのユニーク回答を集約。"""
     init_db()
@@ -199,7 +224,7 @@ def merge_unique_with_criteria(
                     "incorrect": False,
                 }
             )
-    return merged
+    return sort_criteria_rows(merged)
 
 
 def save_uniform_feedback_config(

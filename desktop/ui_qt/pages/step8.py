@@ -31,6 +31,7 @@ from models.criteria_repo import (
     get_outlier_answer_groups,
     merge_unique_with_criteria,
     save_grading_criteria,
+    sort_criteria_rows,
 )
 from models.ink_repo import (
     SHEET_FIELD_ID,
@@ -1083,6 +1084,8 @@ class Step8Page(QWidget):
             return
         try:
             save_grading_criteria(self.app.active_test_id, fid, rules)
+            sort_criteria_rows(self._criteria_rows)
+            self._render_criteria_table()
             h.info(self, "保存完了", f"採点基準を {len(rules)} 件保存しました。")
         except Exception as e:
             h.error(self, "エラー", str(e))
