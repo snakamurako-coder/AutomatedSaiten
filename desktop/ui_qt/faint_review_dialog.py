@@ -8,7 +8,7 @@ from typing import Any
 
 import numpy as np
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QPainter, QPen
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -34,6 +34,7 @@ from services.faint_ink import enhance_bgr
 from services.image_loader import imread_bgr, imwrite_bgr
 from services.image_warp import warped_file_name
 from ui_qt.crop_widgets import SliderSpinControls, ZoomControls
+from ui_qt.field_overlay import draw_answer_fields
 from ui_qt.helpers import bgr_to_qpixmap, enable_dialog_maximize, scroll_viewport_size
 from ui_qt.style import COLORS
 
@@ -85,17 +86,13 @@ class _PreviewCanvas(QWidget):
             return
         target = self.rect()
         painter.drawPixmap(target, self._pixmap)
-        for f in self._fields:
-            x = int(float(f.get("x") or 0) * self._scale)
-            y = int(float(f.get("y") or 0) * self._scale)
-            w = int(float(f.get("width") or 0) * self._scale)
-            h = int(float(f.get("height") or 0) * self._scale)
-            fid = str(f.get("id") or "")
-            hot = fid == self._highlight_id
-            pen = QPen(QColor("#f59e0b" if hot else COLORS["accent"]))
-            pen.setWidth(3 if hot else 2)
-            painter.setPen(pen)
-            painter.drawRect(x, y, max(1, w), max(1, h))
+        draw_answer_fields(
+            painter,
+            self._fields,
+            scale=self._scale,
+            pen_width=2,
+            highlight_id=self._highlight_id,
+        )
 
 
 class FaintReviewDialog(QDialog):

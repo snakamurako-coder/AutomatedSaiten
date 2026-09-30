@@ -1,4 +1,4 @@
-"""⑤トリミング — 補正画像のタイル確認ビュー。"""
+"""⑤⑥ — 補正画像のタイル確認ビュー（②記述欄枠を常時表示）。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ from collections.abc import Callable
 from typing import Any
 
 from PySide6.QtCore import QSize, Qt
-from PySide6.QtGui import QMouseEvent, QPixmap
+from PySide6.QtGui import QMouseEvent, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
     QLabel,
@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
 )
 
 from services.image_loader import imread_bgr
+from ui_qt.field_overlay import draw_answer_fields
 from ui_qt.helpers import bgr_to_qpixmap
 from ui_qt.layout_helpers import FlowLayout, configure_crop_image_scroll, make_expanding
 from ui_qt.style import COLORS
@@ -25,8 +26,8 @@ _THUMB_MAX_W = 220
 _THUMB_MAX_H = 160
 
 
-def _load_thumb(path: str) -> QPixmap | None:
-    """Unicode パス対応でサムネイルを読み込む（cv2.imread は日本語パスで失敗する）。"""
+def _load_thumb(path: str, fields: list[dict[str, Any]] | None = None) -> QPixmap | None:
+    """Unicode パス対応でサムネイルを読み込み、記述欄枠を重ねる。"""
     try:
         bgr = imread_bgr(path)
         if bgr is None:
@@ -41,7 +42,12 @@ def _load_thumb(path: str) -> QPixmap | None:
                 (max(1, int(w * scale)), max(1, int(h * scale))),
                 interpolation=cv2.INTER_AREA,
             )
-        return bgr_to_qpixmap(bgr)
+        pix = bgr_to_qpixmap(bgr)
+        if fields and not pix.isNull():
+            painter = QPainter(pix)
+            draw_answer_fields(painter, fields, scale=scale, pen_width=2)
+            painter.end()
+        return pix
     except Exception:  # noqa: BLE001
         return None
 
@@ -80,6 +86,7 @@ class WarpedPreviewTile(QFrame):
         status: str,
         checked: bool,
         on_toggle: Callable[[str], None],
+        fields: list[dict[str, Any]] | None = None,
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
@@ -99,7 +106,7 @@ class WarpedPreviewTile(QFrame):
         self._img.setAlignment(Qt.AlignCenter)
         self._img.setFixedSize(_THUMB_MAX_W, _THUMB_MAX_H)
         self._img.setScaledContents(False)
-        pix = _load_thumb(warped_path)
+        pix = _load_thumb(warped_path, fields)
         if pix is not None and not pix.isNull():
             self._img.setPixmap(pix)
             self._img.setStyleSheet(
@@ -179,13 +186,14 @@ class WarpedPreviewPanel(QWidget):
         super().__init__(parent)
         self._on_tile_toggle = on_tile_toggle
         self._tiles: dict[str, WarpedPreviewTile] = {}
+        self._fields: list[dict[str, Any]] = []
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(4)
 
         self._caption = QLabel(
-            "補正プレビュー — OCR前の仕上がりを確認（タップで選択／一覧のチェックと同期）"
+            "補正プレビュー — ②の記述欄枠を表示（タップで選択／一覧のチェックと同期）"
         )
         self._caption.setStyleSheet(
             "font-weight: 700; font-size: 12px; color: #374151;"
@@ -224,8 +232,13 @@ class WarpedPreviewPanel(QWidget):
                 w.deleteLater()
         self._tiles.clear()
 
-    def rebuild(self, entries: list[dict[str, Any]]) -> None:
+    def rebuild(
+        self,
+        entries: list[dict[str, Any]],
+        fields: list[dict[str, Any]] | None = None,
+    ) -> None:
         """entries: {fileName, warpedPath, status, checked}"""
+        self._fields = list(fields or [])
         self.clear()
         if not entries:
             self._scroll.hide()
@@ -241,6 +254,7 @@ class WarpedPreviewPanel(QWidget):
                 status=str(e.get("status") or ""),
                 checked=bool(e.get("checked")),
                 on_toggle=self._on_tile_toggle,
+                fields=self._fields,
             )
             self._tiles[name] = tile
             self._flow.addWidget(tile)

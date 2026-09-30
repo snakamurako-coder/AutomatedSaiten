@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import load_config, test_warped
+from models.test_repo import get_answer_fields
 from services.image_loader import imwrite_bgr, load_image_bgr
 from services.image_warp import (
     Corners,
@@ -30,6 +31,7 @@ from services.image_warp import (
     warp_from_corners,
 )
 from ui_qt.crop_widgets import ZoomControls
+from ui_qt.field_overlay import draw_answer_fields
 from ui_qt.helpers import bgr_to_qpixmap, enable_dialog_maximize, scroll_viewport_size
 from ui_qt.style import COLORS
 
@@ -397,14 +399,19 @@ class _SourceCanvas(QWidget):
 
 
 class _PreviewCanvas(QWidget):
-    """補正プレビュー表示。"""
+    """補正プレビュー表示（②記述欄枠を常時重ねる）。"""
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._pixmap = None
+        self._fields: list[dict[str, Any]] = []
         self._zoom_pct = 100
         self._fit_scale = 1.0
         self.setMinimumSize(320, 240)
+
+    def set_fields(self, fields: list[dict[str, Any]] | None) -> None:
+        self._fields = list(fields or [])
+        self.update()
 
     def set_zoom_pct(self, pct: int) -> None:
         self._zoom_pct = max(30, min(400, int(pct)))
@@ -446,6 +453,8 @@ class _PreviewCanvas(QWidget):
             return
         target = QRectF(0, 0, self.width(), self.height())
         painter.drawPixmap(target, self._pixmap, QRectF(self._pixmap.rect()))
+        disp_scale = self.width() / max(1, self._pixmap.width())
+        draw_answer_fields(painter, self._fields, scale=disp_scale, pen_width=2)
 
 
 def _clamp(v: float, limit: float) -> float:
@@ -476,6 +485,7 @@ class ManualWarpDialog(QDialog):
         self._inherited_corners: Corners | None = None
         self._saved_entries: list[dict[str, Any]] = []
         self._busy = False
+        self._fields = get_answer_fields(test_id)
 
         self.setWindowTitle("手動補正")
         self.setMinimumSize(980, 680)
@@ -541,6 +551,7 @@ class ManualWarpDialog(QDialog):
         self.preview_scroll = QScrollArea()
         self.preview_scroll.setWidgetResizable(True)
         self.preview_canvas = _PreviewCanvas()
+        self.preview_canvas.set_fields(self._fields)
         self.preview_scroll.setWidget(self.preview_canvas)
         self.preview_scroll.setMinimumHeight(360)
         right.addWidget(self.preview_scroll, 1)

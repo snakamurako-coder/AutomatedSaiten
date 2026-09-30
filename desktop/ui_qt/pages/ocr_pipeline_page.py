@@ -79,8 +79,8 @@ _PHASE_META: dict[int, dict[str, str]] = {
         "title": "⑤ トリミング",
         "desc": (
             "「フォルダを再認識」で一覧を表示し、チェックしたファイルを角度補正（自動または手動）します。"
-            "「補正プレビュー（タイル）」で仕上がりをまとめて確認し、タップ選択は一覧のチェックと同期します。"
-            "以後の処理は warped フォルダの補正画像を使います。"
+            "「補正プレビュー（タイル）」で仕上がりをまとめて確認し、②の記述欄枠を常時表示します。"
+            "タップ選択は一覧のチェックと同期します。以後の処理は warped フォルダの補正画像を使います。"
         ),
         "action_hint": "「チェックしたファイルを自動トリミング」",
     },
@@ -89,7 +89,7 @@ _PHASE_META: dict[int, dict[str, str]] = {
         "desc": (
             "任意 — ⑤で作成した補正画像に対して薄い字を検査し、"
             "必要なら「目視・強調」でコントラスト等を調整します。"
-            "スキップしても⑦ OCR は実行できます。"
+            "プレビューでは②の記述欄枠を常時表示します。スキップしても⑦ OCR は実行できます。"
         ),
         "action_hint": "「薄い字を検査」または「チェックしたファイルを薄字補正」（任意）",
     },
@@ -119,7 +119,7 @@ class OcrPipelinePage(QWidget):
         self._scanned = False
         self._filter_key = "all"
         self._filter_btns: dict[str, QPushButton] = {}
-        self._view_mode = "list"  # list | tiles（⑤のみタイル）
+        self._view_mode = "list"  # list | tiles（⑤⑥でタイル＋記述欄枠）
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
@@ -313,14 +313,14 @@ class OcrPipelinePage(QWidget):
         self.scan_btn.setVisible(self._phase == 5)
         self.trim_btn.setVisible(self._phase == 5)
         self.manual_warp_btn.setVisible(self._phase == 5)
-        self._view_row_host.setVisible(self._phase == 5)
+        self._view_row_host.setVisible(self._phase in (5, 6))
         self.faint_precheck_btn.setVisible(self._phase == 6)
         self.faint_enhance_btn.setVisible(self._phase == 6)
         self.ocr_btn.setVisible(self._phase == 7)
         self.tsv_section.setVisible(self._phase == 7)
         reset_labels = {5: "⑤をリセット", 6: "⑥をリセット", 7: "⑦をリセット"}
         self.reset_btn.setText(reset_labels[self._phase])
-        if self._phase != 5 and self._view_mode != "list":
+        if self._phase not in (5, 6) and self._view_mode != "list":
             self._set_view_mode("list")
         for i, rd in enumerate(self._inventory_rows):
             if i < self.table.rowCount():
@@ -405,7 +405,7 @@ class OcrPipelinePage(QWidget):
 
     def _set_view_mode(self, mode: str) -> None:
         mode = "tiles" if mode == "tiles" else "list"
-        if self._phase != 5:
+        if self._phase not in (5, 6):
             mode = "list"
         self._view_mode = mode
         self.view_list_btn.blockSignals(True)
@@ -422,11 +422,11 @@ class OcrPipelinePage(QWidget):
             self._rebuild_tile_preview()
             n = self.tile_panel.tile_count()
             self.status_label.setText(
-                f"補正プレビュー {n} 件 — タップで選択（一覧チェックと同期）"
+                f"補正プレビュー {n} 件 — ②記述欄枠表示／タップで選択（一覧チェックと同期）"
             )
 
     def _rebuild_tile_preview(self) -> None:
-        """補正済み画像をタイル表示（現在フィルタ＋一覧チェック状態を反映）。"""
+        """補正済み画像をタイル表示（②記述欄枠＋フィルタ＋一覧チェック状態）。"""
         entries: list[dict[str, Any]] = []
         for i, rd in enumerate(self._inventory_rows):
             if not self._row_matches_filter(rd):
@@ -450,7 +450,7 @@ class OcrPipelinePage(QWidget):
                     "checked": self._row_checked(i) if i < self.table.rowCount() else False,
                 }
             )
-        self.tile_panel.rebuild(entries)
+        self.tile_panel.rebuild(entries, fields=self._fields)
 
     def _on_tile_toggled(self, file_name: str) -> None:
         key = normalize_file_name(file_name)
