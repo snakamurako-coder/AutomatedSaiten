@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QProgressBar,
     QPushButton,
     QSizePolicy,
+    QStackedWidget,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -62,6 +63,7 @@ from ui_qt.table_cells import (
     set_toggle_checked,
     wire_toggle_columns,
 )
+from ui_qt.warped_preview_tiles import WarpedPreviewPanel
 
 _COL_CHECK = 0
 _COL_STATUS = 1
@@ -77,6 +79,7 @@ _PHASE_META: dict[int, dict[str, str]] = {
         "title": "⑤ トリミング",
         "desc": (
             "「フォルダを再認識」で一覧を表示し、チェックしたファイルを角度補正（自動または手動）します。"
+            "「補正プレビュー（タイル）」で仕上がりをまとめて確認し、タップ選択は一覧のチェックと同期します。"
             "以後の処理は warped フォルダの補正画像を使います。"
         ),
         "action_hint": "「チェックしたファイルを自動トリミング」",
@@ -116,6 +119,7 @@ class OcrPipelinePage(QWidget):
         self._scanned = False
         self._filter_key = "all"
         self._filter_btns: dict[str, QPushButton] = {}
+        self._view_mode = "list"  # list | tiles（⑤のみタイル）
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         root = QVBoxLayout(self)
@@ -192,6 +196,26 @@ class OcrPipelinePage(QWidget):
         filter_row.addStretch()
         root.addLayout(filter_row)
 
+        view_row = QHBoxLayout()
+        view_row.addWidget(QLabel("表示切替:"))
+        self.view_list_btn = QPushButton("一覧")
+        self.view_list_btn.setCheckable(True)
+        self.view_list_btn.setChecked(True)
+        self.view_list_btn.clicked.connect(lambda: self._set_view_mode("list"))
+        self.view_tiles_btn = QPushButton("補正プレビュー（タイル）")
+        self.view_tiles_btn.setCheckable(True)
+        self.view_tiles_btn.setToolTip(
+            "補正済み画像の仕上がりをタイルで一覧確認します。"
+            "タップで選択し、一覧のチェックと同期します。"
+        )
+        self.view_tiles_btn.clicked.connect(lambda: self._set_view_mode("tiles"))
+        view_row.addWidget(self.view_list_btn)
+        view_row.addWidget(self.view_tiles_btn)
+        view_row.addStretch()
+        self._view_row_host = QWidget()
+        self._view_row_host.setLayout(view_row)
+        root.addWidget(self._view_row_host)
+
         action_row = QHBoxLayout()
         self.trim_btn = h.button(
             "チェックしたファイルを自動トリミング",
@@ -227,8 +251,17 @@ class OcrPipelinePage(QWidget):
         hdr.setSectionResizeMode(_COL_CHECK, QHeaderView.Fixed)
         hdr.setSectionResizeMode(_COL_FILE, QHeaderView.Stretch)
         self.table.setColumnWidth(_COL_CHECK, 56)
-        wire_toggle_columns(self.table, (_COL_CHECK,), lambda _r, _c, _v: self._update_check_count())
-        root.addWidget(main_table_frame("ファイル別の処理状況", self.table), 1)
+        wire_toggle_columns(
+            self.table,
+            (_COL_CHECK,),
+            lambda r, _c, v: self._on_table_check_toggled(r, v),
+        )
+        self._table_frame = main_table_frame("ファイル別の処理状況", self.table)
+        self.tile_panel = WarpedPreviewPanel(on_tile_toggle=self._on_tile_toggled)
+        self._view_stack = QStackedWidget()
+        self._view_stack.addWidget(self._table_frame)  # 0
+        self._view_stack.addWidget(self.tile_panel)  # 1
+        root.addWidget(self._view_stack, 1)
 
         tsv_body = QFrame()
         tsv_lay = QVBoxLayout(tsv_body)
@@ -280,12 +313,15 @@ class OcrPipelinePage(QWidget):
         self.scan_btn.setVisible(self._phase == 5)
         self.trim_btn.setVisible(self._phase == 5)
         self.manual_warp_btn.setVisible(self._phase == 5)
+        self._view_row_host.setVisible(self._phase == 5)
         self.faint_precheck_btn.setVisible(self._phase == 6)
         self.faint_enhance_btn.setVisible(self._phase == 6)
         self.ocr_btn.setVisible(self._phase == 7)
         self.tsv_section.setVisible(self._phase == 7)
         reset_labels = {5: "⑤をリセット", 6: "⑥をリセット", 7: "⑦をリセット"}
         self.reset_btn.setText(reset_labels[self._phase])
+        if self._phase != 5 and self._view_mode != "list":
+            self._set_view_mode("list")
         for i, rd in enumerate(self._inventory_rows):
             if i < self.table.rowCount():
                 self._set_action_buttons(i, rd)
@@ -312,6 +348,7 @@ class OcrPipelinePage(QWidget):
         self.table.setRowCount(0)
         self._row_by_name = {}
         self._inventory_rows = []
+        self.tile_panel.clear()
         self.queue_stats.setText("一覧未表示 — ⑤で「フォルダを再認識」を押してください。")
         self.progress.setValue(0)
         self.progress_label.setText("")
@@ -363,6 +400,73 @@ class OcrPipelinePage(QWidget):
             f"{st['total']} 件を認識しました（{n} 件を選択中）。{meta['action_hint']} を実行できます。"
         )
         self.log.appendPlainText(f"--- フォルダ再認識: {st['total']} 件 ---")
+        if self._view_mode == "tiles":
+            self._rebuild_tile_preview()
+
+    def _set_view_mode(self, mode: str) -> None:
+        mode = "tiles" if mode == "tiles" else "list"
+        if self._phase != 5:
+            mode = "list"
+        self._view_mode = mode
+        self.view_list_btn.blockSignals(True)
+        self.view_tiles_btn.blockSignals(True)
+        self.view_list_btn.setChecked(mode == "list")
+        self.view_tiles_btn.setChecked(mode == "tiles")
+        self.view_list_btn.blockSignals(False)
+        self.view_tiles_btn.blockSignals(False)
+        self._view_stack.setCurrentIndex(1 if mode == "tiles" else 0)
+        if mode == "tiles":
+            if not self._require_scanned():
+                self._set_view_mode("list")
+                return
+            self._rebuild_tile_preview()
+            n = self.tile_panel.tile_count()
+            self.status_label.setText(
+                f"補正プレビュー {n} 件 — タップで選択（一覧チェックと同期）"
+            )
+
+    def _rebuild_tile_preview(self) -> None:
+        """補正済み画像をタイル表示（現在フィルタ＋一覧チェック状態を反映）。"""
+        entries: list[dict[str, Any]] = []
+        for i, rd in enumerate(self._inventory_rows):
+            if not self._row_matches_filter(rd):
+                continue
+            warped = str(rd.get("warpedPath") or "").strip()
+            if not warped:
+                name = str(rd.get("fileName") or "")
+                found = (
+                    find_warped_for_original(self.app.active_test_id, name)
+                    if self.app.active_test_id
+                    else None
+                )
+                warped = found or ""
+            if not warped:
+                continue
+            entries.append(
+                {
+                    "fileName": str(rd.get("fileName") or ""),
+                    "warpedPath": warped,
+                    "status": str(rd.get("status") or ""),
+                    "checked": self._row_checked(i) if i < self.table.rowCount() else False,
+                }
+            )
+        self.tile_panel.rebuild(entries)
+
+    def _on_tile_toggled(self, file_name: str) -> None:
+        key = normalize_file_name(file_name)
+        idx = self._row_by_name.get(key)
+        if idx is None:
+            return
+        new_checked = not self._row_checked(idx)
+        self._set_check_cell(idx, new_checked)
+        self.tile_panel.set_tile_checked(file_name, new_checked)
+        self._update_check_count()
+
+    def _on_table_check_toggled(self, row: int, checked: bool) -> None:
+        if 0 <= row < len(self._inventory_rows):
+            name = str(self._inventory_rows[row].get("fileName") or "")
+            self.tile_panel.set_tile_checked(name, checked)
+        self._update_check_count()
 
     def _rebuild_table(self, rows_data: list[dict[str, Any]]) -> None:
         headers = ["選択", "状態", "失敗理由", "ファイル名", "生徒ID"]
@@ -406,6 +510,8 @@ class OcrPipelinePage(QWidget):
             btn.setChecked(k == key)
             btn.blockSignals(False)
         self._apply_row_filter()
+        if self._view_mode == "tiles":
+            self._rebuild_tile_preview()
 
     def _row_checked(self, row_idx: int) -> bool:
         return is_toggle_checked(self.table.item(row_idx, _COL_CHECK))
@@ -533,7 +639,17 @@ class OcrPipelinePage(QWidget):
                 )
                 if hit:
                     self._set_check_cell(i, True)
+        self._sync_tiles_from_table()
         self._update_check_count()
+
+    def _sync_tiles_from_table(self) -> None:
+        if self._view_mode != "tiles":
+            return
+        for i, rd in enumerate(self._inventory_rows):
+            name = str(rd.get("fileName") or "")
+            self.tile_panel.set_tile_checked(
+                name, self._row_checked(i) if i < self.table.rowCount() else False
+            )
 
     def _row_to_work_item(self, rd: dict[str, Any]) -> dict[str, Any] | None:
         """一覧行からバッチ処理用 item を組み立てる。"""

@@ -698,9 +698,10 @@ class ManualWarpDialog(QDialog):
             self.save_btn.setText("保存してOCR再実行")
             self.save_btn.setVisible(True)
 
-    def _set_save_buttons_enabled(self, enabled: bool) -> None:
+    def _set_action_buttons_enabled(self, enabled: bool) -> None:
         self.save_only_btn.setEnabled(enabled)
         self.save_btn.setEnabled(enabled)
+        self.close_btn.setEnabled(enabled)
 
     def _update_progress(self) -> None:
         if not self._continuous_mode or not self._continuous_queue:
@@ -793,7 +794,7 @@ class ManualWarpDialog(QDialog):
         if not self._file_meta:
             return
         self._busy = True
-        self._set_save_buttons_enabled(False)
+        self._set_action_buttons_enabled(False)
         self._set_status("補正画像を保存中...")
         try:
             warped_path, _ = self._save_warped_image()
@@ -806,7 +807,7 @@ class ManualWarpDialog(QDialog):
             self._set_status(f"保存失敗: {e}")
         finally:
             self._busy = False
-            self._set_save_buttons_enabled(True)
+            self._set_action_buttons_enabled(True)
 
     def _save_and_ocr(self) -> None:
         if not self._file_meta:
@@ -815,7 +816,7 @@ class ManualWarpDialog(QDialog):
         from ui_qt.helpers import run_in_thread
 
         self._busy = True
-        self._set_save_buttons_enabled(False)
+        self._set_action_buttons_enabled(False)
         self._set_status("保存・OCR実行中...")
         try:
             warped_path, _ = self._save_warped_image()
@@ -823,7 +824,7 @@ class ManualWarpDialog(QDialog):
         except Exception as e:  # noqa: BLE001
             self._set_status(f"保存失敗: {e}")
             self._busy = False
-            self._set_save_buttons_enabled(True)
+            self._set_action_buttons_enabled(True)
             return
 
         test_id = self._test_id
@@ -832,8 +833,12 @@ class ManualWarpDialog(QDialog):
             return run_ocr_for_manual_warp_entries(test_id, [entry])
 
         def done(result, err):
-            self._busy = False
-            self._set_save_buttons_enabled(True)
+            # ダイアログ破棄後に QueuedConnection で届いた場合は何もしない
+            try:
+                self._busy = False
+                self._set_action_buttons_enabled(True)
+            except RuntimeError:
+                return
             if err:
                 self._set_status(f"OCR 失敗: {err}")
                 return
@@ -851,7 +856,7 @@ class ManualWarpDialog(QDialog):
         if not self._file_meta:
             return
         self._busy = True
-        self._set_save_buttons_enabled(False)
+        self._set_action_buttons_enabled(False)
         try:
             warped_path, _ = self._save_warped_image()
             entry = self._build_save_entry(warped_path)
@@ -866,7 +871,7 @@ class ManualWarpDialog(QDialog):
             self._set_status(f"保存失敗: {e}")
         finally:
             self._busy = False
-            self._set_save_buttons_enabled(True)
+            self._set_action_buttons_enabled(True)
 
     def _finish_continuous(self) -> None:
         if not self._saved_entries:
@@ -876,7 +881,23 @@ class ManualWarpDialog(QDialog):
             self._on_saved({})
         self.accept()
 
+    def closeEvent(self, event) -> None:  # noqa: N802
+        if self._busy:
+            event.ignore()
+            self._set_status("処理中です。完了するまでお待ちください。")
+            return
+        super().closeEvent(event)
+
+    def reject(self) -> None:
+        if self._busy:
+            self._set_status("処理中です。完了するまでお待ちください。")
+            return
+        super().reject()
+
     def _on_close(self) -> None:
+        if self._busy:
+            self._set_status("処理中です。完了するまでお待ちください。")
+            return
         if (
             self._continuous_mode
             and self._preview_bgr is not None
