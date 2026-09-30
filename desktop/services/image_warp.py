@@ -152,18 +152,40 @@ def warp_image_file(
     return out
 
 
+@dataclass
+class WarpResult:
+    image: np.ndarray
+    corners: Corners
+    corners_detected: bool
+
+
+def warp_image_from_path_result(
+    source_path: str | Path,
+    orientation: Orientation = "landscape",
+    thresh_val: int = 128,
+) -> WarpResult:
+    """透視変換結果と、外枠自動検出の成否を返す。"""
+    image = load_image_bgr(source_path)
+    try:
+        corners = detect_paper_corners(image, thresh_val)
+        detected = True
+    except ValueError:
+        h, w = image.shape[:2]
+        corners = default_paper_corners(w, h)
+        detected = False
+    return WarpResult(
+        image=warp_from_corners(image, corners, orientation),
+        corners=corners,
+        corners_detected=detected,
+    )
+
+
 def warp_image_from_path(
     source_path: str | Path,
     orientation: Orientation = "landscape",
     thresh_val: int = 128,
 ) -> np.ndarray:
-    image = load_image_bgr(source_path)
-    try:
-        corners = detect_paper_corners(image, thresh_val)
-    except ValueError:
-        h, w = image.shape[:2]
-        corners = default_paper_corners(w, h)
-    return warp_from_corners(image, corners, orientation)
+    return warp_image_from_path_result(source_path, orientation, thresh_val).image
 
 
 def warp_image_from_array(

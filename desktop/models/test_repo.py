@@ -401,7 +401,39 @@ def archive_model_answer_source(test_id: str, source_path: str | Path) -> str:
     fname = f"模範解答_原稿_{datetime.now().strftime('%Y%m%d_%H%M%S')}{ext}"
     dest = dest_dir / fname
     shutil.copy2(source, dest)
-    return str(dest.resolve())
+    resolved = str(dest.resolve())
+    with connect() as conn:
+        _set_test_info(conn, test_id, "模範解答原稿FileID", resolved)
+        conn.commit()
+    return resolved
+
+
+def get_model_answer_source_path(test_id: str | None = None) -> str:
+    """保存済みの模範解答原稿パス（なければ source フォルダの最新ファイル）。"""
+    init_db()
+    with connect() as conn:
+        tid = test_id or get_active_test_id(conn)
+        if not tid:
+            return ""
+        row = conn.execute(
+            "SELECT value FROM test_info WHERE test_id = ? AND key = ?",
+            (tid, "模範解答原稿FileID"),
+        ).fetchone()
+        stored = (row["value"] if row else "") or ""
+    if stored and Path(stored).is_file():
+        return stored
+    src_dir = test_model_source(tid)
+    if not src_dir.is_dir():
+        return ""
+    files = [
+        p
+        for p in src_dir.iterdir()
+        if p.is_file() and p.suffix.lower() in {".jpg", ".jpeg", ".png", ".pdf", ".tif", ".tiff"}
+    ]
+    if not files:
+        return ""
+    latest = max(files, key=lambda p: p.stat().st_mtime)
+    return str(latest.resolve())
 
 
 def get_answer_fields_conn(conn, test_id: str) -> list[dict[str, Any]]:

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer, Signal
@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from config import load_config, test_warped
-from models.test_repo import get_answer_fields
+from models.test_repo import get_answer_fields, save_model_answer_image
 from services.image_loader import imwrite_bgr, load_image_bgr
 from services.image_warp import (
     Corners,
@@ -30,6 +30,8 @@ from services.image_warp import (
     rotate_corners_around_center,
     warp_from_corners,
 )
+
+WarpPurpose = Literal["student", "model"]
 from ui_qt.crop_widgets import ZoomControls
 from ui_qt.field_overlay import draw_answer_fields
 from ui_qt.helpers import bgr_to_qpixmap, enable_dialog_maximize, scroll_viewport_size
@@ -471,11 +473,13 @@ class ManualWarpDialog(QDialog):
         test_id: str,
         orientation: Orientation | str = "landscape",
         on_saved: Callable[[dict[str, Any]], None] | None = None,
+        purpose: WarpPurpose = "student",
     ) -> None:
         super().__init__(parent)
         self._test_id = test_id
         self._orientation: Orientation = orientation  # type: ignore[assignment]
         self._on_saved = on_saved
+        self._purpose: WarpPurpose = "model" if purpose == "model" else "student"
         self._file_meta: dict[str, Any] | None = None
         self._image_bgr: np.ndarray | None = None
         self._preview_bgr: np.ndarray | None = None
@@ -485,9 +489,12 @@ class ManualWarpDialog(QDialog):
         self._inherited_corners: Corners | None = None
         self._saved_entries: list[dict[str, Any]] = []
         self._busy = False
-        self._fields = get_answer_fields(test_id)
+        # 模範解答補正時は枠は未確定のため重ねない（生徒答案側のみ表示）
+        self._fields = [] if self._purpose == "model" else get_answer_fields(test_id)
 
-        self.setWindowTitle("手動補正")
+        self.setWindowTitle(
+            "模範解答の手動補正" if self._purpose == "model" else "手動補正"
+        )
         self.setMinimumSize(980, 680)
         self.resize(1100, 760)
         enable_dialog_maximize(self)
@@ -567,11 +574,18 @@ class ManualWarpDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self.save_only_btn = QPushButton("保存のみ（OCRは後で一括）")
-        self.save_only_btn.setToolTip(
-            "枠線でくりぬいた補正画像だけ保存します。"
-            "OCR は ⑦ OCR実行 でまとめて行えます。"
-        )
+        if self._purpose == "model":
+            self.save_only_btn = QPushButton("補正画像を確定")
+            self.save_only_btn.setToolTip(
+                "四隅でくりぬいた補正画像を模範解答として保存します。"
+                "確定後に ② で記述欄を指定してください。"
+            )
+        else:
+            self.save_only_btn = QPushButton("保存のみ（OCRは後で一括）")
+            self.save_only_btn.setToolTip(
+                "枠線でくりぬいた補正画像だけ保存します。"
+                "OCR は ⑦ OCR実行 でまとめて行えます。"
+            )
         self.save_only_btn.setStyleSheet(
             f"background: {COLORS['accent']}; color: white; font-weight: 700; padding: 8px 16px;"
         )
@@ -584,6 +598,7 @@ class ManualWarpDialog(QDialog):
             f" border: 1px solid {COLORS['border_strong']}; font-weight: 600; padding: 8px 14px;"
         )
         self.save_btn.clicked.connect(self._on_save_with_ocr)
+        self.save_btn.setVisible(self._purpose != "model")
         btn_row.addWidget(self.save_btn)
         self.close_btn = QPushButton("閉じる")
         self.close_btn.clicked.connect(self._on_close)
@@ -697,6 +712,10 @@ class ManualWarpDialog(QDialog):
         self.preview_zoom.set_zoom_value(100)
 
     def _update_save_button(self) -> None:
+        if self._purpose == "model":
+            self.save_only_btn.setText("補正画像を確定")
+            self.save_btn.setVisible(False)
+            return
         if self._continuous_mode:
             is_last = self._queue_index >= len(self._continuous_queue) - 1
             self.save_only_btn.setText(
@@ -733,7 +752,8 @@ class ManualWarpDialog(QDialog):
         if not meta:
             return
         name = meta.get("name") or ""
-        self.title_label.setText(f"手動補正: {name}")
+        prefix = "模範解答の手動補正" if self._purpose == "model" else "手動補正"
+        self.title_label.setText(f"{prefix}: {name}" if name else prefix)
         self._set_status("画像読込中...")
         self._update_progress()
         self._update_save_button()
@@ -760,6 +780,9 @@ class ManualWarpDialog(QDialog):
     def _save_warped_image(self) -> tuple[str, np.ndarray]:
         if self._preview_bgr is None or self._file_meta is None:
             raise ValueError("補正プレビューがありません。範囲を指定して四隅を調整してください。")
+        if self._purpose == "model":
+            out_path = save_model_answer_image(self._test_id, self._preview_bgr)
+            return out_path, self._preview_bgr.copy()
         from services.image_warp import warped_file_name
 
         file_name = self._file_meta["name"]
@@ -788,6 +811,9 @@ class ManualWarpDialog(QDialog):
 
     def _on_save_with_ocr(self) -> None:
         """補正画像を保存し、この1件だけ OCR する。"""
+        if self._purpose == "model":
+            self._on_save_only()
+            return
         if not self._can_save():
             return
         self._save_and_ocr()
@@ -808,11 +834,16 @@ class ManualWarpDialog(QDialog):
         self._set_action_buttons_enabled(False)
         self._set_status("補正画像を保存中...")
         try:
-            warped_path, _ = self._save_warped_image()
+            warped_path, warped_bgr = self._save_warped_image()
             entry = self._build_save_entry(warped_path)
+            entry["warpedBgr"] = warped_bgr
+            entry["purpose"] = self._purpose
             if self._on_saved:
                 self._on_saved(entry)
-            self._set_status("保存しました（OCR は ⑦ で一括実行できます）")
+            if self._purpose == "model":
+                self._set_status("模範解答の補正画像を確定しました")
+            else:
+                self._set_status("保存しました（OCR は ⑦ で一括実行できます）")
             self.accept()
         except Exception as e:  # noqa: BLE001
             self._set_status(f"保存失敗: {e}")

@@ -13,6 +13,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMessageBox,
     QScrollArea,
     QSlider,
     QVBoxLayout,
@@ -23,6 +24,7 @@ from config import default_field_ocr_engine, default_field_ocr_lang, load_config
 from models.test_repo import (
     archive_model_answer_source,
     get_answer_fields,
+    get_model_answer_source_path,
     get_test_info,
     get_use_id_mark,
     save_answer_fields,
@@ -30,8 +32,9 @@ from models.test_repo import (
     set_use_id_mark,
 )
 from services.image_loader import is_supported_input_path
-from services.image_warp import warp_image_from_path
+from services.image_warp import warp_image_from_path_result
 from ui_qt import helpers as h
+from ui_qt.manual_warp_dialog import ManualWarpDialog
 from ui_qt.region_editor import AnswerRegionEditor
 from ui_qt.ocr_lang_widgets import FIELD_LIST_SELECT_BTN_STYLE, OcrEngineToggle, OcrLangToggle
 from ui_qt.region_mode_widgets import RegionDetectModeToggle
@@ -43,6 +46,7 @@ class Step2Page(QWidget):
         super().__init__()
         self.app = app
         self._field_rows: list[dict[str, Any]] = []
+        self._model_source_path = ""
         self.setAcceptDrops(True)
 
         root = QVBoxLayout(self)
@@ -56,8 +60,8 @@ class Step2Page(QWidget):
         title_col.addWidget(h.title_label("② 回答欄設定（模範解答）"))
         title_col.addWidget(
             h.muted_label(
-                "PDF / JPG / PNG をドロップするか「画像を開く」で模範解答を読み込み、"
-                "記述欄は「自動認識」または「手動設定」で追加します。"
+                "① 模範解答を読み込み自動補正 → ② おかしければ「手動で補正」（⑤と同じ四隅指定）→ "
+                "③ 補正後画像の上で記述欄を指定。補正前の原稿上で枠を取ると全生徒答案とずれます。"
             )
         )
         header.addLayout(title_col, 1)
@@ -101,6 +105,12 @@ class Step2Page(QWidget):
         )
         toolbar.addWidget(self.region_mode_toggle)
         toolbar.addWidget(h.button("画像を開く", self._on_open_file))
+        self.manual_warp_btn = h.button("手動で補正", self._on_manual_warp_model)
+        self.manual_warp_btn.setToolTip(
+            "原稿の四隅を⑤トリミングと同じ操作で指定し、模範解答の補正画像を作り直します。"
+            "補正後の画像で記述欄を指定してください。"
+        )
+        toolbar.addWidget(self.manual_warp_btn)
         toolbar.addWidget(h.button("記述欄を保存", self._on_save_fields, variant="primary"))
         self.delete_btn = h.button("選択欄を削除", self._on_delete_selected, variant="danger-soft")
         self.delete_btn.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -221,30 +231,110 @@ class Step2Page(QWidget):
             pass
 
         def task():
-            warped = warp_image_from_path(path, orientation, thresh)
+            result = warp_image_from_path_result(path, orientation, thresh)
+            warped = result.image
             hh, ww = warped.shape[:2]
             keep = existing_fields if ref_w == ww and ref_h == hh and existing_fields else []
             save_model_answer_image(test_id, warped)
             archived = archive_model_answer_source(test_id, path)
-            return warped, keep, archived
+            return warped, keep, archived, bool(result.corners_detected)
 
         def done(result, err):
             if err:
                 self._set_status("")
                 h.error(self, "読込エラー", str(err))
                 return
-            warped, keep, archived = result
-            self.editor.set_image(warped)
-            if keep:
-                self.editor.set_regions(keep)
-            self._field_rows = self.editor.get_regions()
+            warped, keep, archived, corners_detected = result
+            self._model_source_path = archived or path
+            self._apply_warped_model(warped, keep_fields=keep)
             hh, ww = warped.shape[:2]
-            self._set_status(
-                f"模範解答を読み込みました（{ww}×{hh}）— 原稿も保存済み — 記述欄を追加してください"
-            )
-            self._refresh_field_panel()
+            if corners_detected:
+                self._set_status(
+                    f"自動補正済み（{ww}×{hh}）— 仕上がりを確認し、おかしければ「手動で補正」。"
+                    "問題なければ記述欄を指定してください。"
+                )
+            else:
+                self._set_status(
+                    f"外枠の自動検出に失敗したため仮補正しています（{ww}×{hh}）。"
+                    "「手動で補正」で四隅を指定してください。"
+                )
+                ask = QMessageBox.question(
+                    self,
+                    "手動補正が必要です",
+                    "用紙外枠の自動検出に失敗したため、仮の範囲で補正しています。\n"
+                    "このまま記述欄を指定すると、⑤で補正した生徒答案と枠位置がずれます。\n\n"
+                    "⑤と同じ操作で四隅を指定して補正し直しますか？",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if ask == QMessageBox.StandardButton.Yes:
+                    self._open_model_manual_warp()
 
         h.run_in_thread(self, task, done)
+
+    def _apply_warped_model(
+        self,
+        warped,
+        *,
+        keep_fields: list[dict[str, Any]] | None = None,
+    ) -> None:
+        self.editor.set_image(warped)
+        if keep_fields:
+            self.editor.set_regions(keep_fields)
+        else:
+            self.editor.set_regions([])
+        self._field_rows = self.editor.get_regions()
+        self._refresh_field_panel()
+
+    def _on_manual_warp_model(self) -> None:
+        if not self.app.require_active_test():
+            return
+        self._open_model_manual_warp()
+
+    def _resolve_model_source_path(self) -> str:
+        if self._model_source_path and Path(self._model_source_path).is_file():
+            return self._model_source_path
+        stored = get_model_answer_source_path(self.app.active_test_id)
+        if stored:
+            self._model_source_path = stored
+            return stored
+        return ""
+
+    def _open_model_manual_warp(self) -> None:
+        source = self._resolve_model_source_path()
+        if not source:
+            h.warn(
+                self,
+                "原稿がありません",
+                "先に「画像を開く」またはドロップで模範解答の原稿を読み込んでください。\n"
+                "原稿は「模範解答原稿フォルダ」にも保存されます。",
+            )
+            return
+        orientation = self.orientation_combo.currentData() or "landscape"
+        thresh = int(self.thresh_slider.value())
+        name = Path(source).name
+
+        def on_saved(entry: dict[str, Any]) -> None:
+            warped = entry.get("warpedBgr")
+            if warped is None:
+                return
+            hh, ww = warped.shape[:2]
+            # 補正し直すと用紙上の位置が変わるため、記述欄は必ず取り直す
+            self._apply_warped_model(warped, keep_fields=[])
+            self._set_status(
+                f"手動補正を確定（{ww}×{hh}）— 記述欄はクリアしました。"
+                "この補正画像の上で改めて指定してください。"
+            )
+
+        dlg = ManualWarpDialog(
+            self,
+            test_id=self.app.active_test_id,
+            orientation=orientation,
+            on_saved=on_saved,
+            purpose="model",
+        )
+        dlg.open_single({"name": name, "path": source}, thresh=thresh)
+        dlg.exec()
 
     def _on_delete_selected(self) -> None:
         self.handle_delete_key()
@@ -262,19 +352,22 @@ class Step2Page(QWidget):
         idx = self.orientation_combo.findData(orient)
         if idx >= 0:
             self.orientation_combo.setCurrentIndex(idx)
+        self._model_source_path = get_model_answer_source_path(self.app.active_test_id)
         model_path = info.get("modelAnswerPath") or ""
         if model_path and Path(model_path).exists():
             try:
                 self.editor.load_image_from_path(model_path)
                 self.editor.set_regions(self._field_rows)
                 self._field_rows = self.editor.get_regions()
+                src_hint = "／原稿あり→「手動で補正」可" if self._model_source_path else ""
                 self._set_status(
-                    f"保存済み模範解答を表示（{info.get('refWidth')}×{info.get('refHeight')}）"
+                    f"保存済みの補正模範解答を表示（{info.get('refWidth')}×{info.get('refHeight')}）"
+                    f"{src_hint}"
                 )
             except Exception as e:
                 self._set_status(f"模範解答の表示に失敗: {e}")
         else:
-            self._set_status("模範解答未登録 — 画像をドロップまたは開いてください")
+            self._set_status("模範解答未登録 — 画像をドロップまたは開いて補正画像を作成してください")
         self._refresh_field_panel()
 
     def _refresh_field_panel(self) -> None:
@@ -374,7 +467,12 @@ class Step2Page(QWidget):
                 self.orientation_combo.currentData() or "landscape"
             )
             save_config(cfg)
-            h.info(self, "保存完了", "模範解答・記述欄・IDマーク設定を保存しました。")
-            self._set_status("記述欄を保存しました")
+            h.info(
+                self,
+                "保存完了",
+                "補正済み模範解答・記述欄・IDマーク設定を保存しました。\n"
+                "記述欄座標は補正後画像基準です。",
+            )
+            self._set_status("記述欄を保存しました（補正後画像基準）")
         except Exception as e:
             h.error(self, "エラー", str(e))
