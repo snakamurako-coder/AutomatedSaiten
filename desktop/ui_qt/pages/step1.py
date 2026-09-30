@@ -11,11 +11,13 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLineEdit,
     QListWidget,
+    QMessageBox,
     QVBoxLayout,
     QWidget,
 )
 
 from models.test_repo import (
+    clear_active_test,
     create_test,
     get_test_info,
     list_tests,
@@ -58,8 +60,16 @@ class Step1Page(QWidget):
         form.addRow("テスト名 *", self.name_edit)
         form.addRow("科目名", self.subject_edit)
         form.addRow("実施日時", self.datetime_edit)
+        action_row = QHBoxLayout()
+        self._new_btn = h.button("新規作成", self._on_new_create)
+        self._new_btn.setToolTip(
+            "入力欄を空にして新規テスト作成モードに切り替えます。"
+            "（既存テストは削除されません）"
+        )
         self._action_btn = h.button("テストを作成", self._on_action, variant="primary")
-        form.addRow(self._action_btn)
+        action_row.addWidget(self._new_btn)
+        action_row.addWidget(self._action_btn, 1)
+        form.addRow(action_row)
         form_box.setFixedWidth(360)
         body.addWidget(form_box, 0)
 
@@ -163,6 +173,27 @@ class Step1Page(QWidget):
             self._action_btn.setText("上書きする")
         else:
             self._action_btn.setText("テストを作成")
+
+    def _on_new_create(self) -> None:
+        """前回読み込み／選択中のテストを外し、空の新規作成フォームにする。"""
+        if self._loaded_test_id and self._form_has_changes():
+            ans = QMessageBox.question(
+                self,
+                "新規作成",
+                "編集中の内容は保存されていません。破棄して新規作成モードにしますか？",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if ans != QMessageBox.Yes:
+                return
+        clear_active_test()
+        self.app.active_test_id = None
+        self.refresh()
+        self.name_edit.setFocus()
+        if not self._loaded_test_id:
+            self.active_label.setText(
+                "選択中: （なし）— テスト名を入力して「テストを作成」"
+            )
 
     def _on_action(self) -> None:
         name = self.name_edit.text().strip()
