@@ -206,6 +206,17 @@ class SettingsDialog(QDialog):
         openai_row.addWidget(h.button("接続確認", self._test_openai))
         api_form.addRow("OpenAI API キー", openai_row)
 
+        self.openai_interval_spin = QSpinBox()
+        self.openai_interval_spin.setRange(200, 5000)
+        self.openai_interval_spin.setSingleStep(100)
+        self.openai_interval_spin.setSuffix(" ms")
+        self.openai_interval_spin.setValue(int(cfg.get("openai_ocr_min_interval_ms") or 700))
+        self.openai_interval_spin.setToolTip(
+            "記述欄ごとの OpenAI 呼び出しの最低間隔です。"
+            "レート制限に当たる場合は 1000〜2000 ms に延ばしてください。"
+        )
+        api_form.addRow("OpenAI 送信間隔", self.openai_interval_spin)
+
         gemini_row = QHBoxLayout()
         self.gemini_edit = QLineEdit(cfg.get("gemini_api_key") or "")
         self.gemini_edit.setEchoMode(QLineEdit.Password)
@@ -216,6 +227,7 @@ class SettingsDialog(QDialog):
         api_form.addRow(
             "",
             h.caption_label(
+                "OpenAI は送信間隔で連打を抑え、429 時は自動で待ってリトライします。"
                 "Vision API キーは「HTTP リファラー（ウェブサイト）」制限では使えません。"
                 "制限は「なし」または IP アドレスにし、Cloud Vision API を有効化・課金設定してください。"
                 "設定後は「適用して保存」または「保存して閉じる」を押してください。"
@@ -562,6 +574,7 @@ class SettingsDialog(QDialog):
         return {
             "vision_api_key": self.vision_edit.text().strip(),
             "openai_api_key": self.openai_edit.text().strip(),
+            "openai_ocr_min_interval_ms": int(self.openai_interval_spin.value()),
             "ocr_engine": "vision" if self.engine_vision.isChecked() else "openai",
             "default_field_ocr_lang": "ja" if self.field_ocr_ja.isChecked() else "en",
             "default_orientation": self.orientation_combo.currentText(),

@@ -36,6 +36,10 @@ DEFAULT_CONFIG: dict = {
     "vision_api_key": "",
     "openai_api_key": "",
     "openai_ocr_model": "gpt-4o-mini",
+    # OpenAI OCR: 連続呼び出しの最低間隔（ミリ秒）。短いとレート制限に当たる
+    "openai_ocr_min_interval_ms": 700,
+    # OpenAI OCR: 429 時の最大リトライ回数
+    "openai_ocr_max_retries": 6,
     "ocr_engine": "openai",
     "default_field_ocr_lang": "en",
     "default_orientation": "landscape",
