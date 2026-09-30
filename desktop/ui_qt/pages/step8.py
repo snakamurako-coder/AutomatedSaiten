@@ -599,17 +599,39 @@ class Step8Page(QWidget):
         self._render_crop_grid()
 
     def _sync_criteria_from_widgets(self) -> None:
+        """画面上の判定・配点を回答文字列で書き戻す。
+
+        みなしやパターン移動で行が消えても、行番号ではなく回答文字列で
+        残ったパターン（母体）の判定・配点を維持する。
+        """
         t = self.criteria_table
-        for i in range(min(t.rowCount(), len(self._criteria_rows))):
+        by_answer: dict[str, dict[str, Any]] = {}
+        for i in range(t.rowCount()):
+            ans_item = t.item(i, 2)
+            if ans_item is None:
+                continue
+            ans = ans_item.text().strip()
+            if not ans:
+                continue
+            patch: dict[str, Any] = {}
             combo = find_judgment_combo(t, i)
             if combo is not None:
-                self._criteria_rows[i]["judgment"] = combo.currentText()
+                patch["judgment"] = combo.currentText()
             score_w = find_score_widget(t, i)
             if score_w is not None:
-                self._criteria_rows[i]["score"] = score_w.value()
+                patch["score"] = score_w.value()
             reason_item = t.item(i, 8)
             if reason_item is not None:
-                self._criteria_rows[i]["reason"] = reason_item.text().strip()
+                patch["reason"] = reason_item.text().strip()
+            if patch:
+                by_answer[ans] = patch
+        if not by_answer:
+            return
+        for row in self._criteria_rows:
+            ans = str(row.get("answer_text") or "").strip()
+            patch = by_answer.get(ans)
+            if patch:
+                row.update(patch)
 
     def _apply_criteria_table_styles(self) -> None:
         fid = self._selected_field_id() or ""
