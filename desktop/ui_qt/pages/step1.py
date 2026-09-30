@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from models.test_repo import (
     clear_active_test,
     create_test,
+    delete_test,
     get_test_info,
     list_tests,
     set_active_test,
@@ -39,6 +40,8 @@ class Step1Page(QWidget):
         self._tests: list[dict[str, Any]] = []
         self._loaded_test_id: str | None = None
         self._form_snapshot: tuple[str, str, str] = ("", "", "")
+        # True の間は refresh してもアクティブテストをフォームに載せない（新規作成モード）
+        self._draft_new = False
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -81,6 +84,11 @@ class Step1Page(QWidget):
         btn_row = QHBoxLayout()
         btn_row.addWidget(h.button("選択", self._on_select))
         btn_row.addWidget(h.button("更新", self.refresh))
+        self._delete_btn = h.button("削除", self._on_delete, variant="danger-soft")
+        self._delete_btn.setToolTip(
+            "選択中（または一覧で選んだ）テストを完全に削除します。復元できません。"
+        )
+        btn_row.addWidget(self._delete_btn)
         btn_row.addStretch()
         list_layout.addLayout(btn_row)
         body.addWidget(list_box, 1)
@@ -114,15 +122,18 @@ class Step1Page(QWidget):
         self._last_template_path: str | None = None
 
     def refresh(self) -> None:
-        self._tests = list_tests()
-        self.test_list.clear()
-        active_test: dict[str, Any] | None = None
-        for t in self._tests:
-            mark = "● " if t.get("isActive") else "　 "
-            self.test_list.addItem(f"{mark}{t['testName']}  [{t['status']}] step={t['currentStep']}")
-            if t.get("isActive"):
-                active_test = t
+        self._rebuild_test_list()
+        if self._draft_new:
+            # 新規作成モード: 一覧だけ更新し、フォームは空のまま維持
+            self.app.active_test_id = None
+            self._loaded_test_id = None
+            self._sync_action_button()
+            self.active_label.setText(
+                "選択中: （なし）— テスト名を入力して「テストを作成」"
+            )
+            return
 
+        active_test = next((t for t in self._tests if t.get("isActive")), None)
         if active_test:
             self.app.active_test_id = active_test["testSsId"]
             self.active_label.setText(f"選択中: {active_test['testName']}")
@@ -133,6 +144,19 @@ class Step1Page(QWidget):
             self._clear_form()
 
         self._sync_action_button()
+
+    def _rebuild_test_list(self) -> None:
+        self._tests = list_tests()
+        self.test_list.blockSignals(True)
+        self.test_list.clear()
+        for t in self._tests:
+            mark = "● " if t.get("isActive") else "　 "
+            self.test_list.addItem(
+                f"{mark}{t['testName']}  [{t['status']}] step={t['currentStep']}"
+            )
+        self.test_list.clearSelection()
+        self.test_list.setCurrentRow(-1)
+        self.test_list.blockSignals(False)
 
     def _capture_form_snapshot(self) -> None:
         self._form_snapshot = (
@@ -155,6 +179,7 @@ class Step1Page(QWidget):
         except ValueError:
             self._clear_form()
             return
+        self._draft_new = False
         self._loaded_test_id = test_id
         self.name_edit.setText(info.get("testName") or "")
         self.subject_edit.setText(info.get("subject") or "")
@@ -163,9 +188,15 @@ class Step1Page(QWidget):
 
     def _clear_form(self) -> None:
         self._loaded_test_id = None
-        self.name_edit.clear()
-        self.subject_edit.clear()
-        self.datetime_edit.clear()
+        self.name_edit.blockSignals(True)
+        self.subject_edit.blockSignals(True)
+        self.datetime_edit.blockSignals(True)
+        self.name_edit.setText("")
+        self.subject_edit.setText("")
+        self.datetime_edit.setText("")
+        self.name_edit.blockSignals(False)
+        self.subject_edit.blockSignals(False)
+        self.datetime_edit.blockSignals(False)
         self._capture_form_snapshot()
 
     def _sync_action_button(self) -> None:
@@ -176,11 +207,16 @@ class Step1Page(QWidget):
 
     def _on_new_create(self) -> None:
         """前回読み込み／選択中のテストを外し、空の新規作成フォームにする。"""
-        if self._loaded_test_id and self._form_has_changes():
+        has_content = bool(
+            self.name_edit.text().strip()
+            or self.subject_edit.text().strip()
+            or self.datetime_edit.text().strip()
+        )
+        if has_content and (self._loaded_test_id or self._form_has_changes()):
             ans = QMessageBox.question(
                 self,
                 "新規作成",
-                "編集中の内容は保存されていません。破棄して新規作成モードにしますか？",
+                "入力内容を破棄して空の新規作成フォームにしますか？",
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )
@@ -188,12 +224,15 @@ class Step1Page(QWidget):
                 return
         clear_active_test()
         self.app.active_test_id = None
-        self.refresh()
+        self._draft_new = True
+        self._clear_form()
+        self._rebuild_test_list()
+        self._sync_action_button()
+        self.active_label.setText(
+            "選択中: （なし）— テスト名を入力して「テストを作成」"
+        )
         self.name_edit.setFocus()
-        if not self._loaded_test_id:
-            self.active_label.setText(
-                "選択中: （なし）— テスト名を入力して「テストを作成」"
-            )
+        self.name_edit.selectAll()
 
     def _on_action(self) -> None:
         name = self.name_edit.text().strip()
@@ -215,6 +254,7 @@ class Step1Page(QWidget):
             return
         try:
             res = create_test(name, subject, datetime_str)
+            self._draft_new = False
             self.app.active_test_id = res["testSsId"]
             h.info(self, "作成完了", f"テスト「{name}」を作成しました。")
             self.refresh()
@@ -254,6 +294,64 @@ class Step1Page(QWidget):
         if row < 0 or row >= len(self._tests):
             return
         test = self._tests[row]
+        self._draft_new = False
         set_active_test(test["testSsId"])
         self.app.active_test_id = test["testSsId"]
         self.refresh()
+
+    def _target_test_for_delete(self) -> dict[str, Any] | None:
+        """一覧選択を優先し、なければフォームに載っている／アクティブなテスト。"""
+        row = self.test_list.currentRow()
+        if 0 <= row < len(self._tests):
+            return self._tests[row]
+        tid = self._loaded_test_id or self.app.active_test_id
+        if not tid:
+            return None
+        for t in self._tests:
+            if t.get("testSsId") == tid:
+                return t
+        return None
+
+    def _on_delete(self) -> None:
+        test = self._target_test_for_delete()
+        if not test:
+            h.warn(
+                self,
+                "削除",
+                "削除するテストを一覧で選択するか、編集中のテストを表示してください。",
+            )
+            return
+        name = str(test.get("testName") or "")
+        tid = str(test.get("testSsId") or "")
+        ans1 = QMessageBox.question(
+            self,
+            "テストの削除",
+            f"テスト「{name}」を削除しますか？\n\n"
+            "採点結果・補正画像・記述欄設定など、このテストの内容はすべて消えます。",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ans1 != QMessageBox.Yes:
+            return
+        ans2 = QMessageBox.question(
+            self,
+            "最終確認 — 復元できません",
+            f"本当に「{name}」を削除しますか？\n\n"
+            "この操作は取り消せません。削除したデータは二度と再現・復元できません。\n"
+            "よろしいですか？",
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        if ans2 != QMessageBox.Yes:
+            return
+        try:
+            delete_test(tid)
+            if self.app.active_test_id == tid:
+                self.app.active_test_id = None
+            if self._loaded_test_id == tid:
+                self._draft_new = True
+                self._clear_form()
+            h.info(self, "削除完了", f"テスト「{name}」を削除しました。")
+            self.refresh()
+        except Exception as e:
+            h.error(self, "削除失敗", str(e))

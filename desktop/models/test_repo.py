@@ -132,6 +132,40 @@ def clear_active_test() -> None:
         conn.commit()
 
 
+def delete_test(test_id: str) -> dict[str, Any]:
+    """テストを完全削除する（DB 行 + テスト専用フォルダ）。復元不可。"""
+    init_db()
+    tid = str(test_id or "").strip()
+    if not tid:
+        raise ValueError("テスト ID が空です。")
+
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT id, test_name FROM tests WHERE id = ?", (tid,)
+        ).fetchone()
+        if not row:
+            raise ValueError("指定のテストが見つかりません。")
+        name = str(row["test_name"] or "")
+        active_id = get_active_test_id(conn)
+        conn.execute("DELETE FROM tests WHERE id = ?", (tid,))
+        if active_id == tid:
+            conn.execute("DELETE FROM app_state WHERE key = 'active_test_id'")
+        conn.commit()
+
+    folder = test_dir(tid)
+    removed_folder = False
+    if folder.is_dir() and is_path_under_test_storage(tid, folder):
+        shutil.rmtree(folder, ignore_errors=False)
+        removed_folder = True
+
+    return {
+        "testSsId": tid,
+        "testName": name,
+        "removedFolder": removed_folder,
+        "folderPath": str(folder),
+    }
+
+
 def update_test(
     test_id: str,
     test_name: str,
