@@ -556,11 +556,23 @@ class ManualWarpDialog(QDialog):
 
         btn_row = QHBoxLayout()
         btn_row.addStretch()
-        self.save_btn = QPushButton("保存してOCR再実行")
-        self.save_btn.setStyleSheet(
+        self.save_only_btn = QPushButton("保存のみ（OCRは後で一括）")
+        self.save_only_btn.setToolTip(
+            "枠線でくりぬいた補正画像だけ保存します。"
+            "OCR は ⑦ OCR実行 でまとめて行えます。"
+        )
+        self.save_only_btn.setStyleSheet(
             f"background: {COLORS['accent']}; color: white; font-weight: 700; padding: 8px 16px;"
         )
-        self.save_btn.clicked.connect(self._on_save_primary)
+        self.save_only_btn.clicked.connect(self._on_save_only)
+        btn_row.addWidget(self.save_only_btn)
+        self.save_btn = QPushButton("保存してOCR再実行")
+        self.save_btn.setToolTip("補正画像を保存した直後に、この1件だけ OCR します。")
+        self.save_btn.setStyleSheet(
+            f"background: {COLORS['surface']}; color: {COLORS['text']};"
+            f" border: 1px solid {COLORS['border_strong']}; font-weight: 600; padding: 8px 14px;"
+        )
+        self.save_btn.clicked.connect(self._on_save_with_ocr)
         btn_row.addWidget(self.save_btn)
         self.close_btn = QPushButton("閉じる")
         self.close_btn.clicked.connect(self._on_close)
@@ -676,9 +688,19 @@ class ManualWarpDialog(QDialog):
     def _update_save_button(self) -> None:
         if self._continuous_mode:
             is_last = self._queue_index >= len(self._continuous_queue) - 1
-            self.save_btn.setText("保存" if is_last else "保存・次の画像に移る")
+            self.save_only_btn.setText(
+                "保存のみ（OCRは後で一括）" if is_last else "保存・次の画像に移る"
+            )
+            # 連続補正では一括 OCR を想定し、都度 OCR は隠す
+            self.save_btn.setVisible(False)
         else:
+            self.save_only_btn.setText("保存のみ（OCRは後で一括）")
             self.save_btn.setText("保存してOCR再実行")
+            self.save_btn.setVisible(True)
+
+    def _set_save_buttons_enabled(self, enabled: bool) -> None:
+        self.save_only_btn.setEnabled(enabled)
+        self.save_btn.setEnabled(enabled)
 
     def _update_progress(self) -> None:
         if not self._continuous_mode or not self._continuous_queue:
@@ -733,58 +755,108 @@ class ManualWarpDialog(QDialog):
         imwrite_bgr(out_path, self._preview_bgr, quality=85)
         return str(out_path.resolve()), self._preview_bgr.copy()
 
-    def _on_save_primary(self) -> None:
+    def _can_save(self) -> bool:
         if self._busy:
-            return
+            return False
         if not self.source_canvas.has_preview_corners() or self._preview_bgr is None:
-            self._set_status("補正プレビューがありません。範囲を指定して四隅を調整してください。")
+            self._set_status(
+                "補正プレビューがありません。範囲を指定して四隅を調整してください。"
+            )
+            return False
+        return True
+
+    def _on_save_only(self) -> None:
+        """補正画像のみ保存（OCR なし）。⑤→⑦ の一括 OCR 向け。"""
+        if not self._can_save():
             return
         if self._continuous_mode:
             self._save_and_next()
         else:
-            self._save_and_ocr()
+            self._save_without_ocr()
+
+    def _on_save_with_ocr(self) -> None:
+        """補正画像を保存し、この1件だけ OCR する。"""
+        if not self._can_save():
+            return
+        self._save_and_ocr()
+
+    def _build_save_entry(self, warped_path: str) -> dict[str, Any]:
+        assert self._file_meta is not None
+        return {
+            "fileName": self._file_meta["name"],
+            "sourcePath": self._file_meta.get("path") or self._file_meta.get("id") or "",
+            "warpedPath": warped_path,
+            "corners": self._current_corners_snapshot(),
+        }
+
+    def _save_without_ocr(self) -> None:
+        if not self._file_meta:
+            return
+        self._busy = True
+        self._set_save_buttons_enabled(False)
+        self._set_status("補正画像を保存中...")
+        try:
+            warped_path, _ = self._save_warped_image()
+            entry = self._build_save_entry(warped_path)
+            if self._on_saved:
+                self._on_saved(entry)
+            self._set_status("保存しました（OCR は ⑦ で一括実行できます）")
+            self.accept()
+        except Exception as e:  # noqa: BLE001
+            self._set_status(f"保存失敗: {e}")
+        finally:
+            self._busy = False
+            self._set_save_buttons_enabled(True)
 
     def _save_and_ocr(self) -> None:
         if not self._file_meta:
             return
+        from services.batch_processor import run_ocr_for_manual_warp_entries
+        from ui_qt.helpers import run_in_thread
+
         self._busy = True
-        self.save_btn.setEnabled(False)
+        self._set_save_buttons_enabled(False)
         self._set_status("保存・OCR実行中...")
         try:
             warped_path, _ = self._save_warped_image()
-            corners = self._current_corners_snapshot()
-            entry = {
-                "fileName": self._file_meta["name"],
-                "sourcePath": self._file_meta.get("path") or self._file_meta.get("id") or "",
-                "warpedPath": warped_path,
-                "corners": corners,
-            }
+            entry = self._build_save_entry(warped_path)
+        except Exception as e:  # noqa: BLE001
+            self._set_status(f"保存失敗: {e}")
+            self._busy = False
+            self._set_save_buttons_enabled(True)
+            return
+
+        test_id = self._test_id
+
+        def task():
+            return run_ocr_for_manual_warp_entries(test_id, [entry])
+
+        def done(result, err):
+            self._busy = False
+            self._set_save_buttons_enabled(True)
+            if err:
+                self._set_status(f"OCR 失敗: {err}")
+                return
+            errors = (result or {}).get("errors") or []
+            if errors:
+                self._set_status(f"OCR 失敗: {errors[0].get('error') or errors[0]}")
+                return
             if self._on_saved:
                 self._on_saved(entry)
             self.accept()
-        except Exception as e:  # noqa: BLE001
-            self._set_status(f"失敗: {e}")
-        finally:
-            self._busy = False
-            self.save_btn.setEnabled(True)
+
+        run_in_thread(self, task, done)
 
     def _save_and_next(self) -> None:
         if not self._file_meta:
             return
         self._busy = True
-        self.save_btn.setEnabled(False)
+        self._set_save_buttons_enabled(False)
         try:
             warped_path, _ = self._save_warped_image()
-            corners = self._current_corners_snapshot()
-            self._inherited_corners = corners
-            self._saved_entries.append(
-                {
-                    "fileName": self._file_meta["name"],
-                    "sourcePath": self._file_meta.get("path") or self._file_meta.get("id") or "",
-                    "warpedPath": warped_path,
-                    "corners": corners,
-                }
-            )
+            entry = self._build_save_entry(warped_path)
+            self._inherited_corners = entry.get("corners")
+            self._saved_entries.append(entry)
             if self._queue_index >= len(self._continuous_queue) - 1:
                 self._finish_continuous()
                 return
@@ -794,7 +866,7 @@ class ManualWarpDialog(QDialog):
             self._set_status(f"保存失敗: {e}")
         finally:
             self._busy = False
-            self.save_btn.setEnabled(True)
+            self._set_save_buttons_enabled(True)
 
     def _finish_continuous(self) -> None:
         if not self._saved_entries:
