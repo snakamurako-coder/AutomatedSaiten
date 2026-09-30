@@ -3,11 +3,9 @@
 from __future__ import annotations
 
 from collections.abc import Callable
-from pathlib import Path
 from typing import Any
 
-import cv2
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QSize, Qt
 from PySide6.QtGui import QMouseEvent, QPixmap
 from PySide6.QtWidgets import (
     QFrame,
@@ -18,6 +16,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from services.image_loader import imread_bgr
 from ui_qt.helpers import bgr_to_qpixmap
 from ui_qt.layout_helpers import FlowLayout, configure_crop_image_scroll, make_expanding
 from ui_qt.style import COLORS
@@ -27,16 +26,16 @@ _THUMB_MAX_H = 160
 
 
 def _load_thumb(path: str) -> QPixmap | None:
-    p = Path(path)
-    if not p.is_file():
-        return None
+    """Unicode パス対応でサムネイルを読み込む（cv2.imread は日本語パスで失敗する）。"""
     try:
-        bgr = cv2.imread(str(p), cv2.IMREAD_COLOR)
+        bgr = imread_bgr(path)
         if bgr is None:
             return None
         h, w = bgr.shape[:2]
         scale = min(_THUMB_MAX_W / max(1, w), _THUMB_MAX_H / max(1, h), 1.0)
         if scale < 1.0:
+            import cv2
+
             bgr = cv2.resize(
                 bgr,
                 (max(1, int(w * scale)), max(1, int(h * scale))),
@@ -45,6 +44,29 @@ def _load_thumb(path: str) -> QPixmap | None:
         return bgr_to_qpixmap(bgr)
     except Exception:  # noqa: BLE001
         return None
+
+
+class _FlowHost(QWidget):
+    """FlowLayout 用ホスト — 折り返し高さを ScrollArea に正しく伝える。"""
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self.flow = FlowLayout(self, h_spacing=8, v_spacing=8)
+        self.flow.setContentsMargins(8, 8, 8, 8)
+        self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Minimum)
+
+    def hasHeightForWidth(self) -> bool:
+        return True
+
+    def heightForWidth(self, width: int) -> int:
+        return self.flow.heightForWidth(width)
+
+    def sizeHint(self) -> QSize:
+        w = max(200, self.width() or 600)
+        return QSize(w, self.heightForWidth(w))
+
+    def minimumSizeHint(self) -> QSize:
+        return self.sizeHint()
 
 
 class WarpedPreviewTile(QFrame):
@@ -61,6 +83,7 @@ class WarpedPreviewTile(QFrame):
         parent: QWidget | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("WarpedPreviewTile")
         self.file_name = file_name
         self._on_toggle = on_toggle
         self._checked = checked
@@ -75,12 +98,14 @@ class WarpedPreviewTile(QFrame):
         self._img = QLabel()
         self._img.setAlignment(Qt.AlignCenter)
         self._img.setFixedSize(_THUMB_MAX_W, _THUMB_MAX_H)
-        self._img.setStyleSheet(
-            f"background: {COLORS['bg']}; border: 1px solid {COLORS['border']}; border-radius: 4px;"
-        )
+        self._img.setScaledContents(False)
         pix = _load_thumb(warped_path)
         if pix is not None and not pix.isNull():
             self._img.setPixmap(pix)
+            self._img.setStyleSheet(
+                f"background: {COLORS['bg']}; border: 1px solid {COLORS['border']};"
+                " border-radius: 4px;"
+            )
         else:
             self._img.setText("画像なし")
             self._img.setStyleSheet(
@@ -116,7 +141,7 @@ class WarpedPreviewTile(QFrame):
         self._check_lbl.setText("☑ 選択中" if self._checked else "☐ タップで選択")
         if self._checked:
             self.setStyleSheet(
-                f"QFrame {{ background: {COLORS['selection_soft']};"
+                f"#WarpedPreviewTile {{ background: {COLORS['selection_soft']};"
                 f" border: 2px solid {COLORS['selection']}; border-radius: 8px; }}"
             )
             self._check_lbl.setStyleSheet(
@@ -124,7 +149,7 @@ class WarpedPreviewTile(QFrame):
             )
         else:
             self.setStyleSheet(
-                f"QFrame {{ background: {COLORS['surface']};"
+                f"#WarpedPreviewTile {{ background: {COLORS['surface']};"
                 f" border: 1px solid {COLORS['border_strong']}; border-radius: 8px; }}"
             )
             self._check_lbl.setStyleSheet(
@@ -175,9 +200,8 @@ class WarpedPreviewPanel(QWidget):
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
-        self._host = QWidget()
-        self._flow = FlowLayout(self._host, h_spacing=8, v_spacing=8)
-        self._flow.setContentsMargins(8, 8, 8, 8)
+        self._host = _FlowHost()
+        self._flow = self._host.flow
         self._scroll.setWidget(self._host)
         root.addWidget(self._scroll, 1)
         make_expanding(self)
@@ -220,6 +244,8 @@ class WarpedPreviewPanel(QWidget):
             )
             self._tiles[name] = tile
             self._flow.addWidget(tile)
+        self._host.updateGeometry()
+        self._host.adjustSize()
 
     def set_tile_checked(self, file_name: str, checked: bool) -> None:
         tile = self._tiles.get(file_name)
