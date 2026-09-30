@@ -569,7 +569,8 @@ class Step8Page(QWidget):
             self._draw_selected_ids.discard(result_id)
         else:
             self._draw_selected_ids.add(result_id)
-        self._render_crop_grid()
+        # 全再描画するとスクロールが最上端に戻るため、枠色だけ更新する
+        self._apply_crop_tile_selection_styles()
         if ctrl is not None:
             ctrl.notify_draw_selection_changed()
 
@@ -1573,7 +1574,50 @@ class Step8Page(QWidget):
         self.crop_panel.clear_tiles()
         self._ink_stacks = []
 
+    def _crop_tile_frame_style(self, *, selected: bool, deemed: bool) -> str:
+        if selected or deemed:
+            border = COLORS["selection"]
+            bg = COLORS["selection_soft"]
+            border_w = 3
+        else:
+            border = COLORS["border"]
+            bg = COLORS["surface"]
+            border_w = 2
+        return (
+            f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
+            f" border-radius: 6px; }}"
+        )
+
+    def _apply_crop_tile_selection_styles(self) -> None:
+        """選択状態だけ反映（再構築しない＝スクロール位置を維持）。"""
+        fid = self._selected_field_id() or ""
+        ans_by_id = {
+            int((item.get("row") or {}).get("rowIndex") or 0): str(
+                (item.get("row") or {}).get("answer_text") or ""
+            )
+            for item in self._crop_grid_results
+            if item.get("ok")
+        }
+        for stack in self._ink_stacks:
+            tile = stack.parentWidget()
+            if tile is None:
+                continue
+            rid = int(getattr(stack, "result_id", 0) or 0)
+            ans = ans_by_id.get(rid, "")
+            tile.setStyleSheet(
+                self._crop_tile_frame_style(
+                    selected=rid in self._draw_selected_ids,
+                    deemed=self._is_deemed(fid, ans),
+                )
+            )
+
     def _render_crop_grid(self) -> None:
+        bar = self.crop_scroll.verticalScrollBar()
+        hbar = self.crop_scroll.horizontalScrollBar()
+        saved_v = bar.value() if bar is not None else 0
+        saved_h = hbar.value() if hbar is not None else 0
+        had_tiles = bool(self._ink_stacks)
+
         self._clear_crop_grid()
         if not self._crop_grid_results:
             self._draw_selected_ids.clear()
@@ -1603,6 +1647,16 @@ class Step8Page(QWidget):
             ctrl.ensure_palette_visible()
             ctrl.notify_draw_selection_changed()
 
+        if had_tiles and (saved_v or saved_h):
+
+            def _restore_scroll() -> None:
+                if bar is not None:
+                    bar.setValue(saved_v)
+                if hbar is not None:
+                    hbar.setValue(saved_h)
+
+            QTimer.singleShot(0, _restore_scroll)
+
     def _make_crop_tile(self, item: dict[str, Any], fid: str, zoom: float) -> QWidget:
         tile = QFrame()
         lay = QVBoxLayout(tile)
@@ -1631,21 +1685,8 @@ class Step8Page(QWidget):
         deemed = self._is_deemed(fid, ans)
         row_index = int(row.get("rowIndex") or 0)
         draw_sel = row_index in self._draw_selected_ids
-        if draw_sel:
-            border = COLORS["selection"]
-            bg = COLORS["selection_soft"]
-            border_w = 3
-        elif deemed:
-            border = COLORS["selection"]
-            bg = COLORS["selection_soft"]
-            border_w = 3
-        else:
-            border = COLORS["border"]
-            bg = COLORS["surface"]
-            border_w = 2
         tile.setStyleSheet(
-            f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
-            f" border-radius: 6px; }}"
+            self._crop_tile_frame_style(selected=draw_sel, deemed=deemed)
         )
         tile.setCursor(Qt.PointingHandCursor)
 
