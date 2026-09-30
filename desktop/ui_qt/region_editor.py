@@ -6,12 +6,15 @@ QPainter はネイティブにアルファ合成できるため、画面は Qt �
 
 from __future__ import annotations
 
-from config import default_field_ocr_engine
+import copy
+from typing import Any, Callable
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QScrollArea, QWidget
+
+from config import default_field_ocr_engine
 
 from services.compositor import (
     REGION_FILL_ALPHA,
