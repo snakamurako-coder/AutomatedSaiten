@@ -848,6 +848,40 @@ def rewrite_field_texts(
     return updated
 
 
+def rewrite_field_texts_for_result_ids(
+    test_id: str,
+    field_id: str,
+    result_ids: list[int] | set[int],
+    new_text: str,
+) -> int:
+    """指定 result id の記述欄テキストだけを書き換える（語順違いのパターン移動用）。"""
+    ids = {int(i) for i in (result_ids or []) if int(i) > 0}
+    if not ids:
+        return 0
+    new_val = str(new_text or "").strip() or "なし"
+    updated = 0
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, texts_json FROM results WHERE test_id = ? AND id IN ({})".format(
+                ",".join("?" * len(ids))
+            ),
+            (test_id, *sorted(ids)),
+        ).fetchall()
+        for row in rows:
+            texts = json.loads(row["texts_json"] or "{}")
+            old_val = str(texts.get(field_id, "") or "").strip() or "なし"
+            if old_val == new_val:
+                continue
+            texts[field_id] = new_val
+            conn.execute(
+                "UPDATE results SET texts_json = ? WHERE id = ?",
+                (json.dumps(texts, ensure_ascii=False), row["id"]),
+            )
+            updated += 1
+        conn.commit()
+    return updated
+
+
 def upsert_result_texts(
     test_id: str,
     file_name: str,

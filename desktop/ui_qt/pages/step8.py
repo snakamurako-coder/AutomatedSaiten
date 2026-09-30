@@ -15,6 +15,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QMessageBox,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QSpinBox,
@@ -44,7 +46,11 @@ from models.text_annotation_repo import (
     sheet_boxes_without_ids,
 )
 from models.database import connect
-from models.test_repo import get_answer_fields, get_points_conn
+from models.test_repo import (
+    get_answer_fields,
+    get_points_conn,
+    rewrite_field_texts_for_result_ids,
+)
 from models.text_processing import (
     apply_deemed_scoring_to_field,
     apply_text_replacements_to_field,
@@ -104,6 +110,8 @@ class Step8Page(QWidget):
         self._crop_grid_results: list[dict[str, Any]] = []
         self._ink_stacks: list[CropInkImageStack] = []
         self._draw_selected_ids: set[int] = set()
+        # 他解答パターンへ移す: None | {"kind": "selected"|"unselected", "result_ids": set[int]}
+        self._pattern_move_pending: dict[str, Any] | None = None
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer = QVBoxLayout(self)
@@ -284,6 +292,14 @@ class Step8Page(QWidget):
         self.criteria_table.setCurrentCell(row, col)
 
     def _on_criteria_cell_clicked(self, row: int, col: int) -> None:
+        if (
+            self._pattern_move_pending is not None
+            and col == 2
+            and 0 <= row < len(self._criteria_rows)
+        ):
+            # 移動先選択中は回答パターン一覧の回答文字列タップで確認へ
+            self._on_pattern_move_destination_chosen(row)
+            return
         if col == 4:
             open_judgment_combo(self.criteria_table, row, col)
         elif col == 5:
@@ -348,7 +364,9 @@ class Step8Page(QWidget):
         lay = QVBoxLayout(box)
         lay.addWidget(
             h.caption_label(
-                "「みなし」「不正解」「表示」列はクリックで切替。画像タイルクリックでもみなしを切替えられます。"
+                "「みなし」「不正解」「表示」列はクリックで切替。"
+                "画像タイルをクリックで個別選択（語順違いなどを他パターンへ移すとき）。"
+                "みなしは表の列で切替えます。"
             )
         )
 
@@ -367,8 +385,28 @@ class Step8Page(QWidget):
         ctrl.addWidget(h.button("表示を全選択", lambda: self._select_all_outlier(True)))
         ctrl.addWidget(h.button("表示を解除", lambda: self._select_all_outlier(False)))
         ctrl.addWidget(h.button("選択を画像表示", self._on_show_selected_crops, variant="primary"))
+        ctrl.addWidget(
+            self._make_soft_orange_button(
+                "選択を他解答パターンに移す",
+                self._on_start_move_selected_to_pattern,
+            )
+        )
+        ctrl.addWidget(
+            self._make_soft_orange_button(
+                "非選択を他解答パターンに移す",
+                self._on_start_move_unselected_to_pattern,
+            )
+        )
         ctrl.addStretch()
         lay.addLayout(ctrl)
+        self._pattern_move_hint = QLabel("")
+        self._pattern_move_hint.setWordWrap(True)
+        self._pattern_move_hint.setStyleSheet(
+            "color: #9a3412; background: #ffedd5; border: 1px solid #fdba74;"
+            " border-radius: 6px; padding: 6px 8px; font-weight: 600;"
+        )
+        self._pattern_move_hint.hide()
+        lay.addWidget(self._pattern_move_hint)
 
         zoom_row = QHBoxLayout()
         self.crop_controls = CropDisplayControls()
@@ -522,20 +560,18 @@ class Step8Page(QWidget):
         self._refresh_check_views()
 
     def _on_crop_image_clicked(self, fid: str, result_id: int, ans: str) -> None:
+        del fid, ans  # 個別選択へ。みなしは表の列で切替
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:
             ctrl.set_active_result_id(result_id)
-        if ctrl is not None and ctrl.is_inking_draw_tab():
-            # 描画タブ＋ペン系: みなし切替ではなく描画用選択のトグル
-            # （描画ゲートは選択中のみ set_drawing_enabled）
-            if result_id in self._draw_selected_ids:
-                self._draw_selected_ids.discard(result_id)
-            else:
-                self._draw_selected_ids.add(result_id)
-            self._render_crop_grid()
+        # 画像タイルクリックは常に個別選択（描画・他パターン移動の共通）
+        if result_id in self._draw_selected_ids:
+            self._draw_selected_ids.discard(result_id)
+        else:
+            self._draw_selected_ids.add(result_id)
+        self._render_crop_grid()
+        if ctrl is not None:
             ctrl.notify_draw_selection_changed()
-            return
-        self._toggle_deemed(fid, ans)
 
     def _toggle_incorrect(self, fid: str, ans: str) -> None:
         m = self._incorrect_map(fid)
@@ -635,6 +671,7 @@ class Step8Page(QWidget):
     def _on_field_changed(self, _index: int) -> None:
         if not self.app.active_test_id or not self._fields:
             return
+        self._cancel_pattern_move_mode()
         self._outlier_groups = []
         self._outlier_flat_rows = []
         self._crop_grid_results = []
@@ -1140,6 +1177,160 @@ class Step8Page(QWidget):
             h.warn(self, "未選択", "表示する回答を選択してください。")
             return
         self._load_crops_async(rows, allow_incorrect=False)
+
+    @staticmethod
+    def _make_soft_orange_button(text: str, on_click) -> QPushButton:
+        btn = QPushButton(text)
+        btn.setStyleSheet(
+            "QPushButton {"
+            " background: #ffedd5; color: #9a3412; border: 1px solid #fb923c;"
+            " border-radius: 6px; font-weight: 700; padding: 6px 10px;"
+            "}"
+            "QPushButton:hover { background: #fed7aa; }"
+            "QPushButton:pressed { background: #fdba74; }"
+        )
+        btn.clicked.connect(on_click)
+        return btn
+
+    def _cancel_pattern_move_mode(self) -> None:
+        self._pattern_move_pending = None
+        if hasattr(self, "_pattern_move_hint"):
+            self._pattern_move_hint.hide()
+            self._pattern_move_hint.clear()
+
+    def _set_pattern_move_hint(self, text: str) -> None:
+        self._pattern_move_hint.setText(text)
+        self._pattern_move_hint.setVisible(bool(text))
+
+    def _collect_pattern_move_result_ids(self, *, selected: bool) -> list[int]:
+        """表示中タイルの選択／非選択を優先。無ければ外れ値表の表示チェックを使う。"""
+        if self._crop_grid_results:
+            ids: list[int] = []
+            for item in self._crop_grid_results:
+                if not item.get("ok"):
+                    continue
+                rid = int((item.get("row") or {}).get("rowIndex") or 0)
+                if rid <= 0:
+                    continue
+                is_sel = rid in self._draw_selected_ids
+                if selected == is_sel:
+                    ids.append(rid)
+            return ids
+        ids = []
+        for row in self._outlier_flat_rows:
+            if row.get("skip_img"):
+                continue
+            rid = int(row.get("rowIndex") or 0)
+            if rid <= 0:
+                continue
+            is_sel = bool(row.get("show"))
+            if selected == is_sel:
+                ids.append(rid)
+        return ids
+
+    def _on_start_move_selected_to_pattern(self) -> None:
+        self._begin_pattern_move(selected=True)
+
+    def _on_start_move_unselected_to_pattern(self) -> None:
+        self._begin_pattern_move(selected=False)
+
+    def _begin_pattern_move(self, *, selected: bool) -> None:
+        if not self.app.require_active_test() or not self._selected_field_id():
+            return
+        kind = "selected" if selected else "unselected"
+        if self._pattern_move_pending is not None:
+            was = self._pattern_move_pending.get("kind")
+            self._cancel_pattern_move_mode()
+            if was == kind:
+                return
+        ids = self._collect_pattern_move_result_ids(selected=selected)
+        label = "選択中" if selected else "非選択"
+        if not ids:
+            if selected:
+                h.warn(
+                    self,
+                    "未選択",
+                    "移す回答がありません。\n"
+                    "画像を表示してタイルをクリックで選択するか、"
+                    "外れ値一覧の「表示」にチェックを入れてください。",
+                )
+            else:
+                h.warn(
+                    self,
+                    "対象なし",
+                    "非選択の回答がありません。\n"
+                    "画像表示中なら、残したいタイルだけ選択してから実行してください。",
+                )
+            return
+        if not self._criteria_rows:
+            h.warn(self, "一覧なし", "先に回答を集約して回答パターン一覧を表示してください。")
+            return
+        self._pattern_move_pending = {"kind": kind, "result_ids": set(ids)}
+        self._set_pattern_move_hint(
+            f"{label} {len(ids)} 件の移動先を選んでください。"
+            "上の回答パターン一覧の「回答」列をタップ → 確認後に移動します。"
+            "解除するときは同じボタンをもう一度押してください。"
+        )
+        self._scroll_to_criteria_table()
+
+    def _scroll_to_criteria_table(self) -> None:
+        if not hasattr(self, "_scroll") or not hasattr(self, "criteria_table"):
+            return
+
+        def _do() -> None:
+            self._scroll.ensureWidgetVisible(self.criteria_table, 0, 24)
+
+        QTimer.singleShot(0, _do)
+
+    def _on_pattern_move_destination_chosen(self, row: int) -> None:
+        pending = self._pattern_move_pending
+        if not pending or row < 0 or row >= len(self._criteria_rows):
+            return
+        dest = str(self._criteria_rows[row].get("answer_text") or "").strip() or "なし"
+        ids = sorted(int(i) for i in (pending.get("result_ids") or set()) if int(i) > 0)
+        kind = pending.get("kind") or "selected"
+        label = "選択中" if kind == "selected" else "非選択"
+        if not ids:
+            self._cancel_pattern_move_mode()
+            h.warn(self, "対象なし", "移動対象が空です。")
+            return
+        ask = QMessageBox.question(
+            self,
+            "他解答パターンへ移動",
+            f"{label}の {len(ids)} 件を、次の回答パターンへ移します。\n\n"
+            f"移動先: {dest}\n\n"
+            "OCR の語順違いなどで同じグループに混ざった回答を、"
+            "別パターンとして集計し直します。よろしいですか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ask != QMessageBox.StandardButton.Yes:
+            return
+        self._apply_pattern_move(ids, dest)
+
+    def _apply_pattern_move(self, result_ids: list[int], dest_answer: str) -> None:
+        fid = self._selected_field_id()
+        if not fid or not self.app.active_test_id:
+            return
+        try:
+            n = rewrite_field_texts_for_result_ids(
+                self.app.active_test_id, fid, result_ids, dest_answer
+            )
+        except Exception as e:
+            h.error(self, "移動エラー", str(e))
+            return
+        self._cancel_pattern_move_mode()
+        self._draw_selected_ids.clear()
+        self._aggregate()
+        self._on_fetch_outliers(silent=True)
+        # 移動後は移動先パターンの画像を再表示
+        if not self._should_skip_crop(dest_answer):
+            self._show_answer_pattern_crops(dest_answer)
+        h.info(
+            self,
+            "移動完了",
+            f"{n} 件を「{dest_answer}」へ移し、回答パターンを再集約しました。",
+        )
 
     def _on_show_none_crops(self) -> None:
         fid = self._selected_field_id()
