@@ -189,8 +189,20 @@ class GroupGradeDialog(QDialog):
             self.panel.add_tile(tile, idx)
 
         if preserve_scroll and old_val > 0:
+            # Immediate attempt (works when range unchanged, e.g. palette toggle)
+            v_bar.setValue(old_val)
+            # Fallback via rangeChanged (works when range changes, e.g. zoom)
+            def _restore(_mn, mx, ov=old_val, vb=v_bar):
+                try:
+                    vb.rangeChanged.disconnect(_restore)
+                except RuntimeError:
+                    pass
+                if mx > 0:
+                    vb.setValue(min(ov, mx))
+            v_bar.rangeChanged.connect(_restore)
+            # Final fallback via timer for edge cases
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(50, lambda: v_bar.setValue(old_val))
+            QTimer.singleShot(100, lambda: v_bar.setValue(min(old_val, v_bar.maximum())))
 
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
@@ -1761,8 +1773,20 @@ class StepManualPage(QWidget):
             ctrl.notify_draw_selection_changed()
 
         if preserve_scroll and old_val > 0:
+            # Immediate attempt (works when range unchanged, e.g. palette toggle)
+            v_bar.setValue(old_val)
+            # Fallback via rangeChanged (works when range changes, e.g. zoom)
+            def _restore(_mn, mx, ov=old_val, vb=v_bar):
+                try:
+                    vb.rangeChanged.disconnect(_restore)
+                except RuntimeError:
+                    pass
+                if mx > 0:
+                    vb.setValue(min(ov, mx))
+            v_bar.rangeChanged.connect(_restore)
+            # Final fallback via timer for edge cases
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(50, lambda: v_bar.setValue(old_val))
+            QTimer.singleShot(100, lambda: v_bar.setValue(min(old_val, v_bar.maximum())))
 
     def _judgment_stroke_color(self, judgment: str) -> str | None:
         mark = (self._feedback_style or {}).get("mark") or {}
