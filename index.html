@@ -4321,6 +4321,8 @@ function getVerifyCompareTypeLabel(mode) {
 function renderVerifyCropGrid(results, mode) {
     mode = mode || getVerifyCompareModeUi();
     var grid = document.getElementById('verify-crop-grid');
+    var panel = document.getElementById('verify-crop-panel');
+    var st = panel ? panel.scrollTop : 0;
     if (!grid) return;
     var isId = mode === 'id';
     grid.innerHTML = results.map(function(r) {
@@ -4344,6 +4346,7 @@ function renderVerifyCropGrid(results, mode) {
             '</div>';
     }).join('');
     applyVerifyCropZoom(appState.verifyCropZoom || 100);
+    if (panel) panel.scrollTop = st;
 }
 
 async function loadVerificationCrops(rows, identityFields, mode) {
@@ -4432,6 +4435,8 @@ async function loadAnswerCropsForRows(rows, fieldId, opts) {
 
 function renderCropGrid(results) {
     var grid = document.getElementById('outlier-crop-grid');
+    var panel = document.getElementById('outlier-crop-panel');
+    var st = panel ? panel.scrollTop : 0;
     var fid = getCriteriaFieldId();
     grid.innerHTML = results.map(function(r, idx) {
         if (!r.ok) {
@@ -4448,6 +4453,7 @@ function renderCropGrid(results) {
             '<div class="text-[10px] p-1 font-mono text-purple-800 truncate" title="' + escapeHtml(ans) + '">' + escapeHtml(ans) + '</div></div>';
     }).join('');
     applyCropInlineZoom(appState.cropInlineZoom || 100);
+    if (panel) panel.scrollTop = st;
 }
 
 async function showSelectedOutlierCrops() {
@@ -6712,6 +6718,7 @@ document.addEventListener('DOMContentLoaded', function() {
                 withBusyButton(t, function() { return loadAnswerCropsForRows([row], getCriteriaFieldId()); });
             }
         } else if (t.classList.contains('crop-tile-img') || t.classList.contains('crop-tile')) {
+            ev.preventDefault();
             var tile = t.classList.contains('crop-tile') ? t : t.closest('.crop-tile');
             if (tile && tile.dataset.answer) {
                 toggleDeemedAnswer(getCriteriaFieldId(), decodeAnswerAttr(tile.dataset.answer));

@@ -10,6 +10,8 @@ from PySide6.QtGui import QBrush, QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QFrame,
     QGroupBox,
     QHBoxLayout,
@@ -83,6 +85,105 @@ def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
     b = int(b + (255 - b) * w)
     return f"#{r:02x}{g:02x}{b:02x}"
 
+
+class GroupGradeDialog(QDialog):
+    """
+    同一OCR文字列の回答を個別に確認・採点するためのダイアログ。
+    """
+    def __init__(self, parent: "StepManualPage", answer_text: str, group_items: list[dict]):
+        super().__init__(parent)
+        self.setWindowTitle(f"同回答グループの個別確認（OCR: {answer_text}）")
+        self.resize(800, 600)
+        self.page = parent
+        self.items = group_items
+        self._selected_ids = set()
+
+        lay = QVBoxLayout(self)
+
+        ctrl_lay = QHBoxLayout()
+        info_lbl = QLabel(f"OCRテキスト: <b>{answer_text}</b> ({len(group_items)} 枚)")
+        info_lbl.setTextFormat(Qt.RichText)
+        ctrl_lay.addWidget(info_lbl)
+
+        ctrl_lay.addStretch()
+
+        btn_maru = QPushButton("○ (1)")
+        btn_sankaku = QPushButton("△ (2)")
+        btn_batsu = QPushButton("× (3)")
+        btn_clear = QPushButton("判定解除 (BackSpace)")
+
+        btn_maru.clicked.connect(lambda: self._apply_judgment("○"))
+        btn_sankaku.clicked.connect(lambda: self._apply_judgment("△"))
+        btn_batsu.clicked.connect(lambda: self._apply_judgment("×"))
+        btn_clear.clicked.connect(lambda: self._apply_judgment(""))
+
+        for btn in (btn_maru, btn_sankaku, btn_batsu, btn_clear):
+            ctrl_lay.addWidget(btn)
+
+        lay.addLayout(ctrl_lay)
+
+        self.scroll = QScrollArea()
+        self.scroll.setWidgetResizable(True)
+        self.panel = CropTileColumnPanel(margins=(4, 4, 0, 4), spacing=4)
+        self.scroll.setWidget(self.panel)
+        lay.addWidget(self.scroll)
+
+        btn_box = QDialogButtonBox(QDialogButtonBox.Close)
+        btn_box.rejected.connect(self.reject)
+        lay.addWidget(btn_box)
+
+        self._render_grid()
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_1:
+            self._apply_judgment("○")
+        elif event.key() == Qt.Key_2:
+            self._apply_judgment("△")
+        elif event.key() == Qt.Key_3:
+            self._apply_judgment("×")
+        elif event.key() == Qt.Key_Backspace:
+            self._apply_judgment("")
+        else:
+            super().keyPressEvent(event)
+
+    def _on_tile_clicked(self, rid: int):
+        if rid in self._selected_ids:
+            self._selected_ids.remove(rid)
+        else:
+            self._selected_ids.add(rid)
+        self._render_grid()
+
+    def _apply_judgment(self, judgment: str):
+        if not self._selected_ids:
+            h.warn(self, "未選択", "画像をタップして選択してください。")
+            return
+        resolved = self.page._resolve_judgment_score(judgment)
+        if not resolved:
+            return
+        nj, score = resolved
+        ids = list(self._selected_ids)
+        self._selected_ids.clear()
+        
+        was_in_dialog = getattr(self.page, "_in_group_dialog", False)
+        self.page._in_group_dialog = True
+        try:
+            self.page._commit_grades(ids, nj, score, silent=True)
+        finally:
+            self.page._in_group_dialog = was_in_dialog
+            
+        self._render_grid()
+
+    def _render_grid(self):
+        self.panel.clear_tiles()
+        zoom = max(30, min(400, self.page.crop_controls.zoom_value())) / 100.0
+        for idx, item in enumerate(self.items):
+            tile = self.page._make_tile(
+                item,
+                zoom,
+                selected_ids=self._selected_ids,
+                on_click=self._on_tile_clicked
+            )
+            self.panel.add_tile(tile, idx)
 
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
@@ -1521,6 +1622,16 @@ class StepManualPage(QWidget):
             h.error(self, "保存エラー", str(e))
             return False
         id_set = set(result_ids)
+
+        newly_graded_texts = set()
+        if not getattr(self, "_in_group_dialog", False) and nj:
+            for item in self._items:
+                if item.get("result_id") in id_set:
+                    if not item.get("judgment"):
+                        ans = str(item.get("row", {}).get("answer_text") or "").strip()
+                        if ans:
+                            newly_graded_texts.add(ans)
+
         for item in self._items:
             if item.get("result_id") in id_set:
                 item["judgment"] = nj
@@ -1538,6 +1649,24 @@ class StepManualPage(QWidget):
             else:
                 label = "保留" if nj == PENDING_JUDGMENT else nj
                 h.info(self, "反映完了", f"{n} 件に {label}（{score}点）を反映しました。")
+
+        if newly_graded_texts and not getattr(self, "_in_group_dialog", False):
+            for ans in newly_graded_texts:
+                group_items = [
+                    i for i in self._items
+                    if str(i.get("row", {}).get("answer_text") or "").strip() == ans
+                ]
+                if len(group_items) > 1:
+                    self._in_group_dialog = True
+                    try:
+                        dlg = GroupGradeDialog(self, ans, group_items)
+                        dlg.exec()
+                    finally:
+                        self._in_group_dialog = False
+                    self._render_grid()
+                    self._update_status_summary()
+                    break
+
         return True
 
     def _apply_judgment(self, judgment: str) -> None:
@@ -1649,9 +1778,18 @@ class StepManualPage(QWidget):
             pil, judgment, score, self._feedback_style, supersample=4
         )
 
-    def _make_tile(self, item: dict[str, Any], zoom: float) -> QWidget:
+    def _make_tile(
+        self,
+        item: dict[str, Any],
+        zoom: float,
+        selected_ids: set[int] | None = None,
+        on_click: Any = None,
+    ) -> QWidget:
+        selected_set = self._selected_ids if selected_ids is None else selected_ids
+        click_handler = self._on_tile_image_clicked if on_click is None else on_click
+
         rid = int(item.get("result_id") or 0)
-        selected = rid in self._selected_ids
+        selected = rid in selected_set
         j = normalize_judgment(item.get("judgment"))
         sc = item.get("score")
         tile = QFrame()
@@ -1708,7 +1846,7 @@ class StepManualPage(QWidget):
             ),
         )
         ink_stack.image_clicked.connect(
-            lambda rid=rid: self._on_tile_image_clicked(rid)
+            lambda rid=rid: click_handler(rid)
         )
         self._ink_stacks.append(ink_stack)
         ctrl = getattr(self.app, "palette_controller", None)
