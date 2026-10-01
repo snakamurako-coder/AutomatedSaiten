@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QMessageBox,
     QPushButton,
     QScrollArea,
     QSizePolicy,
@@ -26,7 +27,13 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.criteria_repo import get_unique_answers
+from models.criteria_repo import (
+    aggregate_manual_grades_by_answer,
+    apply_saved_criteria_to_field,
+    get_unique_answers,
+    import_manual_grades_into_criteria,
+    sync_committed_grades_to_criteria,
+)
 from models.database import connect
 from models.grading_status import (
     PENDING_JUDGMENT,
@@ -64,6 +71,7 @@ from ui_qt.manual_grading_prefs import (
     load_field_view_prefs,
     load_field_zoom_pct,
     load_manual_grading_display_prefs,
+    manual_auto_grading_link_enabled,
     manual_grading_hover_toolbar_enabled,
     save_field_view_prefs,
     save_field_zoom_pct,
@@ -291,6 +299,8 @@ class StepManualPage(QWidget):
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         top.addWidget(self.sort_combo)
         top.addWidget(h.button("判定を再読込", self._reload_grades))
+        top.addWidget(h.button("採点基準へ反映", self._on_export_manual_to_criteria))
+        top.addWidget(h.button("採点基準から取込", self._on_import_criteria_to_manual))
         top.addStretch()
         left_hdr.addLayout(top)
 
@@ -1366,7 +1376,7 @@ class StepManualPage(QWidget):
                 item["ink_strokes"] = list(strokes)
                 break
 
-    def _reload_grades(self) -> None:
+    def _reload_grades(self, *, silent: bool = False) -> None:
         """DB の判定を再読込（⑦ 一括採点後の確認用。画像は再取得しない）。"""
         fid = self._selected_field_id()
         test_id = self.app.active_test_id
@@ -1389,7 +1399,73 @@ class StepManualPage(QWidget):
         self._render_grid(preserve_scroll=False)
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
-        h.info(self, "再読込", "自動採点・手動採点で共有している判定を DB から読み直しました。")
+        if not silent:
+            h.info(self, "再読込", "自動採点・手動採点で共有している判定を DB から読み直しました。")
+
+    def _on_export_manual_to_criteria(self) -> None:
+        """この記述欄の手動採点を多数決で採点基準へ反映（⑧へ）。"""
+        fid = self._selected_field_id()
+        if not self.app.require_active_test() or not fid:
+            return
+        preview = aggregate_manual_grades_by_answer(self.app.active_test_id, fid)
+        if not preview.get("winner_count"):
+            h.warn(
+                self,
+                "反映不可",
+                "確定判定（○△×）が付いた回答パターンがありません。",
+            )
+            return
+        lines = [
+            f"この記述欄の手動採点から {preview['winner_count']} 件を採点基準へ保存します。",
+            "同じ回答文字列は多数決（○△×）で決めます。票割れは既存基準を維持します。",
+        ]
+        if preview.get("tied_count"):
+            lines.append(f"票割れ: {preview['tied_count']} 件")
+            for p in (preview.get("tied") or [])[:5]:
+                lines.append(f"・{p.get('answer_text')}: {p.get('vote_summary')}")
+        ask = QMessageBox.question(
+            self,
+            "採点基準へ反映",
+            "\n".join(lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ask != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            res = import_manual_grades_into_criteria(self.app.active_test_id, fid)
+            msg = f"採点基準へ {res.get('saved_count', 0)} 件を反映しました。"
+            if res.get("tied_count"):
+                msg += f"\n票割れで見送ったパターン: {res['tied_count']} 件"
+            h.info(self, "反映完了", msg)
+        except Exception as e:
+            h.error(self, "エラー", str(e))
+
+    def _on_import_criteria_to_manual(self) -> None:
+        """保存済み採点基準を、この記述欄の手動採点結果へ取込。"""
+        fid = self._selected_field_id()
+        if not self.app.require_active_test() or not fid:
+            return
+        ask = QMessageBox.question(
+            self,
+            "採点基準から取込",
+            "⑧で保存済みの採点基準を、同じ回答文字列の答案へ上書きします。\n"
+            "手動で付けた例外判定も基準どおりに置き換わります。続行しますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ask != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            n = apply_saved_criteria_to_field(self.app.active_test_id, fid)
+            self._reload_grades(silent=True)
+            h.info(
+                self,
+                "取込完了",
+                f"採点基準から {n} 件の判定・配点を取り込みました。",
+            )
+        except Exception as e:
+            h.error(self, "エラー", str(e))
 
     def _update_status_summary(self) -> None:
         counts = {"○": 0, "△": 0, "×": 0, "?": 0, "未採点": 0}
@@ -1664,6 +1740,18 @@ class StepManualPage(QWidget):
         except Exception as e:
             h.error(self, "保存エラー", str(e))
             return False
+        if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
+            try:
+                sync_committed_grades_to_criteria(
+                    self.app.active_test_id,
+                    fid,
+                    result_ids,
+                    nj,
+                    score,
+                    max_score=self._field_max_score(),
+                )
+            except Exception as e:
+                h.warn(self, "採点基準への同期失敗", str(e))
         id_set = set(result_ids)
 
         newly_graded_texts = set()

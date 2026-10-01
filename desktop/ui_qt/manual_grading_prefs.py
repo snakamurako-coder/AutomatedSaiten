@@ -23,6 +23,18 @@ def save_manual_grading_hover_toolbar(enabled: bool) -> None:
     save_config(cfg)
 
 
+def manual_auto_grading_link_enabled(cfg: dict | None = None) -> bool:
+    """手動採点と⑧採点基準を常にリンクするか（既定オフ）。"""
+    c = cfg if cfg is not None else load_config()
+    return bool(c.get("manual_auto_grading_link"))
+
+
+def save_manual_auto_grading_link(enabled: bool) -> None:
+    cfg = load_config()
+    cfg["manual_auto_grading_link"] = bool(enabled)
+    save_config(cfg)
+
+
 def load_manual_grading_display_prefs(cfg: dict | None = None) -> dict[str, bool]:
     c = cfg if cfg is not None else load_config()
     raw = c.get("manual_grading_display")

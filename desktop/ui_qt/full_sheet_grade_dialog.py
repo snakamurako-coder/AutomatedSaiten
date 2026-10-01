@@ -36,7 +36,9 @@ from models.text_annotation_repo import (
     get_text_annotations,
     save_text_annotations,
 )
+from models.criteria_repo import sync_committed_grades_to_criteria
 from models.test_repo import update_results_field_grades
+from ui_qt.manual_grading_prefs import manual_auto_grading_link_enabled
 from services.compositor import (
     REGION_FILL_ALPHA,
     REGION_FILL_ALPHA_SELECTED,
@@ -852,6 +854,15 @@ class FullSheetGradeDialog(QDialog):
                 nj,
                 int(score),
             )
+            if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
+                sync_committed_grades_to_criteria(
+                    self._test_id,
+                    field_id,
+                    [int(self._row["id"])],
+                    nj,
+                    int(score),
+                    max_score=max_score,
+                )
         except Exception as e:
             self._ocr_label.setText(f"保存失敗: {e}")
             return

@@ -27,8 +27,11 @@ from PySide6.QtWidgets import (
 )
 
 from models.criteria_repo import (
+    aggregate_manual_grades_by_answer,
+    apply_criteria_rules_to_results,
     get_answer_rows_for_pattern,
     get_outlier_answer_groups,
+    import_manual_grades_into_criteria,
     merge_unique_with_criteria,
     save_grading_criteria,
     sort_criteria_rows,
@@ -48,11 +51,9 @@ from models.text_annotation_repo import (
 )
 from models.database import connect
 from models.test_repo import (
-    get_all_results,
     get_answer_fields,
     get_points_conn,
     rewrite_field_texts_for_result_ids,
-    update_results_field_grades,
 )
 from models.text_processing import (
     apply_deemed_scoring_to_field,
@@ -87,6 +88,7 @@ from ui_qt.layout_helpers import (
     main_table_frame,
     make_expanding,
 )
+from ui_qt.manual_grading_prefs import manual_auto_grading_link_enabled
 from ui_qt.style import COLORS
 from ui_qt.table_cells import (
     make_editable_item,
@@ -226,6 +228,12 @@ class Step8Page(QWidget):
         toolbar.addWidget(h.button("回答を集約", self._on_aggregate))
         toolbar.addWidget(h.button("AI原案", self._on_gemini))
         toolbar.addWidget(h.button("基準を保存", self._on_save_criteria, variant="primary"))
+        toolbar.addWidget(
+            h.button("手動採点から取込", self._on_import_manual_to_criteria)
+        )
+        toolbar.addWidget(
+            h.button("手動採点へ反映", self._on_export_criteria_to_manual)
+        )
         toolbar.addStretch()
         root.addLayout(toolbar)
 
@@ -782,21 +790,6 @@ class Step8Page(QWidget):
             if score_w is not None:
                 score_w.set_value(0)
 
-    def _result_ids_for_answers(self, answers: set[str]) -> list[int]:
-        fid = self._selected_field_id()
-        test_id = self.app.active_test_id
-        if not fid or not test_id or not answers:
-            return []
-        ids: list[int] = []
-        for row in get_all_results(test_id):
-            text = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
-            if text not in answers:
-                continue
-            rid = int(row.get("id") or 0)
-            if rid > 0:
-                ids.append(rid)
-        return ids
-
     def _apply_criteria_grades_to_results(
         self, rules: list[dict[str, Any]]
     ) -> int:
@@ -805,24 +798,7 @@ class Step8Page(QWidget):
         test_id = self.app.active_test_id
         if not fid or not test_id or not rules:
             return 0
-        by_grade: dict[tuple[str, int], set[str]] = {}
-        for rule in rules:
-            ans = str(rule.get("answer_text") or "")
-            judgment = str(rule.get("judgment") or "").strip()
-            if not ans or not judgment:
-                continue
-            try:
-                score = int(rule.get("score") or 0)
-            except (TypeError, ValueError):
-                score = 0
-            by_grade.setdefault((judgment, score), set()).add(ans)
-        updated = 0
-        for (judgment, score), answers in by_grade.items():
-            ids = self._result_ids_for_answers(answers)
-            if not ids:
-                continue
-            updated += update_results_field_grades(test_id, fid, ids, judgment, score)
-        return updated
+        return apply_criteria_rules_to_results(test_id, fid, rules)
 
     def _sync_checks_to_rows(self) -> None:
         fid = self._selected_field_id()
@@ -1397,7 +1373,9 @@ class Step8Page(QWidget):
             return
         try:
             save_grading_criteria(self.app.active_test_id, fid, rules)
-            graded = self._apply_criteria_grades_to_results(rules)
+            graded = 0
+            if manual_auto_grading_link_enabled():
+                graded = self._apply_criteria_grades_to_results(rules)
             sort_criteria_rows(self._criteria_rows)
             self._render_criteria_table()
             msg = f"採点基準を {len(rules)} 件保存しました。"
@@ -1409,6 +1387,101 @@ class Step8Page(QWidget):
             if graded:
                 msg += f"\n手動採点用データへ {graded} 件の判定・配点を反映しました（○/△/×）。"
             h.info(self, "保存完了", msg)
+        except Exception as e:
+            h.error(self, "エラー", str(e))
+
+    def _on_import_manual_to_criteria(self) -> None:
+        """手動採点の多数決を採点基準へ取り込み（DB保存。手動結果へは書き戻さない）。"""
+        fid = self._selected_field_id()
+        if not self.app.require_active_test() or not fid:
+            return
+        preview = aggregate_manual_grades_by_answer(self.app.active_test_id, fid)
+        if not preview.get("winner_count"):
+            h.warn(
+                self,
+                "取込不可",
+                "手動採点で確定判定（○△×）が付いた回答パターンがありません。",
+            )
+            return
+        lines = [
+            f"確定パターン {preview['winner_count']} 件を採点基準へ取り込みます。",
+            "票が割れた回答は既存基準を維持します。",
+            "この操作では手動採点結果へは書き戻しません。",
+        ]
+        if preview.get("tied_count"):
+            lines.append(f"票割れ（未決定）: {preview['tied_count']} 件")
+            for p in (preview.get("tied") or [])[:5]:
+                lines.append(
+                    f"・{p.get('answer_text')}: {p.get('vote_summary')}"
+                )
+        ask = QMessageBox.question(
+            self,
+            "手動採点から取込",
+            "\n".join(lines),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if ask != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            res = import_manual_grades_into_criteria(self.app.active_test_id, fid)
+            self._aggregate()
+            msg = f"手動採点から {res.get('saved_count', 0)} 件を採点基準へ取り込みました。"
+            if res.get("tied_count"):
+                msg += f"\n票割れで見送ったパターン: {res['tied_count']} 件"
+            h.info(self, "取込完了", msg)
+        except Exception as e:
+            h.error(self, "エラー", str(e))
+
+    def _on_export_criteria_to_manual(self) -> None:
+        """画面上の採点基準（未保存含む）を手動採点 results へ反映。"""
+        fid = self._selected_field_id()
+        if not self.app.require_active_test() or not fid:
+            return
+        self._sync_criteria_from_widgets()
+        max_score = self._field_max_score()
+        rules: list[dict[str, Any]] = []
+        for row in self._criteria_rows:
+            judgment = str(row.get("judgment") or "").strip()
+            if not judgment:
+                continue
+            try:
+                score = int(row.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            if self._is_incorrect(fid, str(row.get("answer_text") or "")):
+                judgment, score = "×", 0
+            judgment, score = self._coerce_judgment_score(judgment, score, max_score)
+            row["judgment"] = judgment
+            row["score"] = score
+            rules.append(
+                {
+                    "answer_text": row["answer_text"],
+                    "judgment": judgment,
+                    "score": score,
+                }
+            )
+        if not rules:
+            h.warn(self, "反映不可", "判定が入った採点基準がありません。")
+            return
+        ask = QMessageBox.question(
+            self,
+            "手動採点へ反映",
+            f"採点基準 {len(rules)} 件の判定・配点を、同じ回答文字列の答案へ上書きします。\n"
+            "手動で付けた例外判定も基準どおりに置き換わります。続行しますか？",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if ask != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            n = self._apply_criteria_grades_to_results(rules)
+            self._render_criteria_table()
+            h.info(
+                self,
+                "反映完了",
+                f"手動採点用データへ {n} 件の判定・配点を反映しました。",
+            )
         except Exception as e:
             h.error(self, "エラー", str(e))
 

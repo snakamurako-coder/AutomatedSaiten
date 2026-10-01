@@ -494,6 +494,18 @@ class SettingsDialog(QDialog):
         )
         form.addRow("手動採点 UI", self.manual_hover_toolbar_check)
 
+        self.manual_auto_link_check = QCheckBox("手動・自動採点を常にリンク")
+        self.manual_auto_link_check.setToolTip(
+            "ON: 手動採点の確定判定を⑧採点基準へ自動反映し、"
+            "⑧の「基準を保存」時に手動採点結果へ自動反映します。\n"
+            "OFF（既定）: 自動同期しません。"
+            "各画面の「採点基準へ反映／から取込」ボタンで明示的に移行します。"
+        )
+        self.manual_auto_link_check.setChecked(
+            bool(cfg.get("manual_auto_grading_link"))
+        )
+        form.addRow("採点リンク", self.manual_auto_link_check)
+
         lay.addLayout(form)
         lay.addStretch()
         self._tabs.addTab(page, "その他")
@@ -585,6 +597,7 @@ class SettingsDialog(QDialog):
             "faint_check_enabled": self.faint_enabled.isChecked(),
             "faint_min_weber_contrast": float(self.faint_weber.value()),
             "manual_grading_hover_toolbar": self.manual_hover_toolbar_check.isChecked(),
+            "manual_auto_grading_link": self.manual_auto_link_check.isChecked(),
         }
 
     def _persist_settings(self) -> bool:
