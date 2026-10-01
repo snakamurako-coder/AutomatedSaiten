@@ -30,6 +30,7 @@ from models.criteria_repo import (
     aggregate_manual_grades_by_answer,
     apply_criteria_rules_to_results,
     get_answer_rows_for_pattern,
+    get_grading_criteria,
     get_outlier_answer_groups,
     import_manual_grades_into_criteria,
     list_manual_criteria_mismatches,
@@ -830,6 +831,7 @@ class Step8Page(QWidget):
 
         みなしやパターン移動で行が消えても、行番号ではなく回答文字列で
         残ったパターン（母体）の判定・配点を維持する。
+        未設定行の表示用プレースホルダ「×」はデータへ書き戻さない。
         """
         t = self.criteria_table
         by_answer: dict[str, dict[str, Any]] = {}
@@ -857,6 +859,14 @@ class Step8Page(QWidget):
         for row in self._criteria_rows:
             ans = str(row.get("answer_text") or "").strip()
             patch = by_answer.get(ans)
+            if not patch:
+                continue
+            existing_j = str(row.get("judgment") or "").strip()
+            widget_j = str(patch.get("judgment") or "").strip()
+            # 未設定のまま表示だけ×になっている行は、プレースホルダで上書きしない
+            if not existing_j and widget_j == "×":
+                patch = {k: v for k, v in patch.items() if k != "judgment"}
+                patch.pop("score", None)
             if patch:
                 row.update(patch)
 
@@ -1053,13 +1063,13 @@ class Step8Page(QWidget):
         try:
             save_ocr_replacements(self.app.active_test_id, fid, self._ocr_replace_rows)
             h.info(self, "保存完了", "OCR置換ルールを保存しました。")
-            except Exception as e:
+        except Exception as e:
             h.error(self, "エラー", str(e))
 
     def _on_apply_ocr(self) -> None:
         fid = self._selected_field_id()
         if not self.app.require_active_test() or not fid:
-                return
+            return
         try:
             res = apply_text_replacements_to_field(
                 self.app.active_test_id, fid, self._ocr_replace_rows
@@ -1118,6 +1128,12 @@ class Step8Page(QWidget):
         fid = self._selected_field_id()
         if not fid:
             return
+        # 手動採点の確定判定を採点基準へ取り込み、表に即表示する
+        if self.app.active_test_id:
+            try:
+                import_manual_grades_into_criteria(self.app.active_test_id, fid)
+            except Exception:
+                pass
         self._criteria_rows = merge_unique_with_criteria(self.app.active_test_id, fid)
         self._sync_checks_to_rows()
         self._render_criteria_table()
@@ -1226,7 +1242,7 @@ class Step8Page(QWidget):
             ans = row.get("answer_text", "")
             if canonical and ans == canonical:
                 deemed_item = make_readonly_item("—", center=True)
-        else:
+            else:
                 deemed_item = make_toggle_item(self._is_deemed(fid, ans))
             incorrect_item = make_toggle_item(self._is_incorrect(fid, ans))
             count_item = make_readonly_item(str(row.get("count", 0)), center=True)
@@ -1248,10 +1264,15 @@ class Step8Page(QWidget):
                     lambda _c=False, r=i: self._open_uniform_feedback_batch_update(r),
                 )
 
-            judgment = self._default_judgment(row)
+            # 未設定は表示上だけ×。データへ書き戻すと手動判定が保存時に消えるため触らない
+            raw_j = str(row.get("judgment") or "").strip()
+            if raw_j in ("〇", "◯"):
+                raw_j = "○"
+            judgment = raw_j if raw_j in ("○", "△", "×") else "×"
             score_val = self._default_score(row, max_score)
-            self._criteria_rows[i]["judgment"] = judgment
-            self._criteria_rows[i]["score"] = score_val
+            if raw_j in ("○", "△", "×"):
+                self._criteria_rows[i]["judgment"] = raw_j
+                self._criteria_rows[i]["score"] = score_val
 
             j_combo = make_judgment_combo(
                 judgment,
@@ -1352,6 +1373,56 @@ class Step8Page(QWidget):
         if not self.app.require_active_test() or not fid:
             return
         self._sync_criteria_from_widgets()
+        # 画面で明示された判定を保持したまま、手動採点の多数決を基準へ取り込み
+        ui_by_ans = {
+            str(r.get("answer_text") or ""): {
+                "judgment": str(r.get("judgment") or "").strip(),
+                "score": r.get("score"),
+                "reason": r.get("reason") or "",
+                "uniform_feedback": r.get("uniform_feedback")
+                if isinstance(r.get("uniform_feedback"), dict)
+                else None,
+            }
+            for r in self._criteria_rows
+            if str(r.get("judgment") or "").strip() in ("○", "△", "×")
+        }
+        try:
+            import_manual_grades_into_criteria(self.app.active_test_id, fid)
+        except Exception:
+            pass
+        saved_by_ans = {
+            str(r.get("answer_text") or ""): r
+            for r in get_grading_criteria(self.app.active_test_id, fid)
+        }
+        for row in self._criteria_rows:
+            ans = str(row.get("answer_text") or "")
+            ui = ui_by_ans.get(ans)
+            if ui and ui.get("judgment"):
+                row["judgment"] = ui["judgment"]
+                row["score"] = ui["score"]
+                row["reason"] = ui.get("reason") or row.get("reason") or ""
+                if ui.get("uniform_feedback") is not None:
+                    row["uniform_feedback"] = ui["uniform_feedback"]
+                continue
+            saved = saved_by_ans.get(ans)
+            if saved and str(saved.get("judgment") or "").strip():
+                row["judgment"] = saved.get("judgment") or ""
+                row["score"] = saved.get("score")
+                if not row.get("reason"):
+                    row["reason"] = saved.get("reason") or ""
+                if row.get("uniform_feedback") is None:
+                    row["uniform_feedback"] = saved.get("uniform_feedback")
+
+        # 手動・既存基準の反映後も未設定の行だけ、保存時に従来どおり × で確定
+        max_score_for_default = self._field_max_score()
+        for row in self._criteria_rows:
+            if str(row.get("judgment") or "").strip() in ("○", "△", "×"):
+                continue
+            row["judgment"] = "×"
+            row["score"] = self._default_score(
+                {**row, "judgment": "×", "score": ""}, max_score_for_default
+            )
+
         # 不正解☑は必ず ×/0 として保存・手動採点へ反映
         incorrect_answers = {
             str(row.get("answer_text") or "")
@@ -1363,7 +1434,26 @@ class Step8Page(QWidget):
         self._sync_checks_to_rows()
 
         max_score = self._field_max_score()
-        rules = []
+        rules_by_ans: dict[str, dict[str, Any]] = {}
+        # 既存DB基準を土台にし、DELETE全消しで手動判定が消えないようにする
+        for ans, saved in saved_by_ans.items():
+            j = str(saved.get("judgment") or "").strip()
+            if j not in ("○", "△", "×"):
+                continue
+            try:
+                sc = int(saved.get("score") or 0)
+            except (TypeError, ValueError):
+                sc = 0
+            rules_by_ans[ans] = {
+                "answer_text": ans,
+                "judgment": j,
+                "score": sc,
+                "reason": saved.get("reason") or "",
+                "uniform_feedback": saved.get("uniform_feedback")
+                if isinstance(saved.get("uniform_feedback"), dict)
+                else None,
+            }
+
         corrected = 0
         for row in self._criteria_rows:
             judgment = str(row.get("judgment") or "").strip()
@@ -1383,17 +1473,16 @@ class Step8Page(QWidget):
                 corrected += 1
             row["judgment"] = judgment
             row["score"] = score
-            rules.append(
-                {
-                    "answer_text": row["answer_text"],
-                    "judgment": judgment,
-                    "score": score,
-                    "reason": row.get("reason") or "",
-                    "uniform_feedback": row.get("uniform_feedback")
-                    if isinstance(row.get("uniform_feedback"), dict)
-                    else None,
-                }
-            )
+            rules_by_ans[ans] = {
+                "answer_text": row["answer_text"],
+                "judgment": judgment,
+                "score": score,
+                "reason": row.get("reason") or "",
+                "uniform_feedback": row.get("uniform_feedback")
+                if isinstance(row.get("uniform_feedback"), dict)
+                else None,
+            }
+        rules = list(rules_by_ans.values())
         if not rules:
             h.warn(self, "保存不可", "判定が入力された行がありません。")
             return
@@ -1402,6 +1491,9 @@ class Step8Page(QWidget):
             graded = 0
             if manual_auto_grading_link_enabled():
                 graded = self._apply_criteria_grades_to_results(rules)
+            # 保存後の表を DB＋手動と揃える
+            self._criteria_rows = merge_unique_with_criteria(self.app.active_test_id, fid)
+            self._sync_checks_to_rows()
             sort_criteria_rows(self._criteria_rows)
             self._render_criteria_table()
             msg = f"採点基準を {len(rules)} 件保存しました。"

@@ -1852,8 +1852,8 @@ class StepManualPage(QWidget):
             self._update_selection_label()
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=self._selected_field_id())
-        # リンクONなら基準だけ多数決更新（個別例外の results は潰さない）
-        if manual_auto_grading_link_enabled() and self.app.active_test_id:
+        # 個別例外を残したまま、採点基準だけ多数決で更新（⑧へ即時反映）
+        if self.app.active_test_id:
             fid = self._selected_field_id()
             if fid:
                 try:
@@ -1876,7 +1876,7 @@ class StepManualPage(QWidget):
             return False
         nj = normalize_judgment(judgment)
         id_set = {int(x) for x in result_ids if int(x or 0)}
-        # 同OCRグループ確認が必要なら、リンク波及を後回し（個別例外採点のため）
+        # 同OCRグループ確認が必要なら、peers への一括波及を後回し（個別例外採点のため）
         group_ans = self._find_group_dialog_answer(id_set, nj)
 
         try:
@@ -1894,13 +1894,8 @@ class StepManualPage(QWidget):
         linked_answers: set[str] = set()
         linked_judgment = nj
         linked_score = score
-        allow_link = (
-            manual_auto_grading_link_enabled()
-            and nj in ("○", "△", "×")
-            and not self._in_group_dialog
-            and group_ans is None
-        )
-        if allow_link:
+        # ○△× は常に⑧採点基準へ即時反映。答案への同OCR波及はリンクON時のみ。
+        if nj in ("○", "△", "×") and not self._in_group_dialog:
             try:
                 sync_res = sync_committed_grades_to_criteria(
                     self.app.active_test_id,
@@ -1909,11 +1904,15 @@ class StepManualPage(QWidget):
                     nj,
                     score,
                     max_score=self._field_max_score(),
+                    propagate_to_results=(
+                        manual_auto_grading_link_enabled() and group_ans is None
+                    ),
                 )
-                linked_answers = set(sync_res.get("answers") or ())
                 if sync_res.get("judgment"):
                     linked_judgment = str(sync_res["judgment"])
                     linked_score = int(sync_res.get("score") or score)
+                if manual_auto_grading_link_enabled() and group_ans is None:
+                    linked_answers = set(sync_res.get("answers") or ())
                     n = max(n, int(sync_res.get("result_count") or 0))
             except Exception as e:
                 h.warn(self, "採点基準への同期失敗", str(e))

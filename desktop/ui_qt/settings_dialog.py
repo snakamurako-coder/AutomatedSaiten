@@ -496,11 +496,11 @@ class SettingsDialog(QDialog):
 
         self.manual_auto_link_check = QCheckBox("手動・自動採点を常にリンク")
         self.manual_auto_link_check.setToolTip(
-            "ON: 手動採点の確定判定を⑧採点基準へ自動反映し、"
-            "⑧の「基準を保存」時に手動採点結果へ自動反映します。"
+            "ON（既定）: 手動採点の○△×を⑧採点基準へ即時反映し、"
+            "⑧の「基準を保存」時に手動採点結果へも反映します。"
             "移行用の取込／反映ボタンと「基準不一致」表示は非表示になります。\n"
-            "OFF（既定）: 自動同期しません。"
-            "各画面の取込／反映ボタンで明示的に移行します。"
+            "OFF: 答案への相互上書きは自動で行いません。"
+            "ただし手動の確定判定は⑧採点基準へは都度反映されます。"
         )
         self.manual_auto_link_check.setChecked(
             bool(cfg.get("manual_auto_grading_link"))

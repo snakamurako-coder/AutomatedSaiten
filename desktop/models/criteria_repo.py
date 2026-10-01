@@ -585,11 +585,12 @@ def sync_committed_grades_to_criteria(
     score: int,
     *,
     max_score: int = 99,
+    propagate_to_results: bool = True,
 ) -> dict[str, Any]:
-    """手動採点で確定した判定を採点基準へ即時反映し、同回答の全答案へ波及する。
+    """手動採点で確定した判定を採点基準へ即時反映する。
 
-    採点基準は回答文字列単位のため、リンク時は同じ OCR テキストの全 results も
-    同じ判定・配点に揃える（一部だけ変えて食い違うのを防ぐ）。
+    既定では同じ OCR テキストの全 results にも波及する。
+    propagate_to_results=False のときは採点基準のみ更新する。
 
     未判定・保留は変更しない。
     """
@@ -610,27 +611,26 @@ def sync_committed_grades_to_criteria(
     if not answers:
         return {"pattern_count": 0, "result_count": 0, "answers": set()}
 
-    merged = merge_unique_with_criteria(test_id, fid)
-    by_ans = {str(r.get("answer_text") or ""): r for r in merged}
+    # 既存基準を落さないよう、保存済み＋今回分をマージして書き戻す
+    existing = {
+        str(r.get("answer_text") or ""): dict(r)
+        for r in get_grading_criteria(test_id, fid)
+    }
     for ans in answers:
-        row = by_ans.get(ans)
-        if row is None:
-            row = {
-                "answer_text": ans,
-                "count": 0,
-                "judgment": j,
-                "score": sc,
-                "reason": "",
-                "uniform_feedback": None,
-            }
-            by_ans[ans] = row
-            merged.append(row)
-        else:
-            row["judgment"] = j
-            row["score"] = sc
+        prev = existing.get(ans) or {
+            "answer_text": ans,
+            "judgment": j,
+            "score": sc,
+            "reason": "",
+            "uniform_feedback": None,
+        }
+        prev["answer_text"] = ans
+        prev["judgment"] = j
+        prev["score"] = sc
+        existing[ans] = prev
 
     rules: list[dict[str, Any]] = []
-    for row in merged:
+    for row in existing.values():
         judgment_s = str(row.get("judgment") or "").strip()
         if not judgment_s:
             continue
@@ -651,11 +651,12 @@ def sync_committed_grades_to_criteria(
             }
         )
     save_grading_criteria(test_id, fid, rules)
-    # 同じ回答文字列の全答案を基準どおりに揃える（リンクの一貫性）
-    propagate_rules = [
-        {"answer_text": ans, "judgment": j, "score": sc} for ans in answers
-    ]
-    result_count = apply_criteria_rules_to_results(test_id, fid, propagate_rules)
+    result_count = 0
+    if propagate_to_results:
+        propagate_rules = [
+            {"answer_text": ans, "judgment": j, "score": sc} for ans in answers
+        ]
+        result_count = apply_criteria_rules_to_results(test_id, fid, propagate_rules)
     return {
         "pattern_count": len(answers),
         "result_count": result_count,

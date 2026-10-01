@@ -65,8 +65,8 @@ DEFAULT_CONFIG: dict = {
     "faint_gamma_default": 2.5,
     # 手動採点: 画像上の操作パネルをホバー展開（既定オフ＝従来レイアウト）
     "manual_grading_hover_toolbar": False,
-    # 手動採点と⑧採点基準を常に双方向同期（既定オフ＝明示ボタンで移行）
-    "manual_auto_grading_link": False,
+    # 手動採点と⑧採点基準を常に双方向同期（既定オン＝リアルタイム反映）
+    "manual_auto_grading_link": True,
     # 手動採点: 表示メタ・判定表示モード（記述欄共通）
     "manual_grading_display": {
         "showId": True,
