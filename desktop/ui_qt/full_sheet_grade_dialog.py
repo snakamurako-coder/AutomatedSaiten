@@ -855,7 +855,7 @@ class FullSheetGradeDialog(QDialog):
                 int(score),
             )
             if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
-                sync_committed_grades_to_criteria(
+                sync_res = sync_committed_grades_to_criteria(
                     self._test_id,
                     field_id,
                     [int(self._row["id"])],
@@ -863,6 +863,9 @@ class FullSheetGradeDialog(QDialog):
                     int(score),
                     max_score=max_score,
                 )
+                if sync_res.get("judgment"):
+                    nj = str(sync_res["judgment"])
+                    score = int(sync_res.get("score") or score)
         except Exception as e:
             self._ocr_label.setText(f"保存失敗: {e}")
             return

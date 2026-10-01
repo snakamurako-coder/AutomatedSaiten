@@ -585,17 +585,20 @@ def sync_committed_grades_to_criteria(
     score: int,
     *,
     max_score: int = 99,
-) -> int:
-    """手動採点で確定した判定を、対象答案の回答文字列の採点基準へ即時反映。
+) -> dict[str, Any]:
+    """手動採点で確定した判定を採点基準へ即時反映し、同回答の全答案へ波及する。
 
-    未判定・保留は基準を変更しない。戻り値は更新した回答パターン数。
+    採点基準は回答文字列単位のため、リンク時は同じ OCR テキストの全 results も
+    同じ判定・配点に揃える（一部だけ変えて食い違うのを防ぐ）。
+
+    未判定・保留は変更しない。
     """
     j, sc = _coerce_judgment_score(judgment, score, max_score)
     if j not in FINAL_JUDGMENTS:
-        return 0
+        return {"pattern_count": 0, "result_count": 0, "answers": set()}
     id_set = {int(x) for x in result_ids if int(x or 0) > 0}
     if not id_set:
-        return 0
+        return {"pattern_count": 0, "result_count": 0, "answers": set()}
     fid = str(field_id or "").strip()
     answers: set[str] = set()
     for row in get_all_results(test_id):
@@ -605,7 +608,7 @@ def sync_committed_grades_to_criteria(
         ans = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
         answers.add(ans)
     if not answers:
-        return 0
+        return {"pattern_count": 0, "result_count": 0, "answers": set()}
 
     merged = merge_unique_with_criteria(test_id, fid)
     by_ans = {str(r.get("answer_text") or ""): r for r in merged}
@@ -648,7 +651,18 @@ def sync_committed_grades_to_criteria(
             }
         )
     save_grading_criteria(test_id, fid, rules)
-    return len(answers)
+    # 同じ回答文字列の全答案を基準どおりに揃える（リンクの一貫性）
+    propagate_rules = [
+        {"answer_text": ans, "judgment": j, "score": sc} for ans in answers
+    ]
+    result_count = apply_criteria_rules_to_results(test_id, fid, propagate_rules)
+    return {
+        "pattern_count": len(answers),
+        "result_count": result_count,
+        "answers": answers,
+        "judgment": j,
+        "score": sc,
+    }
 
 
 def get_field_answer_details(test_id: str, field_id: str) -> list[dict[str, Any]]:

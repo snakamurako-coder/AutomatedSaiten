@@ -1811,9 +1811,13 @@ class StepManualPage(QWidget):
         except Exception as e:
             h.error(self, "保存エラー", str(e))
             return False
+        id_set = {int(x) for x in result_ids if int(x or 0)}
+        linked_answers: set[str] = set()
+        linked_judgment = nj
+        linked_score = score
         if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
             try:
-                sync_committed_grades_to_criteria(
+                sync_res = sync_committed_grades_to_criteria(
                     self.app.active_test_id,
                     fid,
                     result_ids,
@@ -1821,9 +1825,13 @@ class StepManualPage(QWidget):
                     score,
                     max_score=self._field_max_score(),
                 )
+                linked_answers = set(sync_res.get("answers") or ())
+                if sync_res.get("judgment"):
+                    linked_judgment = str(sync_res["judgment"])
+                    linked_score = int(sync_res.get("score") or score)
+                    n = max(n, int(sync_res.get("result_count") or 0))
             except Exception as e:
                 h.warn(self, "採点基準への同期失敗", str(e))
-        id_set = set(result_ids)
 
         newly_graded_texts = set()
         if not getattr(self, "_in_group_dialog", False) and nj:
@@ -1834,10 +1842,15 @@ class StepManualPage(QWidget):
                         if ans:
                             newly_graded_texts.add(ans)
 
+        # リンク時は同回答文字列の表示中タイルも判定・配点を揃える
         for item in self._items:
-            if item.get("result_id") in id_set:
-                item["judgment"] = nj
-                item["score"] = score
+            rid = int(item.get("result_id") or 0)
+            ans = str((item.get("row") or {}).get("answer_text") or "").strip() or "なし"
+            if rid in id_set or (linked_answers and ans in linked_answers):
+                item["judgment"] = linked_judgment
+                item["score"] = linked_score
+                if linked_answers and ans in linked_answers and rid:
+                    id_set.add(rid)
         mismatch_filter_on = bool(
             self._filter_btns.get("基準不一致")
             and self._filter_btns["基準不一致"].isChecked()
@@ -1848,7 +1861,7 @@ class StepManualPage(QWidget):
         elif self._filter_snapshot_ids is not None:
             self._filter_snapshot_ids |= id_set
 
-        # 並び替え・印字マーク時のみ再構築。それ以外は枠/バッジ更新だけでスクロール維持
+        # 並び替え・印字マーク時のみ再構築。リンク波及はデータ更新＋枠/バッジで足りる
         needs_rebuild = (
             self._print_mark_mode
             or self._sort_mode in ("judgment_file", "judgment_id")
