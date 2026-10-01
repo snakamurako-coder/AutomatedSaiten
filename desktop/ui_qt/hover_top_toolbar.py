@@ -7,6 +7,8 @@ from typing import Callable
 from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QApplication,
+    QComboBox,
     QFrame,
     QGraphicsDropShadowEffect,
     QLabel,
@@ -69,14 +71,78 @@ class HoverTopToolbar(QWidget):
         self._content_host.setMouseTracking(True)
         self._grabber.setMouseTracking(True)
 
+        app = QApplication.instance()
+        if app is not None:
+            app.focusChanged.connect(self._on_focus_changed)
+
     def enterEvent(self, event) -> None:  # noqa: N802
         self._collapse_timer.stop()
         self._expand()
         super().enterEvent(event)
 
     def leaveEvent(self, event) -> None:  # noqa: N802
-        self._collapse_timer.start(_COLLAPSE_MS)
+        # プルダウンや入力中はマウスが外れても格納しない
+        if self._should_stay_expanded():
+            self._collapse_timer.stop()
+        else:
+            self._collapse_timer.start(_COLLAPSE_MS)
         super().leaveEvent(event)
+
+    def _on_focus_changed(self, _old: QWidget | None, new: QWidget | None) -> None:
+        if not self._expanded:
+            return
+        if new is not None and self.isAncestorOf(new):
+            self._collapse_timer.stop()
+            return
+        if self._should_stay_expanded():
+            self._collapse_timer.stop()
+        else:
+            self._collapse_timer.start(_COLLAPSE_MS)
+
+    def _owns_widget(self, widget: QWidget | None) -> bool:
+        if widget is None:
+            return False
+        return widget is self or self.isAncestorOf(widget)
+
+    def _popup_belongs_here(self, popup: QWidget | None) -> bool:
+        if popup is None:
+            return False
+        if self._owns_widget(popup):
+            return True
+        parent = popup.parentWidget()
+        while parent is not None:
+            if self._owns_widget(parent):
+                return True
+            parent = parent.parentWidget()
+        # QComboBox のリストは別ウィンドウになることがある
+        for combo in self.findChildren(QComboBox):
+            view = combo.view()
+            if view is None:
+                continue
+            if popup is view or popup is view.window() or view.isAncestorOf(popup):
+                return True
+            if combo.isAncestorOf(popup):
+                return True
+        return False
+
+    def _should_stay_expanded(self) -> bool:
+        if self.underMouse() or self._content_host.underMouse() or self._grabber.underMouse():
+            return True
+        app = QApplication.instance()
+        if app is None:
+            return False
+        fw = app.focusWidget()
+        if self._owns_widget(fw):
+            return True
+        # コンボのポップアップ表示中
+        for combo in self.findChildren(QComboBox):
+            view = combo.view()
+            if view is not None and view.isVisible():
+                return True
+        popup = app.activePopupWidget()
+        if self._popup_belongs_here(popup):
+            return True
+        return False
 
     def _notify_layout(self) -> None:
         self.adjustSize()
@@ -94,7 +160,7 @@ class HoverTopToolbar(QWidget):
     def _collapse(self) -> None:
         if not self._expanded:
             return
-        if self.underMouse() or self._content_host.underMouse() or self._grabber.underMouse():
+        if self._should_stay_expanded():
             return
         self._expanded = False
         self._content_host.hide()

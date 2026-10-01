@@ -96,6 +96,27 @@ from ui_qt.table_cells import (
 )
 
 
+# 画像選択レベル色（1点目〜）: 紫→青→緑→黄→橙→赤…
+_SELECTION_LEVEL_COLORS: list[tuple[str, str]] = [
+    ("#7c3aed", "#f3e8ff"),  # 紫
+    ("#2563eb", "#dbeafe"),  # 青
+    ("#16a34a", "#dcfce7"),  # 緑
+    ("#ca8a04", "#fef9c3"),  # 黄
+    ("#ea580c", "#ffedd5"),  # 橙
+    ("#dc2626", "#fee2e2"),  # 赤
+    ("#0891b2", "#cffafe"),  # シアン（7点以上）
+    ("#db2777", "#fce7f3"),  # ピンク
+]
+
+
+def _selection_level_colors(level: int) -> tuple[str, str] | None:
+    """level 1..N → (border, soft bg)。0 以下は未選択。"""
+    if level <= 0:
+        return None
+    idx = (level - 1) % len(_SELECTION_LEVEL_COLORS)
+    return _SELECTION_LEVEL_COLORS[idx]
+
+
 class _PaneHeightGrip(QWidget):
     """欄の右下グラバー。掴むと高さを2倍にし、離した位置で確定する。"""
 
@@ -166,7 +187,8 @@ class Step8Page(QWidget):
         self._outlier_flat_rows: list[dict[str, Any]] = []
         self._crop_grid_results: list[dict[str, Any]] = []
         self._ink_stacks: list[CropInkImageStack] = []
-        self._draw_selected_ids: set[int] = set()
+        # result_id → 選択レベル(1..配点満点)。無し＝未選択
+        self._selection_levels: dict[int, int] = {}
         # 他解答パターンへ移す: None | {"kind": "selected"|"unselected", "result_ids": set[int]}
         self._pattern_move_pending: dict[str, Any] | None = None
 
@@ -429,7 +451,7 @@ class Step8Page(QWidget):
         lay.addWidget(
             h.caption_label(
                 "「みなし」「不正解」「表示」列はクリックで切替。"
-                "画像タイルをクリックで個別選択（語順違いなどを他パターンへ移すとき）。"
+                "画像タップで配点段階の色を循環（紫→青→緑→…→解除。段階数＝配点満点）。"
                 "みなしは表の列で切替えます。"
             )
         )
@@ -635,16 +657,31 @@ class Step8Page(QWidget):
         self._sync_checks_to_rows()
         self._refresh_check_views()
 
+    def _draw_selected_ids(self) -> set[int]:
+        """選択レベルが付いている答案 ID（描画・パターン移動用）。"""
+        return {rid for rid, lv in self._selection_levels.items() if lv > 0}
+
+    def _selection_level_of(self, result_id: int) -> int:
+        return int(self._selection_levels.get(int(result_id), 0) or 0)
+
+    def _cycle_selection_level(self, result_id: int) -> int:
+        """配点満点ぶんの色段階＋解除をループ。戻り値は新しいレベル（0=解除）。"""
+        rid = int(result_id)
+        max_score = max(1, self._field_max_score())
+        cur = self._selection_level_of(rid)
+        nxt = cur + 1
+        if nxt > max_score:
+            self._selection_levels.pop(rid, None)
+            return 0
+        self._selection_levels[rid] = nxt
+        return nxt
+
     def _on_crop_image_clicked(self, fid: str, result_id: int, ans: str) -> None:
         del fid, ans  # 個別選択へ。みなしは表の列で切替
         ctrl = getattr(self.app, "palette_controller", None)
         if ctrl is not None:
             ctrl.set_active_result_id(result_id)
-        # 画像タイルクリックは常に個別選択（描画・他パターン移動の共通）
-        if result_id in self._draw_selected_ids:
-            self._draw_selected_ids.discard(result_id)
-        else:
-            self._draw_selected_ids.add(result_id)
+        self._cycle_selection_level(result_id)
         # 全再描画するとスクロールが最上端に戻るため、枠色だけ更新する
         self._apply_crop_tile_selection_styles()
         self._apply_criteria_table_styles()
@@ -711,20 +748,26 @@ class Step8Page(QWidget):
             if patch:
                 row.update(patch)
 
-    def _selected_answer_texts(self) -> set[str]:
-        """画像タイルで紫選択中の回答文字列。"""
-        ids = self._draw_selected_ids
-        if not ids:
-            return set()
-        texts: set[str] = set()
+    def _selected_answer_level_map(self) -> dict[str, int]:
+        """回答文字列 → その中で最も高い選択レベル。"""
+        levels: dict[str, int] = {}
+        if not self._selection_levels:
+            return levels
+
+        def _note(ans: str, rid: int) -> None:
+            lv = self._selection_level_of(rid)
+            if lv <= 0:
+                return
+            key = str(ans or "")
+            if lv > levels.get(key, 0):
+                levels[key] = lv
+
         for item in self._crop_grid_results:
             row = item.get("row") or {}
-            if int(row.get("rowIndex") or 0) in ids:
-                texts.add(str(row.get("answer_text") or ""))
+            _note(str(row.get("answer_text") or ""), int(row.get("rowIndex") or 0))
         for row in self._outlier_flat_rows:
-            if int(row.get("rowIndex") or 0) in ids:
-                texts.add(str(row.get("answer_text") or ""))
-        return texts
+            _note(str(row.get("answer_text") or ""), int(row.get("rowIndex") or 0))
+        return levels
 
     def _paint_item_row_bg(
         self,
@@ -746,7 +789,7 @@ class Step8Page(QWidget):
     def _apply_criteria_table_styles(self) -> None:
         fid = self._selected_field_id() or ""
         canonical = self._canonical()
-        selected_answers = self._selected_answer_texts()
+        answer_levels = self._selected_answer_level_map()
         t = self.criteria_table
         t.blockSignals(True)
         for i, row in enumerate(self._criteria_rows):
@@ -763,8 +806,9 @@ class Step8Page(QWidget):
             if incorrect_item is not None:
                 set_toggle_checked(incorrect_item, self._is_incorrect(fid, ans))
 
-            if ans in selected_answers:
-                bg = COLORS["selection_soft"]
+            sel_colors = _selection_level_colors(answer_levels.get(str(ans), 0))
+            if sel_colors is not None:
+                bg = sel_colors[1]
             elif row.get("deemed") or self._is_deemed(fid, ans):
                 bg = COLORS["accent_soft"]
             elif row.get("incorrect") or self._is_incorrect(fid, ans):
@@ -775,15 +819,15 @@ class Step8Page(QWidget):
         t.blockSignals(False)
 
     def _apply_outlier_row_highlights(self) -> None:
-        """外れ値一覧で、画像選択中の同一答案行を紫にする。"""
+        """外れ値一覧で、画像選択中の同一答案行を同じ段階色にする。"""
         if not hasattr(self, "outlier_table"):
             return
-        ids = self._draw_selected_ids
         t = self.outlier_table
         t.blockSignals(True)
         for i, row in enumerate(self._outlier_flat_rows):
             rid = int(row.get("rowIndex") or 0)
-            bg = COLORS["selection_soft"] if rid and rid in ids else None
+            colors = _selection_level_colors(self._selection_level_of(rid)) if rid else None
+            bg = colors[1] if colors else None
             self._paint_item_row_bg(t, i, (0, 1, 2, 3, 4, 5, 6), bg)
         t.blockSignals(False)
 
@@ -817,7 +861,7 @@ class Step8Page(QWidget):
         self._outlier_groups = []
         self._outlier_flat_rows = []
         self._crop_grid_results = []
-        self._draw_selected_ids.clear()
+        self._selection_levels.clear()
         self._load_field_state()
         self._aggregate()
         self._render_outlier_table()
@@ -1357,7 +1401,7 @@ class Step8Page(QWidget):
                 rid = int((item.get("row") or {}).get("rowIndex") or 0)
                 if rid <= 0:
                     continue
-                is_sel = rid in self._draw_selected_ids
+                is_sel = rid in self._draw_selected_ids()
                 if selected == is_sel:
                     ids.append(rid)
             return ids
@@ -1460,7 +1504,7 @@ class Step8Page(QWidget):
             h.error(self, "移動エラー", str(e))
             return
         self._cancel_pattern_move_mode()
-        self._draw_selected_ids.clear()
+        self._selection_levels.clear()
         self._aggregate()
         self._on_fetch_outliers(silent=True)
         # 移動後は移動先パターンの画像を再表示
@@ -1551,7 +1595,7 @@ class Step8Page(QWidget):
         return self._selected_field_id() or ""
 
     def palette_draw_selected_ids(self) -> list[int]:
-        return list(self._draw_selected_ids)
+        return sorted(self._draw_selected_ids())
 
     def palette_set_pen_ui_locked(self, locked: bool) -> None:
         """ペンON＋描画選択ありのときズーム行を無効化（外れ値表より上は可）。"""
@@ -1567,7 +1611,7 @@ class Step8Page(QWidget):
                 continue
             row = it.get("row") or {}
             rid = int(row.get("rowIndex") or 0)
-            if rid not in self._draw_selected_ids:
+            if rid not in self._draw_selected_ids():
                 continue
             items.append(
                 {
@@ -1708,8 +1752,12 @@ class Step8Page(QWidget):
         self.crop_panel.clear_tiles()
         self._ink_stacks = []
 
-    def _crop_tile_frame_style(self, *, selected: bool, deemed: bool) -> str:
-        if selected or deemed:
+    def _crop_tile_frame_style(self, *, level: int = 0, deemed: bool = False) -> str:
+        colors = _selection_level_colors(level)
+        if colors is not None:
+            border, bg = colors
+            border_w = 3
+        elif deemed:
             border = COLORS["selection"]
             bg = COLORS["selection_soft"]
             border_w = 3
@@ -1740,7 +1788,7 @@ class Step8Page(QWidget):
             ans = ans_by_id.get(rid, "")
             tile.setStyleSheet(
                 self._crop_tile_frame_style(
-                    selected=rid in self._draw_selected_ids,
+                    level=self._selection_level_of(rid),
                     deemed=self._is_deemed(fid, ans),
                 )
             )
@@ -1754,7 +1802,7 @@ class Step8Page(QWidget):
 
         self._clear_crop_grid()
         if not self._crop_grid_results:
-            self._draw_selected_ids.clear()
+            self._selection_levels.clear()
             self.crop_panel.set_message(
                 "「選択を画像表示」または外れ値一覧の「1枚」で回答欄画像を表示します"
             )
@@ -1771,7 +1819,9 @@ class Step8Page(QWidget):
             for item in self._crop_grid_results
             if item.get("ok")
         }
-        self._draw_selected_ids &= visible_ids
+        self._selection_levels = {
+            rid: lv for rid, lv in self._selection_levels.items() if rid in visible_ids
+        }
 
         fid = self._selected_field_id() or ""
         zoom = max(30, min(400, self.crop_controls.zoom_value())) / 100.0
@@ -1822,9 +1872,11 @@ class Step8Page(QWidget):
         ans = row.get("answer_text") or ""
         deemed = self._is_deemed(fid, ans)
         row_index = int(row.get("rowIndex") or 0)
-        draw_sel = row_index in self._draw_selected_ids
         tile.setStyleSheet(
-            self._crop_tile_frame_style(selected=draw_sel, deemed=deemed)
+            self._crop_tile_frame_style(
+                level=self._selection_level_of(row_index),
+                deemed=deemed,
+            )
         )
         tile.setCursor(Qt.PointingHandCursor)
 
