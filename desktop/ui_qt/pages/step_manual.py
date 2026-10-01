@@ -96,17 +96,31 @@ def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
 
 
 class GroupGradeDialog(QDialog):
-    """同一OCR文字列の回答を個別に確認・採点する一時ウィンドウ。"""
+    """同じOCRの他回答へ、直前の判定を付けるか確認する一時ウィンドウ。"""
 
-    def __init__(self, parent: "StepManualPage", answer_text: str, group_items: list[dict]):
+    def __init__(
+        self,
+        parent: "StepManualPage",
+        answer_text: str,
+        group_items: list[dict],
+        *,
+        judgment: str,
+        score: int,
+    ):
         super().__init__(parent)
-        self.setWindowTitle(f"同回答グループの個別確認（OCR: {answer_text}）")
+        self.setWindowTitle(f"同じ判定でよいか確認（OCR: {answer_text}）")
         self.setModal(True)
         self.resize(900, 640)
         self.page = parent
         self.answer_text = answer_text
         self.items = group_items
-        self._selected_ids: set[int] = set()
+        self._proposed_judgment = normalize_judgment(judgment) or judgment
+        self._proposed_score = int(score)
+        self._selected_ids: set[int] = {
+            int(i.get("result_id") or 0)
+            for i in group_items
+            if int(i.get("result_id") or 0)
+        }
         self._ink_stacks: list = []
 
         lay = QVBoxLayout(self)
@@ -114,18 +128,40 @@ class GroupGradeDialog(QDialog):
         lay.setSpacing(8)
 
         tip = h.caption_label(
-            "同じOCR文字列の答案です。誤認識の混在があればタイルを選んで個別に判定してください。"
-            "（ここでの個別判定は回答文字列を書き換えません）"
+            f"⑧採点基準の「{answer_text}」は {self._proposed_judgment}"
+            f"（{self._proposed_score}点）にしました。"
+            "下は同じOCRの他の回答です。同じ判定でよいものは選択したまま"
+            "「選択中に同じ判定」を押してください。"
+            "違う答案は選んで ○△× で個別に付けられます。"
+            "閉じるだけなら他の回答は変更しません。"
         )
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
         ctrl_lay = QHBoxLayout()
-        info_lbl = QLabel(f"OCRテキスト: <b>{answer_text}</b> （{len(group_items)} 枚）")
+        info_lbl = QLabel(
+            f"OCRテキスト: <b>{answer_text}</b>"
+            f" （他 {len(group_items)} 枚 / 提案 {self._proposed_judgment}"
+            f" {self._proposed_score}点）"
+        )
         info_lbl.setTextFormat(Qt.RichText)
         ctrl_lay.addWidget(info_lbl)
         ctrl_lay.addStretch()
+        btn_all = QPushButton("すべて選択")
+        btn_none = QPushButton("選択解除")
+        btn_same = QPushButton(
+            f"選択中に同じ判定（{self._proposed_judgment} {self._proposed_score}点）"
+        )
+        btn_all.clicked.connect(self._select_all)
+        btn_none.clicked.connect(self._select_none)
+        btn_same.clicked.connect(self._apply_same_to_selected)
+        ctrl_lay.addWidget(btn_all)
+        ctrl_lay.addWidget(btn_none)
+        ctrl_lay.addWidget(btn_same)
+        lay.addLayout(ctrl_lay)
 
+        mark_lay = QHBoxLayout()
+        mark_lay.addWidget(QLabel("個別に変える:"))
         btn_maru = QPushButton("○ (1)")
         btn_sankaku = QPushButton("△ (2)")
         btn_batsu = QPushButton("× (3)")
@@ -136,10 +172,11 @@ class GroupGradeDialog(QDialog):
         btn_clear.clicked.connect(lambda: self._apply_judgment(""))
         for btn in (btn_maru, btn_sankaku, btn_batsu, btn_clear):
             self.page._configure_judgment_mark_button(btn)
-            ctrl_lay.addWidget(btn)
+            mark_lay.addWidget(btn)
         if self.page._field_max_score() <= 1:
             btn_sankaku.hide()
-        lay.addLayout(ctrl_lay)
+        mark_lay.addStretch()
+        lay.addLayout(mark_lay)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
@@ -174,6 +211,37 @@ class GroupGradeDialog(QDialog):
         else:
             self._selected_ids.add(rid)
         self._apply_selection_styles()
+
+    def _select_all(self) -> None:
+        self._selected_ids = {
+            int(i.get("result_id") or 0)
+            for i in self.items
+            if int(i.get("result_id") or 0)
+        }
+        self._apply_selection_styles()
+
+    def _select_none(self) -> None:
+        self._selected_ids.clear()
+        self._apply_selection_styles()
+
+    def _apply_same_to_selected(self) -> None:
+        if not self._selected_ids:
+            h.warn(self, "未選択", "同じ判定を付ける画像を選択してください。")
+            return
+        ids = list(self._selected_ids)
+        self._selected_ids.clear()
+        was_in_dialog = getattr(self.page, "_in_group_dialog", False)
+        self.page._in_group_dialog = True
+        try:
+            self.page._commit_grades(
+                ids,
+                self._proposed_judgment,
+                self._proposed_score,
+                silent=True,
+            )
+        finally:
+            self.page._in_group_dialog = was_in_dialog
+        self._render_grid()
 
     def _apply_judgment(self, judgment: str) -> None:
         if not self._selected_ids:
@@ -1474,26 +1542,33 @@ class StepManualPage(QWidget):
             h.info(self, "再読込", "自動採点・手動採点で共有している判定を DB から読み直しました。")
 
     def _on_export_manual_to_criteria(self) -> None:
-        """この記述欄の手動採点を多数決で採点基準へ反映（⑧へ）。"""
+        """判定が揃っている手動採点だけを採点基準へ反映する（多数決しない）。"""
         fid = self._selected_field_id()
         if not self.app.require_active_test() or not fid:
             return
         preview = aggregate_manual_grades_by_answer(self.app.active_test_id, fid)
-        if not preview.get("winner_count"):
-            h.warn(
-                self,
-                "反映不可",
-                "確定判定（○△×）が付いた回答パターンがありません。",
-            )
+        if not preview.get("uniform_count"):
+            if preview.get("mixed_count"):
+                h.warn(
+                    self,
+                    "反映不可",
+                    "同じOCRで判定・配点が食い違っています。採点基準は変更しません。",
+                )
+            else:
+                h.warn(
+                    self,
+                    "反映不可",
+                    "確定判定（○△×）が付いた回答パターンがありません。",
+                )
             return
         lines = [
-            f"この記述欄の手動採点から {preview['winner_count']} 件を採点基準へ保存します。",
-            "同じ回答文字列は多数決（○△×）で決めます。票割れは既存基準を維持します。",
+            f"判定が揃っている {preview['uniform_count']} 件を採点基準へ写します。",
+            "食い違う回答パターンの採点基準は変更しません。",
         ]
-        if preview.get("tied_count"):
-            lines.append(f"票割れ: {preview['tied_count']} 件")
-            for p in (preview.get("tied") or [])[:5]:
-                lines.append(f"・{p.get('answer_text')}: {p.get('vote_summary')}")
+        if preview.get("mixed_count"):
+            lines.append(f"食い違いのため見送る: {preview['mixed_count']} 件")
+            for p in (preview.get("mixed") or [])[:5]:
+                lines.append(f"・{p.get('answer_text')}: {p.get('grade_summary')}")
         ask = QMessageBox.question(
             self,
             "採点基準へ反映",
@@ -1506,8 +1581,8 @@ class StepManualPage(QWidget):
         try:
             res = import_manual_grades_into_criteria(self.app.active_test_id, fid)
             msg = f"採点基準へ {res.get('saved_count', 0)} 件を反映しました。"
-            if res.get("tied_count"):
-                msg += f"\n票割れで見送ったパターン: {res['tied_count']} 件"
+            if res.get("mixed_count"):
+                msg += f"\n食い違いで変えなかったパターン: {res['mixed_count']} 件"
             h.info(self, "反映完了", msg)
         except Exception as e:
             h.error(self, "エラー", str(e))
@@ -1814,37 +1889,88 @@ class StepManualPage(QWidget):
         key = str(answer_text or "").strip() or "なし"
         return [i for i in self._items if self._item_answer_text(i) == key]
 
-    def _find_group_dialog_answer(
-        self, result_ids: set[int], judgment: str
-    ) -> str | None:
-        """未採点→確定判定した答案のうち、同OCRが複数ある回答文字列を返す。"""
+    def _answers_needing_peer_check(
+        self, result_ids: set[int], judgment: str, score: int
+    ) -> list[str]:
+        """今付けた回答以外に、同じ判定・配点でない同OCRがある回答文字列。"""
         if self._in_group_dialog:
-            return None
+            return []
         nj = normalize_judgment(judgment)
         if nj not in ("○", "△", "×"):
-            return None
+            return []
+        try:
+            target_score = int(score)
+        except (TypeError, ValueError):
+            target_score = 0
+        found: list[str] = []
+        seen: set[str] = set()
         for item in self._items:
             rid = int(item.get("result_id") or 0)
             if rid not in result_ids:
                 continue
-            if normalize_judgment(item.get("judgment")):
-                continue  # もともと未採点ではなかった
             ans = self._item_answer_text(item)
-            if len(self._peer_items_for_answer(ans)) > 1:
-                return ans
-        return None
+            if ans in seen:
+                continue
+            others = [
+                i
+                for i in self._peer_items_for_answer(ans)
+                if int(i.get("result_id") or 0) not in result_ids
+            ]
+            if not others:
+                continue
+            needs = False
+            for other in others:
+                oj = normalize_judgment(other.get("judgment"))
+                try:
+                    os = int(other.get("score") or 0)
+                except (TypeError, ValueError):
+                    os = 0
+                if oj != nj or os != target_score:
+                    needs = True
+                    break
+            if needs:
+                seen.add(ans)
+                found.append(ans)
+        return found
 
-    def _open_group_grade_dialog(self, answer_text: str) -> None:
-        group_items = self._peer_items_for_answer(answer_text)
-        if len(group_items) <= 1:
+    def _push_criteria_to_step8(
+        self, field_id: str, answers: set[str], judgment: str, score: int
+    ) -> None:
+        pages = getattr(self.app, "pages", None)
+        step8 = pages.get(8) if isinstance(pages, dict) else None
+        fn = getattr(step8, "apply_live_criteria_grades", None)
+        if fn is None:
             return
-        self._in_group_dialog = True
-        try:
-            dlg = GroupGradeDialog(self, answer_text, group_items)
-            dlg.exec()
-        finally:
-            self._in_group_dialog = False
-        # 個別判定後の表示を本体へ反映
+        for ans in answers:
+            fn(field_id, ans, judgment, score)
+
+    def _open_peer_checks(
+        self,
+        answers: list[str],
+        judgment: str,
+        score: int,
+        exclude_ids: set[int],
+    ) -> None:
+        for ans in answers:
+            others = [
+                i
+                for i in self._peer_items_for_answer(ans)
+                if int(i.get("result_id") or 0) not in exclude_ids
+            ]
+            if not others:
+                continue
+            self._in_group_dialog = True
+            try:
+                dlg = GroupGradeDialog(
+                    self,
+                    ans,
+                    others,
+                    judgment=judgment,
+                    score=score,
+                )
+                dlg.exec()
+            finally:
+                self._in_group_dialog = False
         if self._print_mark_mode or self._sort_mode in ("judgment_file", "judgment_id"):
             self._render_grid(preserve_scroll=True)
         else:
@@ -1852,14 +1978,6 @@ class StepManualPage(QWidget):
             self._update_selection_label()
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=self._selected_field_id())
-        # 個別例外を残したまま、採点基準だけ多数決で更新（⑧へ即時反映）
-        if self.app.active_test_id:
-            fid = self._selected_field_id()
-            if fid:
-                try:
-                    import_manual_grades_into_criteria(self.app.active_test_id, fid)
-                except Exception as e:
-                    h.warn(self, "採点基準への同期失敗", str(e))
 
     def _commit_grades(
         self,
@@ -1876,8 +1994,9 @@ class StepManualPage(QWidget):
             return False
         nj = normalize_judgment(judgment)
         id_set = {int(x) for x in result_ids if int(x or 0)}
-        # 同OCRグループ確認が必要なら、peers への一括波及を後回し（個別例外採点のため）
-        group_ans = self._find_group_dialog_answer(id_set, nj)
+        # 当該回答の基準反映後に、同OCRの他回答を確認する（先に一括では付けない）
+        graded_ids = set(id_set)
+        peer_answers = self._answers_needing_peer_check(graded_ids, nj, score)
 
         try:
             n = update_results_field_grades(
@@ -1894,8 +2013,10 @@ class StepManualPage(QWidget):
         linked_answers: set[str] = set()
         linked_judgment = nj
         linked_score = score
-        # ○△× は常に⑧採点基準へ即時反映。答案への同OCR波及はリンクON時のみ。
+        # 当該回答のパターンだけ先に⑧へ同じ判定・配点。他回答への波及は確認後。
+        # 確認ダイアログ内の個別変更は基準（パターン）を上書きしない。
         if nj in ("○", "△", "×") and not self._in_group_dialog:
+            propagate = manual_auto_grading_link_enabled() and not peer_answers
             try:
                 sync_res = sync_committed_grades_to_criteria(
                     self.app.active_test_id,
@@ -1904,15 +2025,18 @@ class StepManualPage(QWidget):
                     nj,
                     score,
                     max_score=self._field_max_score(),
-                    propagate_to_results=(
-                        manual_auto_grading_link_enabled() and group_ans is None
-                    ),
+                    propagate_to_results=propagate,
                 )
                 if sync_res.get("judgment"):
                     linked_judgment = str(sync_res["judgment"])
                     linked_score = int(sync_res.get("score") or score)
-                if manual_auto_grading_link_enabled() and group_ans is None:
-                    linked_answers = set(sync_res.get("answers") or ())
+                criteria_answers = set(sync_res.get("answers") or ())
+                if criteria_answers:
+                    self._push_criteria_to_step8(
+                        fid, criteria_answers, linked_judgment, linked_score
+                    )
+                if propagate:
+                    linked_answers = criteria_answers
                     n = max(n, int(sync_res.get("result_count") or 0))
             except Exception as e:
                 h.warn(self, "採点基準への同期失敗", str(e))
@@ -1957,9 +2081,13 @@ class StepManualPage(QWidget):
         if needs_rebuild and (saved_v or saved_h):
             self._schedule_scroll_restore(self.crop_scroll, saved_v, saved_h)
 
-        if group_ans is not None:
-            # イベント処理後にモーダル表示（クリックハンドラ中のネストを避ける）
-            QTimer.singleShot(0, lambda a=group_ans: self._open_group_grade_dialog(a))
+        if peer_answers:
+            QTimer.singleShot(
+                0,
+                lambda a=list(peer_answers), j=linked_judgment, s=linked_score, ids=set(graded_ids): (
+                    self._open_peer_checks(a, j, s, ids)
+                ),
+            )
         elif not silent:
             if not nj:
                 h.info(self, "反映完了", f"{n} 件の判定を解除しました（未判定）。")

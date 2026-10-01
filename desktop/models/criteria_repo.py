@@ -445,7 +445,11 @@ def aggregate_manual_grades_by_answer(
     test_id: str,
     field_id: str,
 ) -> dict[str, Any]:
-    """手動採点の判定を回答文字列ごとに多数決で集約（○△×のみ。?・未採点は票外）。"""
+    """回答文字列ごとに、確定判定が一つに揃っているかを見る。多数決はしない。
+
+    ○△×のみ見る。?・未採点は対象外。
+    揃っているものだけ criteria へ写せる。食い違うものは基準を決めない。
+    """
     init_db()
     fid = str(field_id or "").strip()
     buckets: dict[str, Counter[tuple[str, int]]] = defaultdict(Counter)
@@ -463,85 +467,68 @@ def aggregate_manual_grades_by_answer(
         j, sc = _coerce_judgment_score(j, sc)
         buckets[ans][(j, sc)] += 1
 
-    existing = {
-        str(r.get("answer_text") or ""): r for r in get_grading_criteria(test_id, fid)
-    }
     patterns: list[dict[str, Any]] = []
     for ans, counter in sorted(buckets.items(), key=lambda kv: (-sum(kv[1].values()), kv[0])):
         if not counter:
             continue
-        ranked = counter.most_common()
-        top_votes = ranked[0][1]
-        leaders = [pair for pair, n in ranked if n == top_votes]
-        tied = len(leaders) > 1
-        chosen: tuple[str, int] | None = None
-        if not tied:
-            chosen = leaders[0]
-        else:
-            prev = existing.get(ans)
-            if prev:
-                pj = normalize_judgment(prev.get("judgment"))
-                try:
-                    ps = int(prev.get("score") or 0)
-                except (TypeError, ValueError):
-                    ps = 0
-                if pj in FINAL_JUDGMENTS:
-                    pj, ps = _coerce_judgment_score(pj, ps)
-                    if (pj, ps) in leaders:
-                        chosen = (pj, ps)
-                        tied = False
-        vote_summary = " / ".join(
+        ranked = list(counter.items())
+        grade_summary = " / ".join(
             f"{j}{sc}点×{n}" for (j, sc), n in ranked[:4]
         )
+        uniform = len(ranked) == 1
+        chosen = ranked[0][0] if uniform else None
         patterns.append(
             {
                 "answer_text": ans,
                 "judgment": chosen[0] if chosen else "",
                 "score": chosen[1] if chosen else "",
-                "votes": top_votes,
                 "total_count": int(totals.get(ans, 0)),
                 "graded_count": int(sum(counter.values())),
-                "tied": tied,
-                "vote_summary": vote_summary,
-                "has_winner": chosen is not None,
+                "uniform": uniform,
+                "mixed": not uniform,
+                "grade_summary": grade_summary,
             }
         )
 
-    winners = [p for p in patterns if p.get("has_winner")]
-    tied_list = [p for p in patterns if p.get("tied")]
+    uniform_list = [p for p in patterns if p.get("uniform")]
+    mixed_list = [p for p in patterns if p.get("mixed")]
     return {
         "patterns": patterns,
-        "winners": winners,
-        "tied": tied_list,
-        "winner_count": len(winners),
-        "tied_count": len(tied_list),
+        "uniform": uniform_list,
+        "mixed": mixed_list,
+        "uniform_count": len(uniform_list),
+        "mixed_count": len(mixed_list),
     }
 
 
 def import_manual_grades_into_criteria(
     test_id: str,
     field_id: str,
+    *,
+    only_missing: bool = False,
 ) -> dict[str, Any]:
-    """手動採点の多数決を採点基準へ保存（results へは書き戻さない）。
+    """判定が揃っている手動採点だけを採点基準へ保存する（多数決しない）。
 
-    reason / uniform_feedback は既存基準を維持。票割れで未決定の回答は既存を残す。
+    同じ回答文字列で判定・配点が食い違う場合は、そのパターンの基準を変えない。
+    reason / uniform_feedback は既存基準を維持。
+    only_missing=True のときは、既に判定があるパターンは上書きしない。
     """
     agg = aggregate_manual_grades_by_answer(test_id, field_id)
-    winners = {
-        str(p["answer_text"]): p for p in agg["winners"] if p.get("has_winner")
+    uniform = {
+        str(p["answer_text"]): p for p in agg["uniform"] if p.get("uniform")
     }
-    if not winners:
+    if not uniform:
         return {**agg, "saved_count": 0, "rules": []}
 
-    # 現在のユニーク回答＋既存基準を土台に、勝者だけ判定を上書き
     merged = merge_unique_with_criteria(test_id, field_id)
     by_ans = {str(r.get("answer_text") or ""): r for r in merged}
-    for ans, win in winners.items():
+    applied = 0
+    for ans, src in uniform.items():
         row = by_ans.get(ans)
         if row is None:
             row = {
                 "answer_text": ans,
-                "count": int(win.get("total_count") or 0),
+                "count": int(src.get("total_count") or 0),
                 "judgment": "",
                 "score": "",
                 "reason": "",
@@ -549,8 +536,12 @@ def import_manual_grades_into_criteria(
             }
             by_ans[ans] = row
             merged.append(row)
-        row["judgment"] = win["judgment"]
-        row["score"] = win["score"]
+        existing_j = normalize_judgment(row.get("judgment"))
+        if only_missing and existing_j in FINAL_JUDGMENTS:
+            continue
+        row["judgment"] = src["judgment"]
+        row["score"] = src["score"]
+        applied += 1
 
     rules: list[dict[str, Any]] = []
     for row in merged:
@@ -574,7 +565,7 @@ def import_manual_grades_into_criteria(
             }
         )
     save_grading_criteria(test_id, field_id, rules)
-    return {**agg, "saved_count": len(winners), "rules": rules}
+    return {**agg, "saved_count": applied, "rules": rules}
 
 
 def sync_committed_grades_to_criteria(

@@ -1124,14 +1124,36 @@ class Step8Page(QWidget):
 
     # ==================== 採点基準テーブル ====================
 
+    def apply_live_criteria_grades(
+        self, field_id: str, answer_text: str, judgment: str, score: int
+    ) -> None:
+        """手動採点で確定した当該パターンの判定・配点を、開いている表へ即反映する。"""
+        if not self.isVisible():
+            return
+        if str(self._selected_field_id() or "") != str(field_id or ""):
+            return
+        key = str(answer_text or "")
+        hit = False
+        for row in self._criteria_rows:
+            if str(row.get("answer_text") or "") != key:
+                continue
+            row["judgment"] = judgment
+            row["score"] = score
+            hit = True
+            break
+        if hit:
+            self._render_criteria_table()
+
     def _aggregate(self) -> None:
         fid = self._selected_field_id()
         if not fid:
             return
-        # 手動採点の確定判定を採点基準へ取り込み、表に即表示する
+        # 未設定のパターンだけ手動採点から補う。既に付いた判定は上書きしない
         if self.app.active_test_id:
             try:
-                import_manual_grades_into_criteria(self.app.active_test_id, fid)
+                import_manual_grades_into_criteria(
+                    self.app.active_test_id, fid, only_missing=True
+                )
             except Exception:
                 pass
         self._criteria_rows = merge_unique_with_criteria(self.app.active_test_id, fid)
@@ -1373,7 +1395,7 @@ class Step8Page(QWidget):
         if not self.app.require_active_test() or not fid:
             return
         self._sync_criteria_from_widgets()
-        # 画面で明示された判定を保持したまま、手動採点の多数決を基準へ取り込み
+        # 画面で明示された判定を保持したまま、揃っている手動判定だけ空欄を補う
         ui_by_ans = {
             str(r.get("answer_text") or ""): {
                 "judgment": str(r.get("judgment") or "").strip(),
@@ -1387,7 +1409,9 @@ class Step8Page(QWidget):
             if str(r.get("judgment") or "").strip() in ("○", "△", "×")
         }
         try:
-            import_manual_grades_into_criteria(self.app.active_test_id, fid)
+            import_manual_grades_into_criteria(
+                self.app.active_test_id, fid, only_missing=True
+            )
         except Exception:
             pass
         saved_by_ans = {
@@ -1509,28 +1533,35 @@ class Step8Page(QWidget):
             h.error(self, "エラー", str(e))
 
     def _on_import_manual_to_criteria(self) -> None:
-        """手動採点の多数決を採点基準へ取り込み（DB保存。手動結果へは書き戻さない）。"""
+        """判定が揃っている手動採点だけを採点基準へ取り込む（多数決しない）。"""
         fid = self._selected_field_id()
         if not self.app.require_active_test() or not fid:
             return
         preview = aggregate_manual_grades_by_answer(self.app.active_test_id, fid)
-        if not preview.get("winner_count"):
-            h.warn(
-                self,
-                "取込不可",
-                "手動採点で確定判定（○△×）が付いた回答パターンがありません。",
-            )
+        if not preview.get("uniform_count"):
+            if preview.get("mixed_count"):
+                h.warn(
+                    self,
+                    "取込不可",
+                    "同じOCRで判定・配点が食い違っています。採点基準は変更しません。",
+                )
+            else:
+                h.warn(
+                    self,
+                    "取込不可",
+                    "手動採点で確定判定（○△×）が付いた回答パターンがありません。",
+                )
             return
         lines = [
-            f"確定パターン {preview['winner_count']} 件を採点基準へ取り込みます。",
-            "票が割れた回答は既存基準を維持します。",
+            f"判定が揃っている {preview['uniform_count']} 件を採点基準へ写します。",
+            "食い違う回答パターンの採点基準は変更しません。",
             "この操作では手動採点結果へは書き戻しません。",
         ]
-        if preview.get("tied_count"):
-            lines.append(f"票割れ（未決定）: {preview['tied_count']} 件")
-            for p in (preview.get("tied") or [])[:5]:
+        if preview.get("mixed_count"):
+            lines.append(f"食い違いのため見送る: {preview['mixed_count']} 件")
+            for p in (preview.get("mixed") or [])[:5]:
                 lines.append(
-                    f"・{p.get('answer_text')}: {p.get('vote_summary')}"
+                    f"・{p.get('answer_text')}: {p.get('grade_summary')}"
                 )
         ask = QMessageBox.question(
             self,
@@ -1545,8 +1576,8 @@ class Step8Page(QWidget):
             res = import_manual_grades_into_criteria(self.app.active_test_id, fid)
             self._aggregate()
             msg = f"手動採点から {res.get('saved_count', 0)} 件を採点基準へ取り込みました。"
-            if res.get("tied_count"):
-                msg += f"\n票割れで見送ったパターン: {res['tied_count']} 件"
+            if res.get("mixed_count"):
+                msg += f"\n食い違いで変えなかったパターン: {res['mixed_count']} 件"
             h.info(self, "取込完了", msg)
         except Exception as e:
             h.error(self, "エラー", str(e))
