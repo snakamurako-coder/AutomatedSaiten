@@ -96,54 +96,67 @@ def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
 
 
 class GroupGradeDialog(QDialog):
-    """
-    同一OCR文字列の回答を個別に確認・採点するためのダイアログ。
-    """
+    """同一OCR文字列の回答を個別に確認・採点する一時ウィンドウ。"""
+
     def __init__(self, parent: "StepManualPage", answer_text: str, group_items: list[dict]):
         super().__init__(parent)
         self.setWindowTitle(f"同回答グループの個別確認（OCR: {answer_text}）")
-        self.resize(800, 600)
+        self.setModal(True)
+        self.resize(900, 640)
         self.page = parent
+        self.answer_text = answer_text
         self.items = group_items
-        self._selected_ids = set()
+        self._selected_ids: set[int] = set()
+        self._ink_stacks: list = []
 
         lay = QVBoxLayout(self)
+        lay.setContentsMargins(10, 10, 10, 10)
+        lay.setSpacing(8)
+
+        tip = h.caption_label(
+            "同じOCR文字列の答案です。誤認識の混在があればタイルを選んで個別に判定してください。"
+            "（ここでの個別判定は回答文字列を書き換えません）"
+        )
+        tip.setWordWrap(True)
+        lay.addWidget(tip)
 
         ctrl_lay = QHBoxLayout()
-        info_lbl = QLabel(f"OCRテキスト: <b>{answer_text}</b> ({len(group_items)} 枚)")
+        info_lbl = QLabel(f"OCRテキスト: <b>{answer_text}</b> （{len(group_items)} 枚）")
         info_lbl.setTextFormat(Qt.RichText)
         ctrl_lay.addWidget(info_lbl)
-
         ctrl_lay.addStretch()
 
         btn_maru = QPushButton("○ (1)")
         btn_sankaku = QPushButton("△ (2)")
         btn_batsu = QPushButton("× (3)")
         btn_clear = QPushButton("判定解除 (BackSpace)")
-
         btn_maru.clicked.connect(lambda: self._apply_judgment("○"))
         btn_sankaku.clicked.connect(lambda: self._apply_judgment("△"))
         btn_batsu.clicked.connect(lambda: self._apply_judgment("×"))
         btn_clear.clicked.connect(lambda: self._apply_judgment(""))
-
         for btn in (btn_maru, btn_sankaku, btn_batsu, btn_clear):
+            self.page._configure_judgment_mark_button(btn)
             ctrl_lay.addWidget(btn)
-
+        if self.page._field_max_score() <= 1:
+            btn_sankaku.hide()
         lay.addLayout(ctrl_lay)
 
         self.scroll = QScrollArea()
         self.scroll.setWidgetResizable(True)
         self.panel = CropTileColumnPanel(margins=(4, 4, 0, 4), spacing=4)
         self.scroll.setWidget(self.panel)
-        lay.addWidget(self.scroll)
+        lay.addWidget(self.scroll, 1)
 
         btn_box = QDialogButtonBox(QDialogButtonBox.Close)
         btn_box.rejected.connect(self.reject)
+        close_btn = btn_box.button(QDialogButtonBox.Close)
+        if close_btn is not None:
+            close_btn.setText("閉じる")
         lay.addWidget(btn_box)
 
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
 
-    def keyPressEvent(self, event):
+    def keyPressEvent(self, event):  # noqa: N802
         if event.key() == Qt.Key_1:
             self._apply_judgment("○")
         elif event.key() == Qt.Key_2:
@@ -155,14 +168,14 @@ class GroupGradeDialog(QDialog):
         else:
             super().keyPressEvent(event)
 
-    def _on_tile_clicked(self, rid: int):
+    def _on_tile_clicked(self, rid: int) -> None:
         if rid in self._selected_ids:
-            self._selected_ids.remove(rid)
+            self._selected_ids.discard(rid)
         else:
             self._selected_ids.add(rid)
         self._apply_selection_styles()
 
-    def _apply_judgment(self, judgment: str):
+    def _apply_judgment(self, judgment: str) -> None:
         if not self._selected_ids:
             h.warn(self, "未選択", "画像をタップして選択してください。")
             return
@@ -172,26 +185,23 @@ class GroupGradeDialog(QDialog):
         nj, score = resolved
         ids = list(self._selected_ids)
         self._selected_ids.clear()
-        
         was_in_dialog = getattr(self.page, "_in_group_dialog", False)
         self.page._in_group_dialog = True
         try:
             self.page._commit_grades(ids, nj, score, silent=True)
         finally:
             self.page._in_group_dialog = was_in_dialog
-            
+        # 親の _items と参照共有しているので判定は既に更新済み
         self._render_grid()
 
     def _apply_selection_styles(self) -> None:
-        for stack in list(getattr(self.page, "_ink_stacks", []) or []):
+        by_id = {int(i.get("result_id") or 0): i for i in self.items}
+        for stack in self._ink_stacks:
             tile = stack.parentWidget()
-            if tile is None or tile.window() is not self:
+            if tile is None:
                 continue
             rid = int(getattr(stack, "result_id", 0) or 0)
-            item = next(
-                (i for i in self.items if int(i.get("result_id") or 0) == rid),
-                None,
-            )
+            item = by_id.get(rid)
             if item is None:
                 continue
             j = normalize_judgment(item.get("judgment"))
@@ -203,24 +213,32 @@ class GroupGradeDialog(QDialog):
                 f" border-radius: 6px; }}"
             )
 
-    def _render_grid(self, preserve_scroll: bool = True):
+    def _render_grid(self, preserve_scroll: bool = True) -> None:
         v_bar = self.scroll.verticalScrollBar()
         h_bar = self.scroll.horizontalScrollBar()
         saved_v = v_bar.value() if v_bar is not None else 0
         saved_h = h_bar.value() if h_bar is not None else 0
 
         self.panel.clear_tiles()
+        self._ink_stacks = []
         zoom = max(30, min(400, self.page.crop_controls.zoom_value())) / 100.0
-        for idx, item in enumerate(self.items):
-            tile = self.page._make_tile(
-                item,
-                zoom,
-                selected_ids=self._selected_ids,
-                on_click=self._on_tile_clicked
-            )
-            self.panel.add_tile(tile, idx)
+        # ページ本体のスタックを汚さないよう一時退避
+        saved_stacks = list(self.page._ink_stacks)
+        self.page._ink_stacks = []
+        try:
+            for idx, item in enumerate(self.items):
+                tile = self.page._make_tile(
+                    item,
+                    zoom,
+                    selected_ids=self._selected_ids,
+                    on_click=self._on_tile_clicked,
+                )
+                self.panel.add_tile(tile, idx)
+            self._ink_stacks = list(self.page._ink_stacks)
+        finally:
+            self.page._ink_stacks = saved_stacks
 
-        if preserve_scroll:
+        if preserve_scroll and (saved_v or saved_h):
             self.page._schedule_scroll_restore(self.scroll, saved_v, saved_h)
 
 class StepManualPage(QWidget):
@@ -262,6 +280,7 @@ class StepManualPage(QWidget):
         self._ink_stacks: list[CropInkImageStack] = []
         self._scroll_restore_token: object | None = None
         self._criteria_mismatch_ids: set[int] = set()
+        self._in_group_dialog = False
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -1786,6 +1805,62 @@ class StepManualPage(QWidget):
             return nj, score
         return None
 
+    @staticmethod
+    def _item_answer_text(item: dict[str, Any]) -> str:
+        row = item.get("row") if isinstance(item.get("row"), dict) else {}
+        return str(row.get("answer_text") or item.get("answer_text") or "").strip() or "なし"
+
+    def _peer_items_for_answer(self, answer_text: str) -> list[dict[str, Any]]:
+        key = str(answer_text or "").strip() or "なし"
+        return [i for i in self._items if self._item_answer_text(i) == key]
+
+    def _find_group_dialog_answer(
+        self, result_ids: set[int], judgment: str
+    ) -> str | None:
+        """未採点→確定判定した答案のうち、同OCRが複数ある回答文字列を返す。"""
+        if self._in_group_dialog:
+            return None
+        nj = normalize_judgment(judgment)
+        if nj not in ("○", "△", "×"):
+            return None
+        for item in self._items:
+            rid = int(item.get("result_id") or 0)
+            if rid not in result_ids:
+                continue
+            if normalize_judgment(item.get("judgment")):
+                continue  # もともと未採点ではなかった
+            ans = self._item_answer_text(item)
+            if len(self._peer_items_for_answer(ans)) > 1:
+                return ans
+        return None
+
+    def _open_group_grade_dialog(self, answer_text: str) -> None:
+        group_items = self._peer_items_for_answer(answer_text)
+        if len(group_items) <= 1:
+            return
+        self._in_group_dialog = True
+        try:
+            dlg = GroupGradeDialog(self, answer_text, group_items)
+            dlg.exec()
+        finally:
+            self._in_group_dialog = False
+        # 個別判定後の表示を本体へ反映
+        if self._print_mark_mode or self._sort_mode in ("judgment_file", "judgment_id"):
+            self._render_grid(preserve_scroll=True)
+        else:
+            self._sync_tile_judgment_chrome()
+            self._update_selection_label()
+        self._update_status_summary()
+        self._rebuild_field_combo(prefer_fid=self._selected_field_id())
+        # リンクONなら基準だけ多数決更新（個別例外の results は潰さない）
+        if manual_auto_grading_link_enabled() and self.app.active_test_id:
+            fid = self._selected_field_id()
+            if fid:
+                try:
+                    import_manual_grades_into_criteria(self.app.active_test_id, fid)
+                except Exception as e:
+                    h.warn(self, "採点基準への同期失敗", str(e))
+
     def _commit_grades(
         self,
         result_ids: list[int],
@@ -1800,6 +1875,10 @@ class StepManualPage(QWidget):
         if not fid or not result_ids:
             return False
         nj = normalize_judgment(judgment)
+        id_set = {int(x) for x in result_ids if int(x or 0)}
+        # 同OCRグループ確認が必要なら、リンク波及を後回し（個別例外採点のため）
+        group_ans = self._find_group_dialog_answer(id_set, nj)
+
         try:
             n = update_results_field_grades(
                 self.app.active_test_id,
@@ -1811,11 +1890,17 @@ class StepManualPage(QWidget):
         except Exception as e:
             h.error(self, "保存エラー", str(e))
             return False
-        id_set = {int(x) for x in result_ids if int(x or 0)}
+
         linked_answers: set[str] = set()
         linked_judgment = nj
         linked_score = score
-        if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
+        allow_link = (
+            manual_auto_grading_link_enabled()
+            and nj in ("○", "△", "×")
+            and not self._in_group_dialog
+            and group_ans is None
+        )
+        if allow_link:
             try:
                 sync_res = sync_committed_grades_to_criteria(
                     self.app.active_test_id,
@@ -1833,24 +1918,15 @@ class StepManualPage(QWidget):
             except Exception as e:
                 h.warn(self, "採点基準への同期失敗", str(e))
 
-        newly_graded_texts = set()
-        if not getattr(self, "_in_group_dialog", False) and nj:
-            for item in self._items:
-                if item.get("result_id") in id_set:
-                    if not item.get("judgment"):
-                        ans = str(item.get("row", {}).get("answer_text") or "").strip()
-                        if ans:
-                            newly_graded_texts.add(ans)
-
-        # リンク時は同回答文字列の表示中タイルも判定・配点を揃える
         for item in self._items:
             rid = int(item.get("result_id") or 0)
-            ans = str((item.get("row") or {}).get("answer_text") or "").strip() or "なし"
+            ans = self._item_answer_text(item)
             if rid in id_set or (linked_answers and ans in linked_answers):
                 item["judgment"] = linked_judgment
                 item["score"] = linked_score
                 if linked_answers and ans in linked_answers and rid:
                     id_set.add(rid)
+
         mismatch_filter_on = bool(
             self._filter_btns.get("基準不一致")
             and self._filter_btns["基準不一致"].isChecked()
@@ -1861,7 +1937,6 @@ class StepManualPage(QWidget):
         elif self._filter_snapshot_ids is not None:
             self._filter_snapshot_ids |= id_set
 
-        # 並び替え・印字マーク時のみ再構築。リンク波及はデータ更新＋枠/バッジで足りる
         needs_rebuild = (
             self._print_mark_mode
             or self._sort_mode in ("judgment_file", "judgment_id")
@@ -1881,36 +1956,17 @@ class StepManualPage(QWidget):
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
         if needs_rebuild and (saved_v or saved_h):
-            # コンボ再構築後にレイアウトが動いても位置を戻す
             self._schedule_scroll_restore(self.crop_scroll, saved_v, saved_h)
-        if not silent:
+
+        if group_ans is not None:
+            # イベント処理後にモーダル表示（クリックハンドラ中のネストを避ける）
+            QTimer.singleShot(0, lambda a=group_ans: self._open_group_grade_dialog(a))
+        elif not silent:
             if not nj:
                 h.info(self, "反映完了", f"{n} 件の判定を解除しました（未判定）。")
             else:
                 label = "保留" if nj == PENDING_JUDGMENT else nj
                 h.info(self, "反映完了", f"{n} 件に {label}（{score}点）を反映しました。")
-
-        if newly_graded_texts and not getattr(self, "_in_group_dialog", False):
-            for ans in newly_graded_texts:
-                group_items = [
-                    i for i in self._items
-                    if str(i.get("row", {}).get("answer_text") or "").strip() == ans
-                ]
-                if len(group_items) > 1:
-                    self._in_group_dialog = True
-                    try:
-                        dlg = GroupGradeDialog(self, ans, group_items)
-                        dlg.exec()
-                    finally:
-                        self._in_group_dialog = False
-                    # ダイアログ後も表示位置を維持
-                    if needs_rebuild or self._print_mark_mode:
-                        self._render_grid(preserve_scroll=True)
-                    else:
-                        self._sync_tile_judgment_chrome()
-                        self._update_selection_label()
-                    self._update_status_summary()
-                    break
 
         return True
 
