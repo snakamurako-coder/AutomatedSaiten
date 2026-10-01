@@ -32,6 +32,7 @@ from models.criteria_repo import (
     get_answer_rows_for_pattern,
     get_outlier_answer_groups,
     import_manual_grades_into_criteria,
+    list_manual_criteria_mismatches,
     merge_unique_with_criteria,
     save_grading_criteria,
     sort_criteria_rows,
@@ -518,6 +519,9 @@ class Step8Page(QWidget):
         self.hide_incorrect_check.toggled.connect(lambda _c: self._purge_incorrect_from_grid())
         ctrl.addWidget(self.hide_incorrect_check)
         ctrl.addWidget(h.button("なし（未回答）を確認", self._on_show_none_crops))
+        ctrl.addWidget(
+            h.button("基準と手動の不一致", self._on_show_criteria_manual_mismatches)
+        )
         ctrl.addWidget(h.button("表示を全選択", lambda: self._select_all_outlier(True)))
         ctrl.addWidget(h.button("表示を解除", lambda: self._select_all_outlier(False)))
         ctrl.addWidget(h.button("選択を画像表示", self._on_show_selected_crops, variant="primary"))
@@ -1756,6 +1760,26 @@ class Step8Page(QWidget):
         rows = get_answer_rows_for_pattern(self.app.active_test_id, fid, "なし")
         if not rows:
             h.info(self, "なし", "「なし」の回答は見つかりませんでした。")
+            return
+        self._load_crops_async(rows, allow_incorrect=True)
+
+    def _on_show_criteria_manual_mismatches(self) -> None:
+        """採点基準と手動採点で判定・配点が違う答案画像を表示。"""
+        fid = self._selected_field_id()
+        if not self.app.require_active_test() or not fid:
+            return
+        rows = list_manual_criteria_mismatches(
+            self.app.active_test_id,
+            fid,
+            max_score=self._field_max_score(),
+        )
+        if not rows:
+            h.info(
+                self,
+                "不一致なし",
+                "この記述欄では、採点基準と手動採点の判定・配点は一致しています"
+                "（両方に確定判定がある答案のみ比較）。",
+            )
             return
         self._load_crops_async(rows, allow_incorrect=True)
 

@@ -32,6 +32,7 @@ from models.criteria_repo import (
     apply_saved_criteria_to_field,
     get_unique_answers,
     import_manual_grades_into_criteria,
+    manual_criteria_mismatch_ids,
     sync_committed_grades_to_criteria,
 )
 from models.database import connect
@@ -225,7 +226,17 @@ class GroupGradeDialog(QDialog):
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
 
-    _MAIN_FILTERS = ("○", "△", "×", "?", "未採点", "未判定", "採点済み", "無回答")
+    _MAIN_FILTERS = (
+        "○",
+        "△",
+        "×",
+        "?",
+        "未採点",
+        "未判定",
+        "採点済み",
+        "無回答",
+        "基準不一致",
+    )
     _CLEAR_JUDGMENT_KEY = "none"
 
     def __init__(self, app: Any) -> None:
@@ -250,6 +261,7 @@ class StepManualPage(QWidget):
         self._palette_btns: dict[str, QPushButton] = {}
         self._ink_stacks: list[CropInkImageStack] = []
         self._scroll_restore_token: object | None = None
+        self._criteria_mismatch_ids: set[int] = set()
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -741,6 +753,10 @@ class StepManualPage(QWidget):
             "未判定": "ON にすると 判定なし（初期状態）の回答を表示",
             "採点済み": "ON にすると 確定判定（○△×）を表示（保留は含まない）",
             "無回答": "ON にすると OCR/集約で「なし」の無回答を表示",
+            "基準不一致": (
+                "ON にすると ⑧採点基準と手動採点の判定・配点が食い違う答案だけ表示"
+                "（両方に確定判定がある答案のみ）"
+            ),
         }.get(key, "")
 
     def _build_footer_overlay(self) -> QFrame:
@@ -1217,6 +1233,7 @@ class StepManualPage(QWidget):
                     }
                 )
             self._sort_items()
+            self._refresh_criteria_mismatch_ids()
             self._refresh_filter_snapshot()
             self._render_grid(preserve_scroll=False)
             self._update_status_summary()
@@ -1396,6 +1413,9 @@ class StepManualPage(QWidget):
                     str(row.get("textMapping", {}).get(fid, "") or "").strip() or "なし"
                 )
         self._selected_ids.clear()
+        self._refresh_criteria_mismatch_ids()
+        if self._filter_btns.get("基準不一致") and self._filter_btns["基準不一致"].isChecked():
+            self._refresh_filter_snapshot()
         self._render_grid(preserve_scroll=False)
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
@@ -1552,7 +1572,24 @@ class StepManualPage(QWidget):
             tags.append("採点済み")
         if ans == "なし":
             tags.append("無回答")
+        rid = int(item.get("result_id") or 0)
+        if rid and rid in self._criteria_mismatch_ids:
+            tags.append("基準不一致")
         return tags
+
+    def _refresh_criteria_mismatch_ids(self) -> None:
+        """⑧採点基準と手動採点の不一致 ID を再計算。"""
+        fid = self._selected_field_id()
+        test_id = self.app.active_test_id
+        if not fid or not test_id:
+            self._criteria_mismatch_ids = set()
+            return
+        try:
+            self._criteria_mismatch_ids = manual_criteria_mismatch_ids(
+                test_id, fid, max_score=self._field_max_score()
+            )
+        except Exception:
+            self._criteria_mismatch_ids = set()
 
     def _filters_active(self) -> bool:
         if any(btn.isChecked() for btn in self._filter_btns.values()):
@@ -1565,6 +1602,8 @@ class StepManualPage(QWidget):
 
     def _refresh_filter_snapshot(self) -> None:
         """フィルタ操作時のみ表示対象を確定（判定変更では再計算しない）。"""
+        if self._filter_btns.get("基準不一致") and self._filter_btns["基準不一致"].isChecked():
+            self._refresh_criteria_mismatch_ids()
         if not self._filters_active():
             self._filter_snapshot_ids = None
             return
@@ -1767,13 +1806,21 @@ class StepManualPage(QWidget):
             if item.get("result_id") in id_set:
                 item["judgment"] = nj
                 item["score"] = score
-        if self._filter_snapshot_ids is not None:
+        mismatch_filter_on = bool(
+            self._filter_btns.get("基準不一致")
+            and self._filter_btns["基準不一致"].isChecked()
+        )
+        if mismatch_filter_on:
+            self._refresh_criteria_mismatch_ids()
+            self._refresh_filter_snapshot()
+        elif self._filter_snapshot_ids is not None:
             self._filter_snapshot_ids |= id_set
 
         # 並び替え・印字マーク時のみ再構築。それ以外は枠/バッジ更新だけでスクロール維持
         needs_rebuild = (
             self._print_mark_mode
             or self._sort_mode in ("judgment_file", "judgment_id")
+            or mismatch_filter_on
         )
         v_bar = self.crop_scroll.verticalScrollBar()
         h_bar = self.crop_scroll.horizontalScrollBar()

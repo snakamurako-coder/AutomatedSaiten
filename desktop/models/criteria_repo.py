@@ -8,7 +8,12 @@ from typing import Any
 
 from models.database import connect, init_db
 from models.grading_status import FINAL_JUDGMENTS, normalize_judgment
-from models.test_repo import get_all_results, touch_progress_conn, update_results_field_grades
+from models.test_repo import (
+    get_all_results,
+    get_points_conn,
+    touch_progress_conn,
+    update_results_field_grades,
+)
 
 
 _JUDGMENT_RANK = {"○": 0, "△": 1, "×": 2}
@@ -342,6 +347,98 @@ def apply_saved_criteria_to_field(test_id: str, field_id: str) -> int:
     """DB 保存済みの採点基準を、当該記述欄の手動採点結果へ反映。"""
     rules = get_grading_criteria(test_id, field_id)
     return apply_criteria_rules_to_results(test_id, field_id, rules)
+
+
+def _field_max_score(test_id: str, field_id: str) -> int:
+    with connect() as conn:
+        pts = get_points_conn(conn, test_id)
+    return max(1, int(pts.get(field_id, 1)))
+
+
+def list_manual_criteria_mismatches(
+    test_id: str,
+    field_id: str,
+    *,
+    max_score: int | None = None,
+) -> list[dict[str, Any]]:
+    """手動採点と採点基準で判定・配点が異なる答案一覧。
+
+    両方に確定判定（○△×）があり、正規化後の (判定, 配点) が違うものだけ。
+    戻り値の各行は画像表示用キー（rowIndex 等）に加え、双方の判定・配点を含む。
+    """
+    init_db()
+    fid = str(field_id or "").strip()
+    if not test_id or not fid:
+        return []
+    cap = max(1, int(max_score)) if max_score is not None else _field_max_score(test_id, fid)
+    rules = {
+        str(r.get("answer_text") or ""): r for r in get_grading_criteria(test_id, fid)
+    }
+    out: list[dict[str, Any]] = []
+    for row in get_all_results(test_id):
+        ans = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
+        rule = rules.get(ans)
+        if not rule:
+            continue
+        cj = normalize_judgment(rule.get("judgment"))
+        if cj not in FINAL_JUDGMENTS:
+            continue
+        try:
+            cs = int(rule.get("score") or 0)
+        except (TypeError, ValueError):
+            cs = 0
+        cj, cs = _coerce_judgment_score(cj, cs, cap)
+
+        mj = normalize_judgment((row.get("judgments") or {}).get(fid, ""))
+        if mj not in FINAL_JUDGMENTS:
+            continue
+        try:
+            ms = int((row.get("scores") or {}).get(fid, 0) or 0)
+        except (TypeError, ValueError):
+            ms = 0
+        mj, ms = _coerce_judgment_score(mj, ms, cap)
+        if (mj, ms) == (cj, cs):
+            continue
+        rid = int(row.get("id") or 0)
+        if rid <= 0:
+            continue
+        out.append(
+            {
+                "rowIndex": rid,
+                "studentId": row.get("studentId") or "",
+                "fileName": row.get("fileName") or "",
+                "fileId": row.get("sourcePath") or row.get("warpedPath") or "",
+                "warpedPath": row.get("warpedPath") or "",
+                "studentName": row.get("name") or "",
+                "answer_text": ans,
+                "manual_judgment": mj,
+                "manual_score": ms,
+                "criteria_judgment": cj,
+                "criteria_score": cs,
+            }
+        )
+    out.sort(
+        key=lambda r: (
+            str(r.get("answer_text") or ""),
+            str(r.get("fileName") or ""),
+            int(r.get("rowIndex") or 0),
+        )
+    )
+    return out
+
+
+def manual_criteria_mismatch_ids(
+    test_id: str,
+    field_id: str,
+    *,
+    max_score: int | None = None,
+) -> set[int]:
+    """不一致答案の result id 集合。"""
+    return {
+        int(r["rowIndex"])
+        for r in list_manual_criteria_mismatches(test_id, field_id, max_score=max_score)
+        if int(r.get("rowIndex") or 0) > 0
+    }
 
 
 def aggregate_manual_grades_by_answer(
