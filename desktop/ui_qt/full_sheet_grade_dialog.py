@@ -854,7 +854,7 @@ class FullSheetGradeDialog(QDialog):
                 nj,
                 int(score),
             )
-            if nj in ("○", "△", "×"):
+            if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
                 sync_res = sync_committed_grades_to_criteria(
                     self._test_id,
                     field_id,
@@ -862,7 +862,7 @@ class FullSheetGradeDialog(QDialog):
                     nj,
                     int(score),
                     max_score=max_score,
-                    propagate_to_results=manual_auto_grading_link_enabled(),
+                    propagate_to_results=False,
                 )
                 if sync_res.get("judgment"):
                     nj = str(sync_res["judgment"])

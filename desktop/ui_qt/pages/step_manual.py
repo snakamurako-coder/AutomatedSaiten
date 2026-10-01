@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from models.criteria_repo import (
-    aggregate_manual_grades_by_answer,
+    manual_grade_decisions,
     apply_saved_criteria_to_field,
     get_unique_answers,
     import_manual_grades_into_criteria,
@@ -64,6 +64,11 @@ from models.test_repo import (
 from services.crop_preview import load_crops_for_rows
 from services.feedback_renderer import composite_mark_on_image
 from ui_qt import helpers as h
+from ui_qt.grade_transfer_undo import (
+    confirm_saved_then_transfer,
+    has_transfer_undo,
+    undo_last_transfer,
+)
 from ui_qt.crop_widgets import CropDisplayControls
 from ui_qt.helpers import pil_to_qpixmap
 from ui_qt.hover_top_toolbar import HoverTopToolbar, ManualGradingWorkOverlay
@@ -72,6 +77,7 @@ from ui_qt.manual_grading_prefs import (
     load_field_view_prefs,
     load_field_zoom_pct,
     load_manual_grading_display_prefs,
+    group_grade_hide_decided_enabled,
     manual_auto_grading_link_enabled,
     manual_grading_hover_toolbar_enabled,
     save_field_view_prefs,
@@ -134,18 +140,20 @@ class GroupGradeDialog(QDialog):
             "「選択中に同じ判定」を押してください。"
             "違う答案は選んで ○△× で個別に付けられます。"
             "閉じるだけなら他の回答は変更しません。"
+            + (
+                " 判定を付けるとその答案は一覧から消えます。"
+                if group_grade_hide_decided_enabled()
+                else ""
+            )
         )
         tip.setWordWrap(True)
         lay.addWidget(tip)
 
         ctrl_lay = QHBoxLayout()
-        info_lbl = QLabel(
-            f"OCRテキスト: <b>{answer_text}</b>"
-            f" （他 {len(group_items)} 枚 / 提案 {self._proposed_judgment}"
-            f" {self._proposed_score}点）"
-        )
-        info_lbl.setTextFormat(Qt.RichText)
-        ctrl_lay.addWidget(info_lbl)
+        self._info_lbl = QLabel()
+        self._info_lbl.setTextFormat(Qt.RichText)
+        self._refresh_info_label()
+        ctrl_lay.addWidget(self._info_lbl)
         ctrl_lay.addStretch()
         btn_all = QPushButton("すべて選択")
         btn_none = QPushButton("選択解除")
@@ -233,7 +241,7 @@ class GroupGradeDialog(QDialog):
         was_in_dialog = getattr(self.page, "_in_group_dialog", False)
         self.page._in_group_dialog = True
         try:
-            self.page._commit_grades(
+            ok = self.page._commit_grades(
                 ids,
                 self._proposed_judgment,
                 self._proposed_score,
@@ -241,7 +249,7 @@ class GroupGradeDialog(QDialog):
             )
         finally:
             self.page._in_group_dialog = was_in_dialog
-        self._render_grid()
+        self._after_applied(ids, hide=bool(ok))
 
     def _apply_judgment(self, judgment: str) -> None:
         if not self._selected_ids:
@@ -256,10 +264,30 @@ class GroupGradeDialog(QDialog):
         was_in_dialog = getattr(self.page, "_in_group_dialog", False)
         self.page._in_group_dialog = True
         try:
-            self.page._commit_grades(ids, nj, score, silent=True)
+            ok = self.page._commit_grades(ids, nj, score, silent=True)
         finally:
             self.page._in_group_dialog = was_in_dialog
-        # 親の _items と参照共有しているので判定は既に更新済み
+        # 判定解除は「決めた」扱いにせず、一覧に残す
+        self._after_applied(ids, hide=bool(ok and nj))
+
+    def _refresh_info_label(self) -> None:
+        self._info_lbl.setText(
+            f"OCRテキスト: <b>{self.answer_text}</b>"
+            f" （残り {len(self.items)} 枚 / 提案 {self._proposed_judgment}"
+            f" {self._proposed_score}点）"
+        )
+
+    def _after_applied(self, ids: list[int], *, hide: bool) -> None:
+        if hide and group_grade_hide_decided_enabled():
+            drop = {int(x) for x in ids if int(x or 0)}
+            self.items = [
+                i for i in self.items if int(i.get("result_id") or 0) not in drop
+            ]
+            self._selected_ids -= drop
+            if not self.items:
+                self.accept()
+                return
+        self._refresh_info_label()
         self._render_grid()
 
     def _apply_selection_styles(self) -> None:
@@ -404,8 +432,13 @@ class StepManualPage(QWidget):
         self.btn_import_from_criteria = h.button(
             "採点基準から取込", self._on_import_criteria_to_manual
         )
+        self.btn_undo_transfer = h.button("取り消す", self._on_undo_transfer)
+        self.btn_undo_transfer.setToolTip(
+            "直前の取込・反映の前に保存した状態へ戻します。"
+        )
         top.addWidget(self.btn_export_to_criteria)
         top.addWidget(self.btn_import_from_criteria)
+        top.addWidget(self.btn_undo_transfer)
         top.addStretch()
         left_hdr.addLayout(top)
 
@@ -474,6 +507,15 @@ class StepManualPage(QWidget):
                 continue
             btn.setVisible(not linked)
             btn.setEnabled(not linked)
+        undo = getattr(self, "btn_undo_transfer", None)
+        if undo is not None:
+            undo.setVisible(not linked)
+            fid = self._selected_field_id() if self.app.active_test_id else ""
+            undo.setEnabled(
+                (not linked)
+                and bool(fid)
+                and has_transfer_undo(str(self.app.active_test_id or ""), str(fid))
+            )
         mismatch_btn = self._filter_btns.get("基準不一致")
         if mismatch_btn is not None:
             if linked and mismatch_btn.isChecked():
@@ -1542,48 +1584,70 @@ class StepManualPage(QWidget):
             h.info(self, "再読込", "自動採点・手動採点で共有している判定を DB から読み直しました。")
 
     def _on_export_manual_to_criteria(self) -> None:
-        """判定が揃っている手動採点だけを採点基準へ反映する（多数決しない）。"""
+        """この記述欄の手動採点を多数決で採点基準へ反映（⑧へ）。"""
         fid = self._selected_field_id()
         if not self.app.require_active_test() or not fid:
             return
-        preview = aggregate_manual_grades_by_answer(self.app.active_test_id, fid)
-        if not preview.get("uniform_count"):
-            if preview.get("mixed_count"):
-                h.warn(
-                    self,
-                    "反映不可",
-                    "同じOCRで判定・配点が食い違っています。採点基準は変更しません。",
-                )
-            else:
-                h.warn(
-                    self,
-                    "反映不可",
-                    "確定判定（○△×）が付いた回答パターンがありません。",
-                )
+        decisions = manual_grade_decisions(self.app.active_test_id, fid)
+        if not decisions:
+            h.warn(
+                self,
+                "反映不可",
+                "確定判定（○△×）が付いた答案がありません。",
+            )
             return
         lines = [
-            f"判定が揃っている {preview['uniform_count']} 件を採点基準へ写します。",
-            "食い違う回答パターンの採点基準は変更しません。",
+            f"この記述欄の手動採点 {len(decisions)} 件を、一件ずつ採点基準へ上書きします。",
+            "採点基準と違っていても、その判定・配点で置き換えます。",
+            "この操作では手動採点結果へは書き戻しません。",
         ]
-        if preview.get("mixed_count"):
-            lines.append(f"食い違いのため見送る: {preview['mixed_count']} 件")
-            for p in (preview.get("mixed") or [])[:5]:
-                lines.append(f"・{p.get('answer_text')}: {p.get('grade_summary')}")
-        ask = QMessageBox.question(
+        if not confirm_saved_then_transfer(
             self,
-            "採点基準へ反映",
-            "\n".join(lines),
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.Yes,
-        )
-        if ask != QMessageBox.StandardButton.Yes:
+            self.app.active_test_id,
+            fid,
+            criteria_rules=None,
+            title="採点基準へ反映",
+            detail_lines=lines,
+        ):
             return
         try:
             res = import_manual_grades_into_criteria(self.app.active_test_id, fid)
-            msg = f"採点基準へ {res.get('saved_count', 0)} 件を反映しました。"
-            if res.get("mixed_count"):
-                msg += f"\n食い違いで変えなかったパターン: {res['mixed_count']} 件"
+            msg = (
+                f"採点基準へ {res.get('decision_count', 0)} 件を上書きしました"
+                f"（回答文字列 {res.get('saved_count', 0)} 件）。"
+            )
             h.info(self, "反映完了", msg)
+            self._reload_grade_views()
+        except Exception as e:
+            h.error(self, "エラー", str(e))
+
+    def reload_field_grades_from_db(self) -> None:
+        if not self.app.active_test_id or not self._selected_field_id():
+            return
+        self._reload_grades(silent=True)
+
+    def _reload_grade_views(self) -> None:
+        pages = getattr(self.app, "pages", None) or {}
+        for page in pages.values():
+            reload = getattr(page, "reload_field_grades_from_db", None)
+            if callable(reload):
+                reload()
+            refresh_btn = getattr(page, "refresh_transfer_undo_button", None)
+            if callable(refresh_btn):
+                refresh_btn()
+
+    def refresh_transfer_undo_button(self) -> None:
+        self._update_link_dependent_ui()
+
+    def _on_undo_transfer(self) -> None:
+        fid = self._selected_field_id()
+        if not self.app.active_test_id or not fid:
+            return
+        try:
+            if not undo_last_transfer(self, self.app.active_test_id, fid):
+                return
+            self._reload_grade_views()
+            h.info(self, "取り消しました", "保存した状態に戻しました。")
         except Exception as e:
             h.error(self, "エラー", str(e))
 
@@ -1592,19 +1656,22 @@ class StepManualPage(QWidget):
         fid = self._selected_field_id()
         if not self.app.require_active_test() or not fid:
             return
-        ask = QMessageBox.question(
+        if not confirm_saved_then_transfer(
             self,
-            "採点基準から取込",
-            "⑧で保存済みの採点基準を、同じ回答文字列の答案へ上書きします。\n"
-            "手動で付けた例外判定も基準どおりに置き換わります。続行しますか？",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-            QMessageBox.StandardButton.No,
-        )
-        if ask != QMessageBox.StandardButton.Yes:
+            self.app.active_test_id,
+            fid,
+            criteria_rules=None,
+            title="採点基準から取込",
+            detail_lines=[
+                "⑧で保存済みの採点基準を、同じ回答文字列の答案へ上書きします。",
+                "手動で付けた例外判定も基準どおりに置き換わります。",
+            ],
+        ):
             return
         try:
             n = apply_saved_criteria_to_field(self.app.active_test_id, fid)
             self._reload_grades(silent=True)
+            self._reload_grade_views()
             h.info(
                 self,
                 "取込完了",
@@ -2013,10 +2080,9 @@ class StepManualPage(QWidget):
         linked_answers: set[str] = set()
         linked_judgment = nj
         linked_score = score
-        # 当該回答のパターンだけ先に⑧へ同じ判定・配点。他回答への波及は確認後。
-        # 確認ダイアログ内の個別変更は基準（パターン）を上書きしない。
-        if nj in ("○", "△", "×") and not self._in_group_dialog:
-            propagate = manual_auto_grading_link_enabled() and not peer_answers
+        # リンクONのときだけ、今決めた判定を⑧の当該回答へ即反映する。
+        # 同じOCRの他答案へは自動で広げない（確認ポップアップで一件ずつ決める）。
+        if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
             try:
                 sync_res = sync_committed_grades_to_criteria(
                     self.app.active_test_id,
@@ -2025,7 +2091,7 @@ class StepManualPage(QWidget):
                     nj,
                     score,
                     max_score=self._field_max_score(),
-                    propagate_to_results=propagate,
+                    propagate_to_results=False,
                 )
                 if sync_res.get("judgment"):
                     linked_judgment = str(sync_res["judgment"])
@@ -2035,9 +2101,6 @@ class StepManualPage(QWidget):
                     self._push_criteria_to_step8(
                         fid, criteria_answers, linked_judgment, linked_score
                     )
-                if propagate:
-                    linked_answers = criteria_answers
-                    n = max(n, int(sync_res.get("result_count") or 0))
             except Exception as e:
                 h.warn(self, "採点基準への同期失敗", str(e))
 

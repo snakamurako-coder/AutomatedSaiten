@@ -24,7 +24,7 @@ def save_manual_grading_hover_toolbar(enabled: bool) -> None:
 
 
 def manual_auto_grading_link_enabled(cfg: dict | None = None) -> bool:
-    """手動採点と⑧採点基準を常にリンクするか（既定オフ）。"""
+    """判定決定の一件を、手動採点と⑧採点基準のもう一方へ即反映するか。"""
     c = cfg if cfg is not None else load_config()
     return bool(c.get("manual_auto_grading_link"))
 
@@ -33,6 +33,12 @@ def save_manual_auto_grading_link(enabled: bool) -> None:
     cfg = load_config()
     cfg["manual_auto_grading_link"] = bool(enabled)
     save_config(cfg)
+
+
+def group_grade_hide_decided_enabled(cfg: dict | None = None) -> bool:
+    """同OCR確認ポップアップで判定した答案を非表示にする（既定オン）。"""
+    c = cfg if cfg is not None else load_config()
+    return bool(c.get("group_grade_hide_decided", True))
 
 
 def load_manual_grading_display_prefs(cfg: dict | None = None) -> dict[str, bool]:

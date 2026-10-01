@@ -496,16 +496,29 @@ class SettingsDialog(QDialog):
 
         self.manual_auto_link_check = QCheckBox("手動・自動採点を常にリンク")
         self.manual_auto_link_check.setToolTip(
-            "ON（既定）: 手動採点の○△×を⑧採点基準へ即時反映し、"
-            "⑧の「基準を保存」時に手動採点結果へも反映します。"
-            "移行用の取込／反映ボタンと「基準不一致」表示は非表示になります。\n"
-            "OFF: 答案への相互上書きは自動で行いません。"
-            "ただし手動の確定判定は⑧採点基準へは都度反映されます。"
+            "ON（既定）: 判定を決めた瞬間に、その一件の判定・配点を"
+            "もう一方（手動採点⇔⑧採点基準）へ即反映します。"
+            "取込／反映ボタンと「基準不一致」表示は非表示になります。\n"
+            "OFF: 判定を決めても、もう一方へは自動で反映しません。"
+            "各画面の取込／反映ボタンで、付けた判定をまとめて上書きします。"
         )
         self.manual_auto_link_check.setChecked(
             bool(cfg.get("manual_auto_grading_link"))
         )
         form.addRow("採点リンク", self.manual_auto_link_check)
+
+        self.group_grade_hide_decided_check = QCheckBox(
+            "確認ポップアップで判定した回答を非表示にする"
+        )
+        self.group_grade_hide_decided_check.setToolTip(
+            "ON（既定）: 同じOCRの確認ウィンドウで判定を付けると、"
+            "その答案を一覧から消します。\n"
+            "OFF: 判定後も一覧に残します。"
+        )
+        self.group_grade_hide_decided_check.setChecked(
+            bool(cfg.get("group_grade_hide_decided", True))
+        )
+        form.addRow("同回答の確認", self.group_grade_hide_decided_check)
 
         lay.addLayout(form)
         lay.addStretch()
@@ -599,6 +612,7 @@ class SettingsDialog(QDialog):
             "faint_min_weber_contrast": float(self.faint_weber.value()),
             "manual_grading_hover_toolbar": self.manual_hover_toolbar_check.isChecked(),
             "manual_auto_grading_link": self.manual_auto_link_check.isChecked(),
+            "group_grade_hide_decided": self.group_grade_hide_decided_check.isChecked(),
         }
 
     def _persist_settings(self) -> bool:

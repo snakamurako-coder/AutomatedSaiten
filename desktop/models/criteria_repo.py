@@ -445,11 +445,7 @@ def aggregate_manual_grades_by_answer(
     test_id: str,
     field_id: str,
 ) -> dict[str, Any]:
-    """回答文字列ごとに、確定判定が一つに揃っているかを見る。多数決はしない。
-
-    ○△×のみ見る。?・未採点は対象外。
-    揃っているものだけ criteria へ写せる。食い違うものは基準を決めない。
-    """
+    """手動採点の判定を回答文字列ごとに多数決で集約（○△×のみ。?・未採点は票外）。"""
     init_db()
     fid = str(field_id or "").strip()
     buckets: dict[str, Counter[tuple[str, int]]] = defaultdict(Counter)
@@ -471,34 +467,165 @@ def aggregate_manual_grades_by_answer(
     for ans, counter in sorted(buckets.items(), key=lambda kv: (-sum(kv[1].values()), kv[0])):
         if not counter:
             continue
-        ranked = list(counter.items())
-        grade_summary = " / ".join(
+        ranked = counter.most_common()
+        top_votes = ranked[0][1]
+        leaders = [pair for pair, n in ranked if n == top_votes]
+        tied = len(leaders) > 1
+        chosen: tuple[str, int] | None = leaders[0] if not tied else None
+        vote_summary = " / ".join(
             f"{j}{sc}点×{n}" for (j, sc), n in ranked[:4]
         )
-        uniform = len(ranked) == 1
-        chosen = ranked[0][0] if uniform else None
         patterns.append(
             {
                 "answer_text": ans,
                 "judgment": chosen[0] if chosen else "",
                 "score": chosen[1] if chosen else "",
+                "votes": top_votes,
                 "total_count": int(totals.get(ans, 0)),
                 "graded_count": int(sum(counter.values())),
-                "uniform": uniform,
-                "mixed": not uniform,
-                "grade_summary": grade_summary,
+                "tied": tied,
+                "vote_summary": vote_summary,
+                "has_winner": chosen is not None,
             }
         )
 
-    uniform_list = [p for p in patterns if p.get("uniform")]
-    mixed_list = [p for p in patterns if p.get("mixed")]
+    winners = [p for p in patterns if p.get("has_winner")]
+    tied_list = [p for p in patterns if p.get("tied")]
     return {
         "patterns": patterns,
-        "uniform": uniform_list,
-        "mixed": mixed_list,
-        "uniform_count": len(uniform_list),
-        "mixed_count": len(mixed_list),
+        "winners": winners,
+        "tied": tied_list,
+        "winner_count": len(winners),
+        "tied_count": len(tied_list),
     }
+
+
+_transfer_undo: dict[tuple[str, str], dict[str, Any]] = {}
+
+
+def capture_grade_checkpoint(
+    test_id: str,
+    field_id: str,
+    criteria_rules: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """取込・反映の直前の採点基準と手動採点を保存する。"""
+    fid = str(field_id or "").strip()
+    source = criteria_rules if criteria_rules is not None else get_grading_criteria(test_id, fid)
+    criteria: list[dict[str, Any]] = []
+    for rule in source or []:
+        judgment = str(rule.get("judgment") or "").strip()
+        if judgment not in FINAL_JUDGMENTS and judgment not in ("○", "△", "×"):
+            continue
+        try:
+            score = int(rule.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        judgment, score = _coerce_judgment_score(judgment, score)
+        if judgment not in FINAL_JUDGMENTS:
+            continue
+        criteria.append(
+            {
+                "answer_text": str(rule.get("answer_text") or ""),
+                "judgment": judgment,
+                "score": score,
+                "reason": rule.get("reason") or "",
+                "uniform_feedback": rule.get("uniform_feedback")
+                if isinstance(rule.get("uniform_feedback"), dict)
+                else None,
+            }
+        )
+    grades: list[dict[str, Any]] = []
+    for row in get_all_results(test_id):
+        rid = int(row.get("id") or 0)
+        if rid <= 0:
+            continue
+        raw_j = (row.get("judgments") or {}).get(fid, "")
+        try:
+            raw_s = int((row.get("scores") or {}).get(fid, 0) or 0)
+        except (TypeError, ValueError):
+            raw_s = 0
+        grades.append({"id": rid, "judgment": str(raw_j or ""), "score": raw_s})
+    return {
+        "test_id": str(test_id),
+        "field_id": fid,
+        "criteria": criteria,
+        "grades": grades,
+    }
+
+
+def hold_grade_checkpoint(checkpoint: dict[str, Any]) -> dict[str, Any] | None:
+    """保存を確定し、同じ記述欄の直前の取り消し地点を返す。"""
+    key = (str(checkpoint.get("test_id") or ""), str(checkpoint.get("field_id") or ""))
+    previous = _transfer_undo.get(key)
+    _transfer_undo[key] = checkpoint
+    return previous
+
+
+def restore_checkpoint_slot(
+    test_id: str,
+    field_id: str,
+    previous: dict[str, Any] | None,
+) -> None:
+    key = (str(test_id or ""), str(field_id or ""))
+    if previous is None:
+        _transfer_undo.pop(key, None)
+    else:
+        _transfer_undo[key] = previous
+
+
+def peek_grade_checkpoint(test_id: str, field_id: str) -> dict[str, Any] | None:
+    return _transfer_undo.get((str(test_id or ""), str(field_id or "")))
+
+
+def pop_grade_checkpoint(test_id: str, field_id: str) -> dict[str, Any] | None:
+    return _transfer_undo.pop((str(test_id or ""), str(field_id or "")), None)
+
+
+def restore_grade_checkpoint(checkpoint: dict[str, Any]) -> None:
+    """保存した採点基準と手動採点へ戻す。"""
+    test_id = str(checkpoint.get("test_id") or "")
+    fid = str(checkpoint.get("field_id") or "")
+    save_grading_criteria(test_id, fid, list(checkpoint.get("criteria") or []))
+    grouped: dict[tuple[str, int], list[int]] = defaultdict(list)
+    for grade in checkpoint.get("grades") or []:
+        rid = int(grade.get("id") or 0)
+        if rid <= 0:
+            continue
+        judgment = str(grade.get("judgment") or "")
+        try:
+            score = int(grade.get("score") or 0)
+        except (TypeError, ValueError):
+            score = 0
+        grouped[(judgment, score)].append(rid)
+    for (judgment, score), ids in grouped.items():
+        update_results_field_grades(test_id, fid, ids, judgment, score)
+
+
+def manual_grade_decisions(test_id: str, field_id: str) -> list[dict[str, Any]]:
+    """手動採点で確定した判定を、答案1件ずつ（結果ID順）返す。集計しない。"""
+    fid = str(field_id or "").strip()
+    decisions: list[dict[str, Any]] = []
+    rows = list(get_all_results(test_id))
+    rows.sort(key=lambda r: int(r.get("id") or 0))
+    for row in rows:
+        j = normalize_judgment((row.get("judgments") or {}).get(fid, ""))
+        if j not in FINAL_JUDGMENTS:
+            continue
+        try:
+            sc = int((row.get("scores") or {}).get(fid, 0) or 0)
+        except (TypeError, ValueError):
+            sc = 0
+        j, sc = _coerce_judgment_score(j, sc)
+        ans = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
+        decisions.append(
+            {
+                "result_id": int(row.get("id") or 0),
+                "answer_text": ans,
+                "judgment": j,
+                "score": sc,
+            }
+        )
+    return decisions
 
 
 def import_manual_grades_into_criteria(
@@ -507,28 +634,27 @@ def import_manual_grades_into_criteria(
     *,
     only_missing: bool = False,
 ) -> dict[str, Any]:
-    """判定が揃っている手動採点だけを採点基準へ保存する（多数決しない）。
+    """手動採点の確定判定を、答案1件ずつ採点基準へ上書きする。
 
-    同じ回答文字列で判定・配点が食い違う場合は、そのパターンの基準を変えない。
-    reason / uniform_feedback は既存基準を維持。
-    only_missing=True のときは、既に判定があるパターンは上書きしない。
+    同じ回答文字列に複数の判定があっても集計しない。後の一件が基準を置き換える。
+    results へは書き戻さない。reason / uniform_feedback は維持する。
+    only_missing=True のときは、既に判定がある回答文字列は置き換えない。
     """
-    agg = aggregate_manual_grades_by_answer(test_id, field_id)
-    uniform = {
-        str(p["answer_text"]): p for p in agg["uniform"] if p.get("uniform")
-    }
-    if not uniform:
-        return {**agg, "saved_count": 0, "rules": []}
+    decisions = manual_grade_decisions(test_id, field_id)
+    if not decisions:
+        return {"saved_count": 0, "decision_count": 0, "rules": []}
 
-    merged = merge_unique_with_criteria(test_id, field_id)
+    fid = str(field_id or "").strip()
+    merged = merge_unique_with_criteria(test_id, fid)
     by_ans = {str(r.get("answer_text") or ""): r for r in merged}
-    applied = 0
-    for ans, src in uniform.items():
+    written: set[str] = set()
+    for dec in decisions:
+        ans = str(dec["answer_text"])
         row = by_ans.get(ans)
         if row is None:
             row = {
                 "answer_text": ans,
-                "count": int(src.get("total_count") or 0),
+                "count": 0,
                 "judgment": "",
                 "score": "",
                 "reason": "",
@@ -539,9 +665,9 @@ def import_manual_grades_into_criteria(
         existing_j = normalize_judgment(row.get("judgment"))
         if only_missing and existing_j in FINAL_JUDGMENTS:
             continue
-        row["judgment"] = src["judgment"]
-        row["score"] = src["score"]
-        applied += 1
+        row["judgment"] = dec["judgment"]
+        row["score"] = dec["score"]
+        written.add(ans)
 
     rules: list[dict[str, Any]] = []
     for row in merged:
@@ -564,8 +690,72 @@ def import_manual_grades_into_criteria(
                 else None,
             }
         )
-    save_grading_criteria(test_id, field_id, rules)
-    return {**agg, "saved_count": applied, "rules": rules}
+    save_grading_criteria(test_id, fid, rules)
+    return {
+        "saved_count": len(written),
+        "decision_count": len(decisions),
+        "rules": rules,
+    }
+
+
+def reflect_criterion_to_results(
+    test_id: str,
+    field_id: str,
+    answer_text: str,
+    judgment: str,
+    score: int,
+    *,
+    max_score: int = 99,
+) -> dict[str, Any]:
+    """採点基準の1件を保存し、同じ回答文字列の手動採点へ即反映する。"""
+    ans = str(answer_text or "").strip() or "なし"
+    j, sc = _coerce_judgment_score(judgment, score, max_score)
+    if j not in FINAL_JUDGMENTS or not ans:
+        return {"judgment": j, "score": sc, "result_count": 0}
+    fid = str(field_id or "").strip()
+    existing = {
+        str(r.get("answer_text") or ""): dict(r)
+        for r in get_grading_criteria(test_id, fid)
+    }
+    prev = existing.get(ans) or {
+        "answer_text": ans,
+        "reason": "",
+        "uniform_feedback": None,
+    }
+    prev["answer_text"] = ans
+    prev["judgment"] = j
+    prev["score"] = sc
+    existing[ans] = prev
+    rules: list[dict[str, Any]] = []
+    for row in existing.values():
+        judgment_s = str(row.get("judgment") or "").strip()
+        if judgment_s not in FINAL_JUDGMENTS and judgment_s not in ("○", "△", "×"):
+            continue
+        try:
+            score_i = int(row.get("score") or 0)
+        except (TypeError, ValueError):
+            score_i = 0
+        judgment_s, score_i = _coerce_judgment_score(judgment_s, score_i, max_score)
+        if judgment_s not in FINAL_JUDGMENTS:
+            continue
+        rules.append(
+            {
+                "answer_text": row.get("answer_text") or "",
+                "judgment": judgment_s,
+                "score": score_i,
+                "reason": row.get("reason") or "",
+                "uniform_feedback": row.get("uniform_feedback")
+                if isinstance(row.get("uniform_feedback"), dict)
+                else None,
+            }
+        )
+    save_grading_criteria(test_id, fid, rules)
+    result_count = apply_criteria_rules_to_results(
+        test_id,
+        fid,
+        [{"answer_text": ans, "judgment": j, "score": sc}],
+    )
+    return {"judgment": j, "score": sc, "result_count": result_count}
 
 
 def sync_committed_grades_to_criteria(

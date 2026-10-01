@@ -67,6 +67,8 @@ DEFAULT_CONFIG: dict = {
     "manual_grading_hover_toolbar": False,
     # 手動採点と⑧採点基準を常に双方向同期（既定オン＝リアルタイム反映）
     "manual_auto_grading_link": True,
+    # 同OCR確認ポップアップで判定した答案を一覧から消す（既定オン）
+    "group_grade_hide_decided": True,
     # 手動採点: 表示メタ・判定表示モード（記述欄共通）
     "manual_grading_display": {
         "showId": True,
