@@ -437,6 +437,36 @@ class Step8Page(QWidget):
             return 0
         return min(1, cap)
 
+    @staticmethod
+    def _coerce_judgment_score(
+        judgment: str, score: int, max_score: int
+    ) -> tuple[str, int]:
+        """判定と配点の整合: ×は必ず0、○/△は0不可。"""
+        j = str(judgment or "").strip()
+        if j in ("〇", "◯"):
+            j = "○"
+        elif j in ("x", "X", "✕", "✖"):
+            j = "×"
+        cap = max(1, int(max_score))
+        try:
+            sc = int(score)
+        except (TypeError, ValueError):
+            sc = 0
+        sc = max(0, min(cap, sc))
+        if j == "×":
+            return j, 0
+        if j == "○":
+            if sc <= 0:
+                sc = cap
+            return j, sc
+        if j == "△":
+            if sc <= 0:
+                # 部分点の下限。満点欄が1点なら1、それ以外は1〜満点-1の範囲で1
+                sc = 1 if cap <= 1 else min(1, cap - 1)
+                sc = max(1, sc)
+            return j, sc
+        return j, sc
+
     def _set_criteria_judgment(self, row: int, judgment: str) -> None:
         if 0 <= row < len(self._criteria_rows):
             self._criteria_rows[row]["judgment"] = judgment
@@ -1330,7 +1360,9 @@ class Step8Page(QWidget):
             self._force_incorrect_judgment(ans)
         self._sync_checks_to_rows()
 
+        max_score = self._field_max_score()
         rules = []
+        corrected = 0
         for row in self._criteria_rows:
             judgment = str(row.get("judgment") or "").strip()
             if not judgment:
@@ -1343,8 +1375,12 @@ class Step8Page(QWidget):
             if ans in incorrect_answers:
                 judgment = "×"
                 score = 0
-                row["judgment"] = judgment
-                row["score"] = score
+            before = (judgment, score)
+            judgment, score = self._coerce_judgment_score(judgment, score, max_score)
+            if (judgment, score) != before:
+                corrected += 1
+            row["judgment"] = judgment
+            row["score"] = score
             rules.append(
                 {
                     "answer_text": row["answer_text"],
@@ -1365,6 +1401,11 @@ class Step8Page(QWidget):
             sort_criteria_rows(self._criteria_rows)
             self._render_criteria_table()
             msg = f"採点基準を {len(rules)} 件保存しました。"
+            if corrected:
+                msg += (
+                    f"\n判定と配点の不整合 {corrected} 件を是正しました"
+                    "（×→0点、○/△で0点→配点を付与）。"
+                )
             if graded:
                 msg += f"\n手動採点用データへ {graded} 件の判定・配点を反映しました（○/△/×）。"
             h.info(self, "保存完了", msg)
