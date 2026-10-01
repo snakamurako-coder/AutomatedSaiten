@@ -6,7 +6,7 @@ import copy
 from typing import Any
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QMouseEvent, QPainter
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -20,8 +20,6 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
-    QSplitter,
-    QSplitterHandle,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -98,27 +96,61 @@ from ui_qt.table_cells import (
 )
 
 
-class _HeightSplitHandle(QSplitterHandle):
-    """欄の高さ変更用。右端にグラバーを置く。"""
+class _PaneHeightGrip(QWidget):
+    """欄の右下グラバー。掴むと高さを2倍にし、離した位置で確定する。"""
 
-    def __init__(self, orientation: Qt.Orientation, parent: QSplitter) -> None:
-        super().__init__(orientation, parent)
-        self.setCursor(Qt.CursorShape.SplitVCursor)
-        lay = QHBoxLayout(self)
-        lay.setContentsMargins(0, 0, 8, 0)
-        lay.addStretch()
-        grip = QLabel("⠿")
-        grip.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        grip.setStyleSheet(
-            "color: #6b7280; font-size: 16px; font-weight: 700; background: transparent;"
-        )
-        grip.setToolTip("ドラッグで上下の欄の高さを変更")
-        lay.addWidget(grip)
+    def __init__(self, pane: QWidget, scroll: QScrollArea, *, minimum: int) -> None:
+        super().__init__(pane)
+        self._pane = pane
+        self._scroll = scroll
+        self._minimum = minimum
+        self._press_y = 0
+        self._base_h = minimum
+        self.setFixedSize(28, 18)
+        self.setCursor(Qt.CursorShape.SizeVerCursor)
+        self.setToolTip("掴むとこの欄が2倍の高さになり、離した位置で確定します")
 
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setPen(QColor("#374151"))
+        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "⠿")
+        painter.end()
 
-class _HeightSplitter(QSplitter):
-    def createHandle(self) -> QSplitterHandle:  # noqa: N802
-        return _HeightSplitHandle(self.orientation(), self)
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        self._press_y = int(event.globalPosition().y())
+        self._base_h = max(self._minimum, self._pane.height())
+        self._apply_height(self._base_h * 2)
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if not (event.buttons() & Qt.MouseButton.LeftButton):
+            return
+        dy = int(event.globalPosition().y()) - self._press_y
+        self._apply_height(self._base_h * 2 + dy)
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        dy = int(event.globalPosition().y()) - self._press_y
+        self._apply_height(self._base_h * 2 + dy)
+        event.accept()
+
+    def _apply_height(self, height: int) -> None:
+        height = max(self._minimum, int(height))
+        old = self._pane.height()
+        if height == old:
+            return
+        self._pane.setFixedHeight(height)
+        host = self._scroll.widget()
+        if host is not None:
+            host.updateGeometry()
+            host.adjustSize()
+        bar = self._scroll.verticalScrollBar()
+        bar.setValue(bar.value() + (height - old))
 
 
 class Step8Page(QWidget):
@@ -137,10 +169,22 @@ class Step8Page(QWidget):
         self._draw_selected_ids: set[int] = set()
         # 他解答パターンへ移す: None | {"kind": "selected"|"unselected", "result_ids": set[int]}
         self._pattern_move_pending: dict[str, Any] | None = None
-        self._splitter_sized = False
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        root = QVBoxLayout(self)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        make_expanding(self._scroll)
+        outer.addWidget(self._scroll, 1)
+
+        body = QWidget()
+        body.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
+        self._scroll.setWidget(body)
+        root = QVBoxLayout(body)
         root.setContentsMargins(0, 0, 8, 0)
         root.setSpacing(8)
 
@@ -164,37 +208,32 @@ class Step8Page(QWidget):
         root.addWidget(self._build_ocr_replace_section())
         root.addWidget(self._build_deemed_box())
 
-        self._pane_splitter = _HeightSplitter(Qt.Orientation.Vertical)
-        self._pane_splitter.setChildrenCollapsible(False)
-        self._pane_splitter.setHandleWidth(16)
-        self._pane_splitter.setStyleSheet(
-            f"QSplitter::handle {{ background: {COLORS['border']};"
-            f" border-top: 1px solid {COLORS['border_strong']};"
-            f" border-bottom: 1px solid {COLORS['border_strong']}; }}"
-        )
-        criteria_frame = main_table_frame("回答パターン", self._build_criteria_table())
-        self.criteria_table.setMinimumHeight(96)
-        self._pane_splitter.addWidget(criteria_frame)
-        self._pane_splitter.addWidget(self._build_outlier_box())
-        self._pane_splitter.addWidget(self._build_crop_box())
-        self._pane_splitter.setStretchFactor(0, 3)
-        self._pane_splitter.setStretchFactor(1, 2)
-        self._pane_splitter.setStretchFactor(2, 4)
-        root.addWidget(self._pane_splitter, 1)
+        self._criteria_pane = main_table_frame("回答パターン", self._build_criteria_table())
+        self._outlier_pane = self._build_outlier_box()
+        self._crop_pane = self._build_crop_box()
+        self._attach_height_grip(self._criteria_pane, initial=280, minimum=120)
+        self._attach_height_grip(self._outlier_pane, initial=220, minimum=120)
+        self._attach_height_grip(self._crop_pane, initial=360, minimum=140)
+        root.addWidget(self._criteria_pane)
+        root.addWidget(self._outlier_pane)
+        root.addWidget(self._crop_pane)
+        root.addStretch()
 
-    def showEvent(self, event) -> None:  # noqa: ANN001, N802
-        super().showEvent(event)
-        if self._splitter_sized or not hasattr(self, "_pane_splitter"):
+    def _attach_height_grip(self, pane: QWidget, *, initial: int, minimum: int) -> None:
+        pane.setFixedHeight(max(minimum, initial))
+        lay = pane.layout()
+        if lay is None:
             return
-        self._splitter_sized = True
-
-        def _size_panes() -> None:
-            total = max(self._pane_splitter.height(), 480)
-            self._pane_splitter.setSizes(
-                [int(total * 0.34), int(total * 0.24), max(160, int(total * 0.42))]
-            )
-
-        QTimer.singleShot(0, _size_panes)
+        row = QHBoxLayout()
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addStretch()
+        grip = _PaneHeightGrip(pane, self._scroll, minimum=minimum)
+        grip.setStyleSheet(
+            f"background: {COLORS['border']}; border: 1px solid {COLORS['border_strong']};"
+            " border-radius: 4px;"
+        )
+        row.addWidget(grip)
+        lay.addLayout(row)
 
     # ==================== UI 構築 ====================
 
@@ -1380,8 +1419,8 @@ class Step8Page(QWidget):
         self._scroll_to_criteria_table()
 
     def _scroll_to_criteria_table(self) -> None:
-        if hasattr(self, "criteria_table"):
-            self.criteria_table.setFocus(Qt.FocusReason.OtherFocusReason)
+        if hasattr(self, "_scroll") and hasattr(self, "criteria_table"):
+            self._scroll.ensureWidgetVisible(self.criteria_table, 0, 24)
 
     def _on_pattern_move_destination_chosen(self, row: int) -> None:
         pending = self._pattern_move_pending
@@ -1499,8 +1538,8 @@ class Step8Page(QWidget):
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
 
     def _scroll_to_crop_viewer(self) -> None:
-        if hasattr(self, "crop_scroll"):
-            self.crop_scroll.setFocus(Qt.FocusReason.OtherFocusReason)
+        if hasattr(self, "_scroll") and hasattr(self, "_crop_pane"):
+            self._scroll.ensureWidgetVisible(self._crop_pane, 0, 32)
 
     def viewer_scroll(self) -> QScrollArea:
         return self.crop_scroll
