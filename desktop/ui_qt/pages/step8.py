@@ -20,6 +20,8 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QSplitter,
+    QSplitterHandle,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
@@ -84,7 +86,6 @@ from ui_qt.layout_helpers import (
     configure_crop_image_scroll,
     main_table_frame,
     make_expanding,
-    viewport_work_height,
 )
 from ui_qt.style import COLORS
 from ui_qt.table_cells import (
@@ -95,6 +96,29 @@ from ui_qt.table_cells import (
     start_cell_edit,
     wire_toggle_columns,
 )
+
+
+class _HeightSplitHandle(QSplitterHandle):
+    """欄の高さ変更用。右端にグラバーを置く。"""
+
+    def __init__(self, orientation: Qt.Orientation, parent: QSplitter) -> None:
+        super().__init__(orientation, parent)
+        self.setCursor(Qt.CursorShape.SplitVCursor)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 8, 0)
+        lay.addStretch()
+        grip = QLabel("⠿")
+        grip.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        grip.setStyleSheet(
+            "color: #6b7280; font-size: 16px; font-weight: 700; background: transparent;"
+        )
+        grip.setToolTip("ドラッグで上下の欄の高さを変更")
+        lay.addWidget(grip)
+
+
+class _HeightSplitter(QSplitter):
+    def createHandle(self) -> QSplitterHandle:  # noqa: N802
+        return _HeightSplitHandle(self.orientation(), self)
 
 
 class Step8Page(QWidget):
@@ -113,21 +137,10 @@ class Step8Page(QWidget):
         self._draw_selected_ids: set[int] = set()
         # 他解答パターンへ移す: None | {"kind": "selected"|"unselected", "result_ids": set[int]}
         self._pattern_move_pending: dict[str, Any] | None = None
+        self._splitter_sized = False
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
-
-        self._scroll = QScrollArea()
-        self._scroll.setWidgetResizable(True)
-        self._scroll.setFrameShape(QFrame.NoFrame)
-        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
-        make_expanding(self._scroll)
-        outer.addWidget(self._scroll, 1)
-
-        body = QWidget()
-        self._scroll.setWidget(body)
-        root = QVBoxLayout(body)
+        root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 8, 0)
         root.setSpacing(8)
 
@@ -150,27 +163,38 @@ class Step8Page(QWidget):
 
         root.addWidget(self._build_ocr_replace_section())
         root.addWidget(self._build_deemed_box())
-        root.addWidget(main_table_frame("", self._build_criteria_table()))
-        root.addWidget(self._build_outlier_box())
-        self._apply_viewport_heights()
 
-    def resizeEvent(self, event) -> None:  # noqa: ANN001, N802
-        super().resizeEvent(event)
-        self._apply_viewport_heights()
+        self._pane_splitter = _HeightSplitter(Qt.Orientation.Vertical)
+        self._pane_splitter.setChildrenCollapsible(False)
+        self._pane_splitter.setHandleWidth(16)
+        self._pane_splitter.setStyleSheet(
+            f"QSplitter::handle {{ background: {COLORS['border']};"
+            f" border-top: 1px solid {COLORS['border_strong']};"
+            f" border-bottom: 1px solid {COLORS['border_strong']}; }}"
+        )
+        criteria_frame = main_table_frame("回答パターン", self._build_criteria_table())
+        self.criteria_table.setMinimumHeight(96)
+        self._pane_splitter.addWidget(criteria_frame)
+        self._pane_splitter.addWidget(self._build_outlier_box())
+        self._pane_splitter.addWidget(self._build_crop_box())
+        self._pane_splitter.setStretchFactor(0, 3)
+        self._pane_splitter.setStretchFactor(1, 2)
+        self._pane_splitter.setStretchFactor(2, 4)
+        root.addWidget(self._pane_splitter, 1)
 
     def showEvent(self, event) -> None:  # noqa: ANN001, N802
         super().showEvent(event)
-        self._apply_viewport_heights()
-
-    def _apply_viewport_heights(self) -> None:
-        if not hasattr(self, "crop_scroll"):
+        if self._splitter_sized or not hasattr(self, "_pane_splitter"):
             return
-        crop_h = viewport_work_height(160, min_height=512, max_ratio=0.85, widget=self)
-        self.crop_scroll.setMinimumHeight(crop_h)
-        self.crop_scroll.setMaximumHeight(crop_h)
-        crit_h = viewport_work_height(224, min_height=240, max_ratio=0.55, widget=self)
-        self.criteria_table.setMinimumHeight(min(280, crit_h))
-        self.criteria_table.setMaximumHeight(crit_h)
+        self._splitter_sized = True
+
+        def _size_panes() -> None:
+            total = max(self._pane_splitter.height(), 480)
+            self._pane_splitter.setSizes(
+                [int(total * 0.34), int(total * 0.24), max(160, int(total * 0.42))]
+            )
+
+        QTimer.singleShot(0, _size_panes)
 
     # ==================== UI 構築 ====================
 
@@ -358,7 +382,7 @@ class Step8Page(QWidget):
             self._criteria_rows[row]["score"] = int(score)
 
     def _build_outlier_box(self) -> QGroupBox:
-        box = QGroupBox("外れ値・少数派回答の確認（回答欄画像）")
+        box = QGroupBox("外れ値・少数派回答")
         box.setStyleSheet(
             f"QGroupBox {{ background: #f8fafc; border: 1px solid {COLORS['border']}; border-radius: 8px; }}"
         )
@@ -409,13 +433,6 @@ class Step8Page(QWidget):
         self._pattern_move_hint.hide()
         lay.addWidget(self._pattern_move_hint)
 
-        zoom_row = QHBoxLayout()
-        self.crop_controls = CropDisplayControls()
-        self.crop_controls.connect_zoom_changed(self._render_crop_grid)
-        self.crop_controls.connect_meta_changed(self._render_crop_grid)
-        zoom_row.addWidget(self.crop_controls, 1)
-        lay.addLayout(zoom_row)
-
         self.outlier_table = QTableWidget(0, 8)
         self.outlier_table.setHorizontalHeaderLabels(
             ["みなし", "不正解", "回答", "人数", "表示", "生徒ID", "ファイル名", "操作"]
@@ -424,26 +441,45 @@ class Step8Page(QWidget):
             self.outlier_table.setColumnWidth(i, w)
         self.outlier_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.outlier_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.outlier_table.setMaximumHeight(144)
+        self.outlier_table.setMinimumHeight(72)
+        make_expanding(self.outlier_table)
         wire_toggle_columns(
             self.outlier_table,
             (0, 1, 4),
             self._on_outlier_toggle,
         )
         self.outlier_table.cellClicked.connect(self._on_outlier_cell_clicked)
-        lay.addWidget(self.outlier_table)
+        lay.addWidget(self.outlier_table, 1)
+        make_expanding(box)
+        return box
+
+    def _build_crop_box(self) -> QGroupBox:
+        box = QGroupBox("回答欄画像")
+        box.setStyleSheet(
+            f"QGroupBox {{ background: {COLORS['surface']}; border: 1px solid {COLORS['border']};"
+            f" border-radius: 8px; }}"
+        )
+        lay = QVBoxLayout(box)
+        zoom_row = QHBoxLayout()
+        self.crop_controls = CropDisplayControls()
+        self.crop_controls.connect_zoom_changed(self._render_crop_grid)
+        self.crop_controls.connect_meta_changed(self._render_crop_grid)
+        zoom_row.addWidget(self.crop_controls, 1)
+        lay.addLayout(zoom_row)
 
         self.crop_scroll = QScrollArea()
         self.crop_scroll.setWidgetResizable(True)
+        self.crop_scroll.setMinimumHeight(120)
         configure_crop_image_scroll(self.crop_scroll)
-        self.crop_scroll.viewport().setAttribute(Qt.WA_TabletTracking, True)
+        self.crop_scroll.viewport().setAttribute(Qt.WidgetAttribute.WA_TabletTracking, True)
         self.crop_scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['surface']}; }}"
         )
         self.crop_panel = CropTileColumnPanel(margins=(8, 8, 8, 8), spacing=8)
         self.crop_scroll.setWidget(self.crop_panel)
-        lay.addWidget(self.crop_scroll)
+        lay.addWidget(self.crop_scroll, 1)
+        make_expanding(box)
         return box
 
     # ==================== 状態ヘルパー ====================
@@ -572,6 +608,8 @@ class Step8Page(QWidget):
             self._draw_selected_ids.add(result_id)
         # 全再描画するとスクロールが最上端に戻るため、枠色だけ更新する
         self._apply_crop_tile_selection_styles()
+        self._apply_criteria_table_styles()
+        self._apply_outlier_row_highlights()
         if ctrl is not None:
             ctrl.notify_draw_selection_changed()
 
@@ -634,9 +672,42 @@ class Step8Page(QWidget):
             if patch:
                 row.update(patch)
 
+    def _selected_answer_texts(self) -> set[str]:
+        """画像タイルで紫選択中の回答文字列。"""
+        ids = self._draw_selected_ids
+        if not ids:
+            return set()
+        texts: set[str] = set()
+        for item in self._crop_grid_results:
+            row = item.get("row") or {}
+            if int(row.get("rowIndex") or 0) in ids:
+                texts.add(str(row.get("answer_text") or ""))
+        for row in self._outlier_flat_rows:
+            if int(row.get("rowIndex") or 0) in ids:
+                texts.add(str(row.get("answer_text") or ""))
+        return texts
+
+    def _paint_item_row_bg(
+        self,
+        table: QTableWidget,
+        row: int,
+        columns: tuple[int, ...],
+        bg: str | None,
+    ) -> None:
+        color = QColor(bg) if bg else QColor()
+        for c in columns:
+            item = table.item(row, c)
+            if item is None:
+                continue
+            if bg:
+                item.setBackground(color)
+            else:
+                item.setData(Qt.ItemDataRole.BackgroundRole, None)
+
     def _apply_criteria_table_styles(self) -> None:
         fid = self._selected_field_id() or ""
         canonical = self._canonical()
+        selected_answers = self._selected_answer_texts()
         t = self.criteria_table
         t.blockSignals(True)
         for i, row in enumerate(self._criteria_rows):
@@ -653,20 +724,28 @@ class Step8Page(QWidget):
             if incorrect_item is not None:
                 set_toggle_checked(incorrect_item, self._is_incorrect(fid, ans))
 
-            bg = None
-            if row.get("deemed") or self._is_deemed(fid, ans):
+            if ans in selected_answers:
+                bg = COLORS["selection_soft"]
+            elif row.get("deemed") or self._is_deemed(fid, ans):
                 bg = COLORS["accent_soft"]
             elif row.get("incorrect") or self._is_incorrect(fid, ans):
                 bg = COLORS["danger_soft"]
-            color = QColor(bg) if bg else QColor()
-            for c in (0, 1, 2, 3, 6, 7, 8):
-                item = t.item(i, c)
-                if item is None:
-                    continue
-                if bg:
-                    item.setBackground(color)
-                else:
-                    item.setData(Qt.ItemDataRole.BackgroundRole, None)
+            else:
+                bg = None
+            self._paint_item_row_bg(t, i, (0, 1, 2, 3, 6, 7, 8), bg)
+        t.blockSignals(False)
+
+    def _apply_outlier_row_highlights(self) -> None:
+        """外れ値一覧で、画像選択中の同一答案行を紫にする。"""
+        if not hasattr(self, "outlier_table"):
+            return
+        ids = self._draw_selected_ids
+        t = self.outlier_table
+        t.blockSignals(True)
+        for i, row in enumerate(self._outlier_flat_rows):
+            rid = int(row.get("rowIndex") or 0)
+            bg = COLORS["selection_soft"] if rid and rid in ids else None
+            self._paint_item_row_bg(t, i, (0, 1, 2, 3, 4, 5, 6), bg)
         t.blockSignals(False)
 
     def _should_skip_crop(self, ans: str) -> bool:
@@ -1187,6 +1266,7 @@ class Step8Page(QWidget):
                 )
             t.setCellWidget(i, 7, wrap_table_cell(action_widget))
         t.blockSignals(False)
+        self._apply_outlier_row_highlights()
 
     def _select_all_outlier(self, checked: bool) -> None:
         for row in self._outlier_flat_rows:
@@ -1300,13 +1380,8 @@ class Step8Page(QWidget):
         self._scroll_to_criteria_table()
 
     def _scroll_to_criteria_table(self) -> None:
-        if not hasattr(self, "_scroll") or not hasattr(self, "criteria_table"):
-            return
-
-        def _do() -> None:
-            self._scroll.ensureWidgetVisible(self.criteria_table, 0, 24)
-
-        QTimer.singleShot(0, _do)
+        if hasattr(self, "criteria_table"):
+            self.criteria_table.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def _on_pattern_move_destination_chosen(self, row: int) -> None:
         pending = self._pattern_move_pending
@@ -1424,13 +1499,8 @@ class Step8Page(QWidget):
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
 
     def _scroll_to_crop_viewer(self) -> None:
-        if not hasattr(self, "_scroll") or not hasattr(self, "crop_scroll"):
-            return
-
-        def _do() -> None:
-            self._scroll.ensureWidgetVisible(self.crop_scroll, 0, 32)
-
-        QTimer.singleShot(0, _do)
+        if hasattr(self, "crop_scroll"):
+            self.crop_scroll.setFocus(Qt.FocusReason.OtherFocusReason)
 
     def viewer_scroll(self) -> QScrollArea:
         return self.crop_scroll
@@ -1653,6 +1723,8 @@ class Step8Page(QWidget):
             if ctrl is not None:
                 ctrl.ensure_palette_visible()
                 ctrl.notify_draw_selection_changed()
+            self._apply_criteria_table_styles()
+            self._apply_outlier_row_highlights()
             return
 
         visible_ids = {
@@ -1671,6 +1743,8 @@ class Step8Page(QWidget):
         if ctrl is not None:
             ctrl.ensure_palette_visible()
             ctrl.notify_draw_selection_changed()
+        self._apply_criteria_table_styles()
+        self._apply_outlier_row_highlights()
 
         if had_tiles and (saved_v or saved_h):
 
