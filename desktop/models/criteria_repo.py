@@ -10,6 +10,7 @@ from models.database import connect, init_db
 from models.grading_status import FINAL_JUDGMENTS, normalize_judgment
 from models.test_repo import (
     get_all_results,
+    get_answer_fields,
     get_points_conn,
     touch_progress_conn,
     update_results_field_grades,
@@ -131,6 +132,54 @@ def get_criteria_grouped_by_field(test_id: str) -> dict[str, list[dict[str, Any]
         fid = str(rule["fieldId"])
         grouped.setdefault(fid, []).append(rule)
     return grouped
+
+
+def list_question_judgment_disagreements(test_id: str) -> list[dict[str, Any]]:
+    """手動採点と採点基準で○△×が食い違う問いと、両者の判定数。
+
+    両方に確定判定がある答案だけを数える。記号が1人でも違えばその問いを返す。
+    """
+    fields = get_answer_fields(test_id)
+    criteria = get_criteria_grouped_by_field(test_id)
+    results = list(get_all_results(test_id))
+    out: list[dict[str, Any]] = []
+    marks = ("○", "△", "×")
+    for field in fields:
+        fid = str(field.get("id") or "")
+        if not fid:
+            continue
+        rules = {
+            str(rule.get("answer_text") or ""): normalize_judgment(rule.get("judgment"))
+            for rule in criteria.get(fid, [])
+        }
+        manual_counts: Counter[str] = Counter()
+        auto_counts: Counter[str] = Counter()
+        compared = 0
+        mismatched = 0
+        for row in results:
+            ans = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
+            manual = normalize_judgment((row.get("judgments") or {}).get(fid, ""))
+            auto = rules.get(ans, "")
+            if manual not in FINAL_JUDGMENTS or auto not in FINAL_JUDGMENTS:
+                continue
+            compared += 1
+            manual_counts[manual] += 1
+            auto_counts[auto] += 1
+            if manual != auto:
+                mismatched += 1
+        if mismatched <= 0:
+            continue
+        out.append(
+            {
+                "field_id": fid,
+                "display_name": str(field.get("displayName") or fid),
+                "mismatch_count": mismatched,
+                "compared_count": compared,
+                "manual": {mark: int(manual_counts[mark]) for mark in marks},
+                "auto": {mark: int(auto_counts[mark]) for mark in marks},
+            }
+        )
+    return out
 
 
 def save_grading_criteria(

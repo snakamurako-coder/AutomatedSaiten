@@ -9,6 +9,8 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
     QComboBox,
+    QDialog,
+    QDialogButtonBox,
     QDoubleSpinBox,
     QFileDialog,
     QFrame,
@@ -21,10 +23,13 @@ from PySide6.QtWidgets import (
     QScrollArea,
     QSizePolicy,
     QSpinBox,
+    QTableWidget,
+    QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
+from models.criteria_repo import list_question_judgment_disagreements
 from models.output_repo import (
     get_available_output_slot_keys,
     get_feedback_export_format,
@@ -99,6 +104,62 @@ class _PreviewScrollArea(QScrollArea):
     def resizeEvent(self, event) -> None:  # noqa: N802
         super().resizeEvent(event)
         self.viewport_resized.emit()
+
+
+def _judgment_count_text(counts: dict[str, int]) -> str:
+    return f"○ {int(counts.get('○') or 0)}    △ {int(counts.get('△') or 0)}    × {int(counts.get('×') or 0)}"
+
+
+class JudgmentMismatchDialog(QDialog):
+    """印刷前に、食い違う問いの手動・自動の○△×数を二列で示す。"""
+
+    def __init__(self, parent: QWidget, rows: list[dict[str, Any]]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("手動採点と自動採点の判定が食い違っています")
+        self.resize(760, 420)
+        lay = QVBoxLayout(self)
+        note = QLabel(
+            "印刷の前に確認してください。両方に判定がある答案について、"
+            "手動採点と自動採点（採点基準）の ○・△・× の数です。"
+        )
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+        table = QTableWidget(len(rows), 3)
+        table.setHorizontalHeaderLabels(["問い", "手動採点", "自動採点"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        table.setWordWrap(True)
+        for i, row in enumerate(rows):
+            name = str(row.get("display_name") or row.get("field_id") or "")
+            name_item = QTableWidgetItem(
+                f"{name}\n不一致 {int(row.get('mismatch_count') or 0)} 人"
+                f" / 比較 {int(row.get('compared_count') or 0)} 人"
+            )
+            manual_item = QTableWidgetItem(_judgment_count_text(row.get("manual") or {}))
+            auto_item = QTableWidgetItem(_judgment_count_text(row.get("auto") or {}))
+            for item in (name_item, manual_item, auto_item):
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+                )
+            table.setItem(i, 0, name_item)
+            table.setItem(i, 1, manual_item)
+            table.setItem(i, 2, auto_item)
+            table.setRowHeight(i, 52)
+        table.resizeColumnsToContents()
+        header = table.horizontalHeader()
+        header.setStretchLastSection(True)
+        table.setColumnWidth(0, 220)
+        table.setColumnWidth(1, 220)
+        lay.addWidget(table, 1)
+
+        buttons = QDialogButtonBox()
+        go = buttons.addButton("このまま印刷", QDialogButtonBox.ButtonRole.AcceptRole)
+        stop = buttons.addButton("中止", QDialogButtonBox.ButtonRole.RejectRole)
+        go.clicked.connect(self.accept)
+        stop.clicked.connect(self.reject)
+        lay.addWidget(buttons)
 
 
 class Step14Page(QWidget):
@@ -685,10 +746,34 @@ class Step14Page(QWidget):
 
     # ---------- 一括生成 ----------
 
+    def _question_disagreements_for(
+        self, tests: list[tuple[str, str]]
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        for test_id, prefix in tests:
+            if not test_id:
+                continue
+            for item in list_question_judgment_disagreements(test_id):
+                copied = dict(item)
+                name = str(copied.get("display_name") or "")
+                if prefix:
+                    copied["display_name"] = f"{prefix}{name}"
+                rows.append(copied)
+        return rows
+
+    def _confirm_print_with_mismatches(self, tests: list[tuple[str, str]]) -> bool:
+        rows = self._question_disagreements_for(tests)
+        if not rows:
+            return True
+        dlg = JudgmentMismatchDialog(self, rows)
+        return dlg.exec() == QDialog.DialogCode.Accepted
+
     def _on_batch(self) -> None:
         if not self.app.require_active_test():
             return
         test_id = self.app.active_test_id
+        if not self._confirm_print_with_mismatches([(test_id, "")]):
+            return
         export_format = str(self.export_format_combo.currentData() or "pdf")
         self.batch_btn.setEnabled(False)
         self.duplex_btn.setEnabled(False)
@@ -758,6 +843,10 @@ class Step14Page(QWidget):
             return
         if front_id == back_id:
             h.warn(self, "表裏一体印刷", "表側と裏側は異なるテストを選んでください。")
+            return
+        if not self._confirm_print_with_mismatches(
+            [(front_id, "表 "), (back_id, "裏 ")]
+        ):
             return
 
         self.batch_btn.setEnabled(False)
