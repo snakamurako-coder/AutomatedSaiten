@@ -5541,14 +5541,14 @@ function renderCriteriaTable(aiList, rulesMap) {
     var fid = getCriteriaFieldId();
     var canonical = getDeemedCanonicalUi();
     tbody.innerHTML = appState.criteriaList.map(function(item, idx) {
-        var score = 0, judgment = '×', reason = item.answer_text === 'なし' ? '未記入' : '';
+        var score = '', judgment = '', reason = item.answer_text === 'なし' ? '未記入' : '';
         if (aiList) {
             var m = aiList.find(function(a) { return a.answer_text === item.answer_text; });
             if (m) { score = m.recommended_score; judgment = m.judgment || '△'; reason = m.reason || ''; }
         } else if (rulesMap[item.answer_text]) {
             var rule = rulesMap[item.answer_text];
-            judgment = rule.judgment || '×';
-            score = rule.score != null ? rule.score : 0;
+            judgment = rule.judgment || '';
+            score = rule.score !== '' && rule.score != null ? rule.score : '';
             reason = rule.reason != null ? rule.reason : reason;
         }
         var showImg = typeof item.count === 'number' && item.count <= maxOutlier;
@@ -5567,7 +5567,7 @@ function renderCriteriaTable(aiList, rulesMap) {
         return '<tr class="' + rowCls.trim() + '"><td class="col-check">' + deemedCell + '</td>' +
             '<td class="col-check">' + incorrectCell + '</td>' +
             '<td class="col-answer font-mono">' + escapeHtml(item.answer_text) + '</td><td class="col-num">' + item.count + '</td>' +
-            '<td class="col-judgment"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option' + (judgment==='○'?' selected':'') + '>○</option><option' + (judgment==='△'?' selected':'') + '>△</option><option' + (judgment==='×'?' selected':'') + '>×</option></select></td>' +
+            '<td class="col-judgment"><select class="crit-judgment border rounded" data-idx="' + idx + '"><option value=""' + (judgment===''?' selected':'') + '></option><option' + (judgment==='○'?' selected':'') + '>○</option><option' + (judgment==='△'?' selected':'') + '>△</option><option' + (judgment==='×'?' selected':'') + '>×</option></select></td>' +
             '<td class="col-score"><input type="number" class="crit-score border rounded" data-idx="' + idx + '" value="' + score + '"></td>' +
             '<td class="col-reason"><input class="crit-reason border rounded" data-idx="' + idx + '" value="' + escapeHtml(reason || '') + '"></td>' +
             '<td class="col-action">' + confirmCell + '</td></tr>';

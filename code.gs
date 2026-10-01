@@ -3003,8 +3003,8 @@ function saveGradingCriteria(fieldId, confirmedRules, testSsId) {
     kept.push([
       fieldId,
       rule.answer_text,
-      rule.judgment || '×',
-      parseInt(rule.score, 10) || 0,
+      rule.judgment || '',
+      rule.score === '' || rule.score === null ? '' : (parseInt(rule.score, 10) || 0),
       rule.reason || ''
     ]);
   });
@@ -3029,7 +3029,7 @@ function getGradingCriteria(ss) {
       fieldId: String(data[i][0]),
       answer_text: String(data[i][1]),
       judgment: String(data[i][2]),
-      score: parseInt(data[i][3], 10) || 0,
+      score: data[i][3] === '' ? '' : (parseInt(data[i][3], 10) || 0),
       reason: String(data[i][4] || '')
     });
   }
@@ -3073,8 +3073,8 @@ function executeGrading() {
         row[fm.judgment] = rule.judgment;
         row[fm.score] = rule.score;
       } else {
-        row[fm.judgment] = '×';
-        row[fm.score] = 0;
+        row[fm.judgment] = '';
+        row[fm.score] = '';
         unregisteredCount++;
       }
     });
