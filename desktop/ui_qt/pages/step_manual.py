@@ -1681,11 +1681,28 @@ class StepManualPage(QWidget):
                 item["score"] = score
         if self._filter_snapshot_ids is not None:
             self._filter_snapshot_ids |= id_set
-        if self._sort_mode in ("judgment_file", "judgment_id"):
-            self._sort_items()
-        self._render_grid()
+
+        # 並び替え・印字マーク時のみ再構築。それ以外は枠/バッジ更新だけでスクロール維持
+        needs_rebuild = (
+            self._print_mark_mode
+            or self._sort_mode in ("judgment_file", "judgment_id")
+        )
+        v_bar = self.crop_scroll.verticalScrollBar()
+        h_bar = self.crop_scroll.horizontalScrollBar()
+        saved_v = v_bar.value() if v_bar is not None else 0
+        saved_h = h_bar.value() if h_bar is not None else 0
+        if needs_rebuild:
+            if self._sort_mode in ("judgment_file", "judgment_id"):
+                self._sort_items()
+            self._render_grid(preserve_scroll=True)
+        else:
+            self._sync_tile_judgment_chrome()
+            self._update_selection_label()
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
+        if needs_rebuild and (saved_v or saved_h):
+            # コンボ再構築後にレイアウトが動いても位置を戻す
+            self._schedule_scroll_restore(self.crop_scroll, saved_v, saved_h)
         if not silent:
             if not nj:
                 h.info(self, "反映完了", f"{n} 件の判定を解除しました（未判定）。")
@@ -1706,7 +1723,12 @@ class StepManualPage(QWidget):
                         dlg.exec()
                     finally:
                         self._in_group_dialog = False
-                    self._render_grid()
+                    # ダイアログ後も表示位置を維持
+                    if needs_rebuild or self._print_mark_mode:
+                        self._render_grid(preserve_scroll=True)
+                    else:
+                        self._sync_tile_judgment_chrome()
+                        self._update_selection_label()
                     self._update_status_summary()
                     break
 
@@ -1775,6 +1797,10 @@ class StepManualPage(QWidget):
 
     def _apply_tile_selection_styles(self) -> None:
         """選択枠だけ更新（再構築しない＝スクロール位置を維持）。"""
+        self._sync_tile_judgment_chrome(update_badges=False)
+
+    def _sync_tile_judgment_chrome(self, *, update_badges: bool = True) -> None:
+        """判定色の枠・バッジをデータに合わせて更新（タイル再構築なし）。"""
         by_id = {
             int(i.get("result_id") or 0): i
             for i in self._current_page_items()
@@ -1796,6 +1822,36 @@ class StepManualPage(QWidget):
                 f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
                 f" border-radius: 6px; }}"
             )
+            if not update_badges or self._print_mark_mode:
+                continue
+            sc = item.get("score")
+            badge = tile.findChild(QLabel, "judgment_badge")
+            if j:
+                try:
+                    sc_txt = f" {int(sc)}点" if sc is not None and sc != "" else ""
+                except (TypeError, ValueError):
+                    sc_txt = ""
+                stroke = self._judgment_stroke_color(j) or COLORS["accent"]
+                text = f"{j}{sc_txt}"
+                style = (
+                    f"border: none; font-size: 11px; font-weight: 700; color: {stroke};"
+                    f" background: transparent;"
+                )
+                if badge is None:
+                    badge = QLabel(text)
+                    badge.setObjectName("judgment_badge")
+                    badge.setStyleSheet(style)
+                    lay = tile.layout()
+                    if lay is not None:
+                        # 画像スタックの直後に挿入
+                        lay.insertWidget(1, badge)
+                else:
+                    badge.setText(text)
+                    badge.setStyleSheet(style)
+                    badge.show()
+            elif badge is not None:
+                badge.hide()
+                badge.clear()
 
     def _schedule_scroll_restore(
         self, scroll: QScrollArea, saved_v: int, saved_h: int = 0
@@ -1993,7 +2049,7 @@ class StepManualPage(QWidget):
             ctrl.register_stack(ink_stack)
         lay.addWidget(ink_stack)
 
-        # 文字モードのみ、画像下に判定・得点を表示
+        # 文字モードのみ、画像下に判定・得点を表示（後から in-place 更新できるよう命名）
         if j and not self._print_mark_mode:
             try:
                 sc_txt = f" {int(sc)}点" if sc is not None and sc != "" else ""
@@ -2001,6 +2057,7 @@ class StepManualPage(QWidget):
                 sc_txt = ""
             stroke = self._judgment_stroke_color(j) or COLORS["accent"]
             badge = QLabel(f"{j}{sc_txt}")
+            badge.setObjectName("judgment_badge")
             badge.setStyleSheet(
                 f"border: none; font-size: 11px; font-weight: 700; color: {stroke};"
                 f" background: transparent;"
