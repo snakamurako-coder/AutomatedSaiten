@@ -334,6 +334,9 @@ class MainWindow(QMainWindow):
             manual_page = self.pages.get(MANUAL_GRADING_STEP_ID)
             if manual_page is not None and hasattr(manual_page, "apply_layout_prefs"):
                 manual_page.apply_layout_prefs()
+            step8 = self.pages.get(8)
+            if step8 is not None and hasattr(step8, "apply_link_prefs"):
+                step8.apply_link_defaults()  # type: ignore[attr-defined]
             self.apply_manual_grading_content_margins()
 
         open_settings_dialog(self, on_saved=on_saved)

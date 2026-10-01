@@ -311,8 +311,14 @@ class StepManualPage(QWidget):
         self.sort_combo.currentIndexChanged.connect(self._on_sort_changed)
         top.addWidget(self.sort_combo)
         top.addWidget(h.button("判定を再読込", self._reload_grades))
-        top.addWidget(h.button("採点基準へ反映", self._on_export_manual_to_criteria))
-        top.addWidget(h.button("採点基準から取込", self._on_import_criteria_to_manual))
+        self.btn_export_to_criteria = h.button(
+            "採点基準へ反映", self._on_export_manual_to_criteria
+        )
+        self.btn_import_from_criteria = h.button(
+            "採点基準から取込", self._on_import_criteria_to_manual
+        )
+        top.addWidget(self.btn_export_to_criteria)
+        top.addWidget(self.btn_import_from_criteria)
         top.addStretch()
         left_hdr.addLayout(top)
 
@@ -368,10 +374,35 @@ class StepManualPage(QWidget):
         # --- 最下部固定オーバーレイ ---
         self.grade_footer = self._build_footer_overlay()
         root.addWidget(self.grade_footer)
+        self._update_link_dependent_ui()
+
+    def _update_link_dependent_ui(self) -> None:
+        """常時リンクONのときは移行用ボタン・基準不一致フィルタを隠す。"""
+        linked = manual_auto_grading_link_enabled()
+        for btn in (
+            getattr(self, "btn_export_to_criteria", None),
+            getattr(self, "btn_import_from_criteria", None),
+        ):
+            if btn is None:
+                continue
+            btn.setVisible(not linked)
+            btn.setEnabled(not linked)
+        mismatch_btn = self._filter_btns.get("基準不一致")
+        if mismatch_btn is not None:
+            if linked and mismatch_btn.isChecked():
+                mismatch_btn.blockSignals(True)
+                mismatch_btn.setChecked(False)
+                mismatch_btn.blockSignals(False)
+                self._refresh_filter_snapshot()
+                if self._items:
+                    self._render_grid(preserve_scroll=True)
+            mismatch_btn.setVisible(not linked)
+            mismatch_btn.setEnabled(not linked)
 
     def apply_layout_prefs(self) -> None:
         """詳細設定の手動採点レイアウト変更を反映する。"""
         self._apply_toolbar_layout_mode(force=True)
+        self._update_link_dependent_ui()
 
     def _apply_toolbar_layout_mode(self, *, force: bool = False) -> None:
         enabled = manual_grading_hover_toolbar_enabled()
@@ -1017,6 +1048,7 @@ class StepManualPage(QWidget):
         return None
 
     def refresh(self) -> None:
+        self._update_link_dependent_ui()
         if not self.app.require_active_test():
             return
         self._feedback_style = get_feedback_style()

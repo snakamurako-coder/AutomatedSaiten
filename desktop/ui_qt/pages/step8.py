@@ -229,12 +229,14 @@ class Step8Page(QWidget):
         toolbar.addWidget(h.button("回答を集約", self._on_aggregate))
         toolbar.addWidget(h.button("AI原案", self._on_gemini))
         toolbar.addWidget(h.button("基準を保存", self._on_save_criteria, variant="primary"))
-        toolbar.addWidget(
-            h.button("手動採点から取込", self._on_import_manual_to_criteria)
+        self.btn_import_manual = h.button(
+            "手動採点から取込", self._on_import_manual_to_criteria
         )
-        toolbar.addWidget(
-            h.button("手動採点へ反映", self._on_export_criteria_to_manual)
+        self.btn_export_to_manual = h.button(
+            "手動採点へ反映", self._on_export_criteria_to_manual
         )
+        toolbar.addWidget(self.btn_import_manual)
+        toolbar.addWidget(self.btn_export_to_manual)
         toolbar.addStretch()
         root.addLayout(toolbar)
 
@@ -251,6 +253,7 @@ class Step8Page(QWidget):
         root.addWidget(self._outlier_pane)
         root.addWidget(self._crop_pane)
         root.addStretch()
+        self._update_link_dependent_ui()
 
     def _attach_height_grip(self, pane: QWidget, *, initial: int, minimum: int) -> None:
         pane.setFixedHeight(max(minimum, initial))
@@ -519,9 +522,10 @@ class Step8Page(QWidget):
         self.hide_incorrect_check.toggled.connect(lambda _c: self._purge_incorrect_from_grid())
         ctrl.addWidget(self.hide_incorrect_check)
         ctrl.addWidget(h.button("なし（未回答）を確認", self._on_show_none_crops))
-        ctrl.addWidget(
-            h.button("基準と手動の不一致", self._on_show_criteria_manual_mismatches)
+        self.btn_show_mismatches = h.button(
+            "基準と手動の不一致", self._on_show_criteria_manual_mismatches
         )
+        ctrl.addWidget(self.btn_show_mismatches)
         ctrl.addWidget(h.button("表示を全選択", lambda: self._select_all_outlier(True)))
         ctrl.addWidget(h.button("表示を解除", lambda: self._select_all_outlier(False)))
         ctrl.addWidget(h.button("選択を画像表示", self._on_show_selected_crops, variant="primary"))
@@ -947,7 +951,25 @@ class Step8Page(QWidget):
 
     # ==================== 再読込 ====================
 
+    def _update_link_dependent_ui(self) -> None:
+        """常時リンクONのときは移行用ボタン・不一致表示を隠す。"""
+        linked = manual_auto_grading_link_enabled()
+        for btn in (
+            getattr(self, "btn_import_manual", None),
+            getattr(self, "btn_export_to_manual", None),
+            getattr(self, "btn_show_mismatches", None),
+        ):
+            if btn is None:
+                continue
+            btn.setVisible(not linked)
+            btn.setEnabled(not linked)
+
+    def apply_link_defaults(self) -> None:
+        """詳細設定の採点リンク変更を反映する。"""
+        self._update_link_dependent_ui()
+
     def refresh(self) -> None:
+        self._update_link_dependent_ui()
         if not self.app.require_active_test():
             return
         self._fields = get_answer_fields(self.app.active_test_id)
