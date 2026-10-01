@@ -5,7 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PIL import Image
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QTimer, Qt
 from PySide6.QtGui import QBrush, QColor, QStandardItem, QStandardItemModel
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -151,7 +151,7 @@ class GroupGradeDialog(QDialog):
             self._selected_ids.remove(rid)
         else:
             self._selected_ids.add(rid)
-        self._render_grid()
+        self._apply_selection_styles()
 
     def _apply_judgment(self, judgment: str):
         if not self._selected_ids:
@@ -173,9 +173,32 @@ class GroupGradeDialog(QDialog):
             
         self._render_grid()
 
+    def _apply_selection_styles(self) -> None:
+        for stack in list(getattr(self.page, "_ink_stacks", []) or []):
+            tile = stack.parentWidget()
+            if tile is None or tile.window() is not self:
+                continue
+            rid = int(getattr(stack, "result_id", 0) or 0)
+            item = next(
+                (i for i in self.items if int(i.get("result_id") or 0) == rid),
+                None,
+            )
+            if item is None:
+                continue
+            j = normalize_judgment(item.get("judgment"))
+            selected = rid in self._selected_ids
+            bg, border = self.page._tile_colors(j, selected=selected)
+            border_w = 3 if selected else 2
+            tile.setStyleSheet(
+                f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
+                f" border-radius: 6px; }}"
+            )
+
     def _render_grid(self, preserve_scroll: bool = True):
         v_bar = self.scroll.verticalScrollBar()
-        old_val = v_bar.value()
+        h_bar = self.scroll.horizontalScrollBar()
+        saved_v = v_bar.value() if v_bar is not None else 0
+        saved_h = h_bar.value() if h_bar is not None else 0
 
         self.panel.clear_tiles()
         zoom = max(30, min(400, self.page.crop_controls.zoom_value())) / 100.0
@@ -188,21 +211,8 @@ class GroupGradeDialog(QDialog):
             )
             self.panel.add_tile(tile, idx)
 
-        if preserve_scroll and old_val > 0:
-            # Immediate attempt (works when range unchanged, e.g. palette toggle)
-            v_bar.setValue(old_val)
-            # Fallback via rangeChanged (works when range changes, e.g. zoom)
-            def _restore(_mn, mx, ov=old_val, vb=v_bar):
-                try:
-                    vb.rangeChanged.disconnect(_restore)
-                except RuntimeError:
-                    pass
-                if mx > 0:
-                    vb.setValue(min(ov, mx))
-            v_bar.rangeChanged.connect(_restore)
-            # Final fallback via timer for edge cases
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(100, lambda: v_bar.setValue(min(old_val, v_bar.maximum())))
+        if preserve_scroll:
+            self.page._schedule_scroll_restore(self.scroll, saved_v, saved_h)
 
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
@@ -231,6 +241,7 @@ class StepManualPage(QWidget):
         self._palette_active_key: str | None = None
         self._palette_btns: dict[str, QPushButton] = {}
         self._ink_stacks: list[CropInkImageStack] = []
+        self._scroll_restore_token: object | None = None
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -962,7 +973,8 @@ class StepManualPage(QWidget):
         elif self._palette_active_key == key:
             self._palette_active_key = None
         self._update_palette_button_styles()
-        self._render_grid()
+        # タイル内容は変わらないので再描画しない（スクロール維持）
+        self._update_selection_label()
 
     def _update_palette_button_styles(self) -> None:
         for key, btn in self._palette_btns.items():
@@ -1556,7 +1568,11 @@ class StepManualPage(QWidget):
 
     def _clear_selection(self) -> None:
         self._selected_ids.clear()
-        self._render_grid()
+        self._apply_tile_selection_styles()
+        self._update_selection_label()
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.notify_draw_selection_changed()
 
     def _select_all_visible(self) -> None:
         """表示中の画像をすべて選択（フィルタ適用時は表示分、指定件数表示時は現在ページ）。"""
@@ -1569,7 +1585,11 @@ class StepManualPage(QWidget):
             h.warn(self, "表示なし", "選択できる表示中の画像がありません。")
             return
         self._selected_ids = ids
-        self._render_grid()
+        self._apply_tile_selection_styles()
+        self._update_selection_label()
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.notify_draw_selection_changed()
 
     def _select_ungraded(self) -> None:
         """表示中の画像のうち、判定なし（未採点）を一括選択する。"""
@@ -1583,7 +1603,11 @@ class StepManualPage(QWidget):
             h.warn(self, "未採点なし", "表示中の未採点（判定なし）はありません。")
             return
         self._selected_ids = ids
-        self._render_grid()
+        self._apply_tile_selection_styles()
+        self._update_selection_label()
+        ctrl = getattr(self.app, "palette_controller", None)
+        if ctrl is not None:
+            ctrl.notify_draw_selection_changed()
 
     def _resolve_judgment_score(self, judgment: str) -> tuple[str, int] | None:
         raw = str(judgment or "").strip()
@@ -1717,12 +1741,7 @@ class StepManualPage(QWidget):
     def _clear_grid(self) -> None:
         self.crop_panel.clear_tiles()
 
-    def _render_grid(self, preserve_scroll: bool = True) -> None:
-        v_bar = self.crop_scroll.verticalScrollBar()
-        old_val = v_bar.value()
-
-        self._clear_grid()
-        self._ink_stacks = []
+    def _update_selection_label(self) -> None:
         visible = self._filtered_items()
         total_vis = len(visible)
         page_items = self._current_page_items()
@@ -1753,6 +1772,101 @@ class StepManualPage(QWidget):
             else:
                 sel = "判定パレット: 判定を選んでから画像をタップ"
         self.selection_label.setText(sel)
+
+    def _apply_tile_selection_styles(self) -> None:
+        """選択枠だけ更新（再構築しない＝スクロール位置を維持）。"""
+        by_id = {
+            int(i.get("result_id") or 0): i
+            for i in self._current_page_items()
+            if int(i.get("result_id") or 0)
+        }
+        for stack in self._ink_stacks:
+            tile = stack.parentWidget()
+            if tile is None:
+                continue
+            rid = int(getattr(stack, "result_id", 0) or 0)
+            item = by_id.get(rid)
+            if item is None:
+                continue
+            j = normalize_judgment(item.get("judgment"))
+            selected = rid in self._selected_ids
+            bg, border = self._tile_colors(j, selected=selected)
+            border_w = 3 if selected else 2
+            tile.setStyleSheet(
+                f"QFrame {{ background: {bg}; border: {border_w}px solid {border};"
+                f" border-radius: 6px; }}"
+            )
+
+    def _schedule_scroll_restore(
+        self, scroll: QScrollArea, saved_v: int, saved_h: int = 0
+    ) -> None:
+        """FlowLayout 再計算で一時的に range=0 になっても、見ていた位置へ戻す。"""
+        if saved_v <= 0 and saved_h <= 0:
+            return
+        v_bar = scroll.verticalScrollBar()
+        h_bar = scroll.horizontalScrollBar()
+        token = object()
+        self._scroll_restore_token = token
+
+        def _apply() -> None:
+            if getattr(self, "_scroll_restore_token", None) is not token:
+                return
+            if v_bar is not None and saved_v > 0:
+                mx = v_bar.maximum()
+                if mx > 0:
+                    v_bar.setValue(min(saved_v, mx))
+            if h_bar is not None and saved_h > 0:
+                mxh = h_bar.maximum()
+                if mxh > 0:
+                    h_bar.setValue(min(saved_h, mxh))
+
+        def _on_v_range(_mn: int, mx: int) -> None:
+            if getattr(self, "_scroll_restore_token", None) is not token:
+                if v_bar is not None:
+                    try:
+                        v_bar.rangeChanged.disconnect(_on_v_range)
+                    except RuntimeError:
+                        pass
+                return
+            if mx <= 0:
+                return
+            v_bar.setValue(min(saved_v, mx))
+            if mx >= saved_v:
+                try:
+                    v_bar.rangeChanged.disconnect(_on_v_range)
+                except RuntimeError:
+                    pass
+
+        if v_bar is not None and saved_v > 0:
+            v_bar.rangeChanged.connect(_on_v_range)
+        for ms in (0, 16, 50, 100, 200):
+            QTimer.singleShot(ms, _apply)
+
+        def _cleanup() -> None:
+            if getattr(self, "_scroll_restore_token", None) is token:
+                self._scroll_restore_token = None
+            if v_bar is not None:
+                try:
+                    v_bar.rangeChanged.disconnect(_on_v_range)
+                except RuntimeError:
+                    pass
+            _apply()
+
+        QTimer.singleShot(300, _cleanup)
+
+    def _render_grid(self, preserve_scroll: bool = True) -> None:
+        if not preserve_scroll:
+            self._scroll_restore_token = None
+        v_bar = self.crop_scroll.verticalScrollBar()
+        h_bar = self.crop_scroll.horizontalScrollBar()
+        saved_v = v_bar.value() if v_bar is not None else 0
+        saved_h = h_bar.value() if h_bar is not None else 0
+        had_tiles = bool(self._ink_stacks)
+
+        self._clear_grid()
+        self._ink_stacks = []
+        page_items = self._current_page_items()
+        self._update_selection_label()
         if self._items:
             self._update_status_summary()
         if not page_items:
@@ -1772,21 +1886,8 @@ class StepManualPage(QWidget):
             ctrl.ensure_palette_visible()
             ctrl.notify_draw_selection_changed()
 
-        if preserve_scroll and old_val > 0:
-            # Immediate attempt (works when range unchanged, e.g. palette toggle)
-            v_bar.setValue(old_val)
-            # Fallback via rangeChanged (works when range changes, e.g. zoom)
-            def _restore(_mn, mx, ov=old_val, vb=v_bar):
-                try:
-                    vb.rangeChanged.disconnect(_restore)
-                except RuntimeError:
-                    pass
-                if mx > 0:
-                    vb.setValue(min(ov, mx))
-            v_bar.rangeChanged.connect(_restore)
-            # Final fallback via timer for edge cases
-            from PySide6.QtCore import QTimer
-            QTimer.singleShot(100, lambda: v_bar.setValue(min(old_val, v_bar.maximum())))
+        if preserve_scroll and had_tiles and (saved_v or saved_h):
+            self._schedule_scroll_restore(self.crop_scroll, saved_v, saved_h)
 
     def _judgment_stroke_color(self, judgment: str) -> str | None:
         mark = (self._feedback_style or {}).get("mark") or {}
@@ -1944,6 +2045,7 @@ class StepManualPage(QWidget):
             self._selected_ids.discard(result_id)
         else:
             self._selected_ids.add(result_id)
-        self._render_grid()
+        self._apply_tile_selection_styles()
+        self._update_selection_label()
         if ctrl is not None:
             ctrl.notify_draw_selection_changed()
