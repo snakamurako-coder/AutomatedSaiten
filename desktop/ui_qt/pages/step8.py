@@ -48,9 +48,11 @@ from models.text_annotation_repo import (
 )
 from models.database import connect
 from models.test_repo import (
+    get_all_results,
     get_answer_fields,
     get_points_conn,
     rewrite_field_texts_for_result_ids,
+    update_results_field_grades,
 )
 from models.text_processing import (
     apply_deemed_scoring_to_field,
@@ -371,6 +373,7 @@ class Step8Page(QWidget):
         elif col == 1:
             if checked:
                 self._incorrect_map(fid)[ans] = True
+                self._force_incorrect_judgment(ans)
             else:
                 self._incorrect_map(fid).pop(ans, None)
         self._sync_checks_to_rows()
@@ -437,10 +440,19 @@ class Step8Page(QWidget):
     def _set_criteria_judgment(self, row: int, judgment: str) -> None:
         if 0 <= row < len(self._criteria_rows):
             self._criteria_rows[row]["judgment"] = judgment
+            # ×以外にしたら不正解チェックを外す（手動採点の×連動と矛盾させない）
+            if str(judgment or "").strip() != "×":
+                self._clear_incorrect_for_answer(
+                    str(self._criteria_rows[row].get("answer_text") or "")
+                )
 
     def _set_criteria_score(self, row: int, score: int) -> None:
         if 0 <= row < len(self._criteria_rows):
             self._criteria_rows[row]["score"] = int(score)
+            if int(score) > 0:
+                self._clear_incorrect_for_answer(
+                    str(self._criteria_rows[row].get("answer_text") or "")
+                )
 
     def _build_outlier_box(self) -> QGroupBox:
         box = QGroupBox("外れ値・少数派回答")
@@ -695,9 +707,92 @@ class Step8Page(QWidget):
             m.pop(ans, None)
         else:
             m[ans] = True
+            self._force_incorrect_judgment(ans)
         self._sync_checks_to_rows()
         self._refresh_check_views()
         self._purge_incorrect_from_grid()
+
+    def _clear_incorrect_for_answer(self, ans: str) -> None:
+        fid = self._selected_field_id()
+        if not fid or not ans:
+            return
+        if ans not in self._incorrect_map(fid):
+            return
+        self._incorrect_map(fid).pop(ans, None)
+        self._sync_checks_to_rows()
+        # トグル表示だけ更新（表の全面再構築はしない）
+        t = getattr(self, "criteria_table", None)
+        if t is not None:
+            for i, row in enumerate(self._criteria_rows):
+                if str(row.get("answer_text") or "") != ans:
+                    continue
+                item = t.item(i, 1)
+                if item is not None:
+                    set_toggle_checked(item, False)
+
+    def _force_incorrect_judgment(self, ans: str) -> None:
+        """不正解☑ → 判定×・得点0（手動採点と同一の基準値）。"""
+        key = str(ans or "")
+        if not key:
+            return
+        t = getattr(self, "criteria_table", None)
+        for i, row in enumerate(self._criteria_rows):
+            if str(row.get("answer_text") or "") != key:
+                continue
+            row["judgment"] = "×"
+            row["score"] = 0
+            if t is None:
+                continue
+            combo = find_judgment_combo(t, i)
+            if combo is not None:
+                combo.blockSignals(True)
+                combo.setCurrentText("×")
+                combo.blockSignals(False)
+            score_w = find_score_widget(t, i)
+            if score_w is not None:
+                score_w.set_value(0)
+
+    def _result_ids_for_answers(self, answers: set[str]) -> list[int]:
+        fid = self._selected_field_id()
+        test_id = self.app.active_test_id
+        if not fid or not test_id or not answers:
+            return []
+        ids: list[int] = []
+        for row in get_all_results(test_id):
+            text = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
+            if text not in answers:
+                continue
+            rid = int(row.get("id") or 0)
+            if rid > 0:
+                ids.append(rid)
+        return ids
+
+    def _apply_criteria_grades_to_results(
+        self, rules: list[dict[str, Any]]
+    ) -> int:
+        """採点基準の判定・配点を、手動採点と同じ results へ回答文字列単位で書き込む。"""
+        fid = self._selected_field_id()
+        test_id = self.app.active_test_id
+        if not fid or not test_id or not rules:
+            return 0
+        by_grade: dict[tuple[str, int], set[str]] = {}
+        for rule in rules:
+            ans = str(rule.get("answer_text") or "")
+            judgment = str(rule.get("judgment") or "").strip()
+            if not ans or not judgment:
+                continue
+            try:
+                score = int(rule.get("score") or 0)
+            except (TypeError, ValueError):
+                score = 0
+            by_grade.setdefault((judgment, score), set()).add(ans)
+        updated = 0
+        for (judgment, score), answers in by_grade.items():
+            ids = self._result_ids_for_answers(answers)
+            if not ids:
+                continue
+            updated += update_results_field_grades(test_id, fid, ids, judgment, score)
+        return updated
 
     def _sync_checks_to_rows(self) -> None:
         fid = self._selected_field_id()
@@ -707,6 +802,9 @@ class Step8Page(QWidget):
             ans = row["answer_text"]
             row["deemed"] = self._is_deemed(fid, ans)
             row["incorrect"] = self._is_incorrect(fid, ans)
+            if row["incorrect"]:
+                row["judgment"] = "×"
+                row["score"] = 0
 
     def _refresh_check_views(self) -> None:
         self._apply_criteria_table_styles()
@@ -1180,6 +1278,7 @@ class Step8Page(QWidget):
         elif col == 1:
             if checked:
                 self._incorrect_map(fid)[ans] = True
+                self._force_incorrect_judgment(ans)
             else:
                 self._incorrect_map(fid).pop(ans, None)
             self._sync_checks_to_rows()
@@ -1221,6 +1320,16 @@ class Step8Page(QWidget):
         if not self.app.require_active_test() or not fid:
             return
         self._sync_criteria_from_widgets()
+        # 不正解☑は必ず ×/0 として保存・手動採点へ反映
+        incorrect_answers = {
+            str(row.get("answer_text") or "")
+            for row in self._criteria_rows
+            if self._is_incorrect(fid, str(row.get("answer_text") or ""))
+        }
+        for ans in incorrect_answers:
+            self._force_incorrect_judgment(ans)
+        self._sync_checks_to_rows()
+
         rules = []
         for row in self._criteria_rows:
             judgment = str(row.get("judgment") or "").strip()
@@ -1230,6 +1339,12 @@ class Step8Page(QWidget):
                 score = int(row.get("score") or 0)
             except (TypeError, ValueError):
                 score = 0
+            ans = str(row.get("answer_text") or "")
+            if ans in incorrect_answers:
+                judgment = "×"
+                score = 0
+                row["judgment"] = judgment
+                row["score"] = score
             rules.append(
                 {
                     "answer_text": row["answer_text"],
@@ -1246,9 +1361,13 @@ class Step8Page(QWidget):
             return
         try:
             save_grading_criteria(self.app.active_test_id, fid, rules)
+            graded = self._apply_criteria_grades_to_results(rules)
             sort_criteria_rows(self._criteria_rows)
             self._render_criteria_table()
-            h.info(self, "保存完了", f"採点基準を {len(rules)} 件保存しました。")
+            msg = f"採点基準を {len(rules)} 件保存しました。"
+            if graded:
+                msg += f"\n手動採点用データへ {graded} 件の判定・配点を反映しました（○/△/×）。"
+            h.info(self, "保存完了", msg)
         except Exception as e:
             h.error(self, "エラー", str(e))
 
