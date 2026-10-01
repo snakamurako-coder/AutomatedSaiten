@@ -190,7 +190,7 @@ class GroupGradeDialog(QDialog):
 
         if preserve_scroll and old_val > 0:
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: v_bar.setValue(old_val))
+            QTimer.singleShot(50, lambda: v_bar.setValue(old_val))
 
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
@@ -1762,7 +1762,7 @@ class StepManualPage(QWidget):
 
         if preserve_scroll and old_val > 0:
             from PySide6.QtCore import QTimer
-            QTimer.singleShot(0, lambda: v_bar.setValue(old_val))
+            QTimer.singleShot(50, lambda: v_bar.setValue(old_val))
 
     def _judgment_stroke_color(self, judgment: str) -> str | None:
         mark = (self._feedback_style or {}).get("mark") or {}
