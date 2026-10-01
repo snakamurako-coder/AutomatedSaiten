@@ -4,16 +4,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
     QHBoxLayout,
+    QLabel,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+from models.criteria_repo import list_question_judgment_disagreements
 
 from models.domain_repo import (
     calculate_domain_scores,
@@ -25,6 +30,61 @@ from ui_qt import helpers as h
 from ui_qt.layout_helpers import make_expanding
 from ui_qt.style import COLORS
 from ui_qt.table_cells import make_editable_item, make_readonly_item, wire_excel_edit_columns
+
+
+def _judgment_count_text(counts: dict[str, int]) -> str:
+    return f"○ {int(counts.get('○') or 0)}    △ {int(counts.get('△') or 0)}    × {int(counts.get('×') or 0)}"
+
+
+class JudgmentMismatchDialog(QDialog):
+    """食い違う問いの手動・自動の○△×数を二列で示す。"""
+
+    def __init__(self, parent: QWidget, rows: list[dict[str, Any]]) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("手動採点と自動採点の判定が食い違っています")
+        self.resize(760, 420)
+        lay = QVBoxLayout(self)
+        note = QLabel(
+            "両方に判定がある答案について、"
+            "手動採点と自動採点（採点基準）の ○・△・× の数です。"
+        )
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+        table = QTableWidget(len(rows), 3)
+        table.setHorizontalHeaderLabels(["問い", "手動採点", "自動採点"])
+        table.verticalHeader().setVisible(False)
+        table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        table.setWordWrap(True)
+        for i, row in enumerate(rows):
+            name = str(row.get("display_name") or row.get("field_id") or "")
+            name_item = QTableWidgetItem(
+                f"{name}\n不一致 {int(row.get('mismatch_count') or 0)} 人"
+                f" / 比較 {int(row.get('compared_count') or 0)} 人"
+            )
+            manual_item = QTableWidgetItem(_judgment_count_text(row.get("manual") or {}))
+            auto_item = QTableWidgetItem(_judgment_count_text(row.get("auto") or {}))
+            for item in (name_item, manual_item, auto_item):
+                item.setTextAlignment(
+                    Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft
+                )
+            table.setItem(i, 0, name_item)
+            table.setItem(i, 1, manual_item)
+            table.setItem(i, 2, auto_item)
+            table.setRowHeight(i, 52)
+        table.resizeColumnsToContents()
+        table.horizontalHeader().setStretchLastSection(True)
+        table.setColumnWidth(0, 220)
+        table.setColumnWidth(1, 220)
+        lay.addWidget(table, 1)
+
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        if ok is not None:
+            ok.setText("確認")
+        buttons.accepted.connect(self.accept)
+        lay.addWidget(buttons)
 
 
 class Step10Page(QWidget):
@@ -100,6 +160,22 @@ class Step10Page(QWidget):
         else:
             done_n = sum(1 for r in self._rows if complete_map.get(r["fieldId"]))
             self.status_label.setText(f"採点完了 {done_n} / {len(self._rows)} 記述欄")
+        QTimer.singleShot(0, self._notify_judgment_mismatches)
+
+    def _notify_judgment_mismatches(self) -> None:
+        if not self.isVisible():
+            return
+        test_id = self.app.active_test_id
+        if not test_id:
+            return
+        try:
+            rows = list_question_judgment_disagreements(test_id)
+        except Exception as e:
+            h.warn(self, "判定の確認", str(e))
+            return
+        if not rows:
+            return
+        JudgmentMismatchDialog(self, rows).exec()
 
     def _on_save(self) -> None:
         if not self.app.require_active_test():
