@@ -173,7 +173,10 @@ class GroupGradeDialog(QDialog):
             
         self._render_grid()
 
-    def _render_grid(self):
+    def _render_grid(self, preserve_scroll: bool = True):
+        v_bar = self.scroll.verticalScrollBar()
+        old_val = v_bar.value()
+
         self.panel.clear_tiles()
         zoom = max(30, min(400, self.page.crop_controls.zoom_value())) / 100.0
         for idx, item in enumerate(self.items):
@@ -184,6 +187,10 @@ class GroupGradeDialog(QDialog):
                 on_click=self._on_tile_clicked
             )
             self.panel.add_tile(tile, idx)
+
+        if preserve_scroll and old_val > 0:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: v_bar.setValue(old_val))
 
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
@@ -616,7 +623,7 @@ class StepManualPage(QWidget):
         if fid:
             self._zoom_field_id = fid
             self._persist_field_prefs()
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
 
     def _update_page_mode_labels(self) -> None:
         active = "font-weight: 700; color: #111827;"
@@ -640,16 +647,16 @@ class StepManualPage(QWidget):
         if fid:
             self._zoom_field_id = fid
             self._persist_field_prefs()
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
 
     def _on_page_prev(self) -> None:
         if self._page_index > 0:
             self._page_index -= 1
-            self._render_grid()
+            self._render_grid(preserve_scroll=False)
 
     def _on_page_next(self) -> None:
         self._page_index += 1
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
 
     def _build_filter_box(self) -> QGroupBox:
         box = QGroupBox("表示フィルタ（オフ＝全件／ON＝該当のみ）")
@@ -1037,12 +1044,12 @@ class StepManualPage(QWidget):
         self._sort_mode = self.sort_combo.currentData() or "file"
         self._page_index = 0
         self._sort_items()
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
 
     def _on_filter_toggled(self) -> None:
         self._page_index = 0
         self._refresh_filter_snapshot()
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
 
     def _rebuild_triangle_filters(self) -> None:
         while self.tri_filter_row.count() > 1:
@@ -1081,7 +1088,7 @@ class StepManualPage(QWidget):
                     self._tri_filter_key = "all"
             self._page_index = 0
             self._refresh_filter_snapshot()
-            self._render_grid()
+            self._render_grid(preserve_scroll=False)
             return
         self._tri_filter_key = key
         for k, btn in self._tri_filter_btns.items():
@@ -1091,7 +1098,7 @@ class StepManualPage(QWidget):
                 btn.blockSignals(False)
         self._page_index = 0
         self._refresh_filter_snapshot()
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
 
     def _update_judge_buttons(self) -> None:
         max_score = self._field_max_score()
@@ -1116,7 +1123,7 @@ class StepManualPage(QWidget):
         results = get_all_results(test_id)
         if not results:
             self._items = []
-            self._render_grid()
+            self._render_grid(preserve_scroll=False)
             self.status_label.setText(
                 "採点結果がありません。手動採点の「空DB作成」を実行するか、"
                 "自動採点の ⑦ OCR実行 でテキスト化してください。"
@@ -1177,7 +1184,7 @@ class StepManualPage(QWidget):
                 )
             self._sort_items()
             self._refresh_filter_snapshot()
-            self._render_grid()
+            self._render_grid(preserve_scroll=False)
             self._update_status_summary()
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
@@ -1355,7 +1362,7 @@ class StepManualPage(QWidget):
                     str(row.get("textMapping", {}).get(fid, "") or "").strip() or "なし"
                 )
         self._selected_ids.clear()
-        self._render_grid()
+        self._render_grid(preserve_scroll=False)
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=fid)
         h.info(self, "再読込", "自動採点・手動採点で共有している判定を DB から読み直しました。")
@@ -1698,7 +1705,10 @@ class StepManualPage(QWidget):
     def _clear_grid(self) -> None:
         self.crop_panel.clear_tiles()
 
-    def _render_grid(self) -> None:
+    def _render_grid(self, preserve_scroll: bool = True) -> None:
+        v_bar = self.crop_scroll.verticalScrollBar()
+        old_val = v_bar.value()
+
         self._clear_grid()
         self._ink_stacks = []
         visible = self._filtered_items()
@@ -1749,6 +1759,10 @@ class StepManualPage(QWidget):
         if ctrl is not None:
             ctrl.ensure_palette_visible()
             ctrl.notify_draw_selection_changed()
+
+        if preserve_scroll and old_val > 0:
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(0, lambda: v_bar.setValue(old_val))
 
     def _judgment_stroke_color(self, judgment: str) -> str | None:
         mark = (self._feedback_style or {}).get("mark") or {}
