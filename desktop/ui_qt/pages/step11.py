@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QListWidget,
+    QMessageBox,
     QPlainTextEdit,
     QPushButton,
     QSizePolicy,
@@ -31,6 +32,7 @@ from models.roster_repo import (
     ROSTER_MAPPING_FIELDS,
     assign_ids_from_roster,
     compare_external_scores,
+    clear_result_identities,
     get_id_assignment_status,
     get_roster_absent_state,
     get_roster_assignment_preview,
@@ -511,6 +513,9 @@ class Step11Page(QWidget):
         self.assign_btn = h.button("ID・氏名を割り当て", self._on_assign, variant="primary")
         self.assign_btn.setEnabled(False)
         ctrl.addWidget(self.assign_btn)
+        ctrl.addWidget(
+            h.button("紐づけを白紙に戻す", self._on_clear_identities, variant="danger-soft")
+        )
         ctrl.addWidget(h.button("TSV から名簿を登録…", self._on_paste_roster))
         ctrl.addStretch()
         lay.addLayout(ctrl)
@@ -802,6 +807,35 @@ class Step11Page(QWidget):
         self.assign_summary_label.setText(
             f"名簿 {total} 名 / 未受験 {absent} 名 / 受験予定 {total - absent} 名"
         )
+
+    def _on_clear_identities(self) -> None:
+        if not self.app.require_active_test():
+            return
+        answer = QMessageBox.question(
+            self,
+            "紐づけを白紙に戻す",
+            "このテストの答案に付いている生徒IDと氏名をすべて空にします。\n"
+            "画像と採点はそのまま残ります。\n"
+            "空にしたあと、「ID・氏名を割り当て」で付け直せます。",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            count = clear_result_identities(self.app.active_test_id)
+        except Exception as e:
+            h.error(self, "更新エラー", str(e))
+            return
+        self._update_assign_status()
+        dialog = self._external_dialog
+        if (
+            dialog is not None
+            and dialog.isVisible()
+            and str(dialog.test_id or "") == str(self.app.active_test_id or "")
+        ):
+            dialog.reload()
+        h.info(self, "白紙に戻しました", f"{count} 件の答案から生徒IDと氏名を外しました。")
 
     def _on_assign(self) -> None:
         name = self.roster_combo.currentText().strip()

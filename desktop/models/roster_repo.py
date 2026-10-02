@@ -398,6 +398,18 @@ def update_student_identities(
         conn.commit()
 
 
+def clear_result_identities(test_id: str) -> int:
+    """答案の生徒ID・氏名だけを空にする。画像と採点は残す。"""
+    init_db()
+    with connect() as conn:
+        cur = conn.execute(
+            "UPDATE results SET student_id = '', name = '' WHERE test_id = ?",
+            (test_id,),
+        )
+        conn.commit()
+        return int(cur.rowcount or 0)
+
+
 # ==================== 外部連携得点 ====================
 
 def _norm_person_name(value: str) -> str:
