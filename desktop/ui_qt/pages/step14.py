@@ -326,8 +326,9 @@ class Step14Page(QWidget):
 
         lay.addWidget(
             h.caption_label(
-                "表裏一体印刷: 表側・裏側の採点済みテストを生徒IDで突き合わせ、"
-                "奇数ページ＝表・偶数ページ＝裏の PDF を出力します。"
+                "表裏一体印刷: 表と裏を生徒IDで突き合わせ、奇数ページ＝表・偶数ページ＝裏にします。"
+                "裏側を「裏なし」にすると表だけ出力します。"
+                "裏テストを選んでいて裏が無い生徒は、全員1ファイルのとき白紙の裏を入れて次の表が裏面に回らないようにします。"
             )
         )
         duplex_row1 = QHBoxLayout()
@@ -345,7 +346,7 @@ class Step14Page(QWidget):
         duplex_row2.addWidget(QLabel("表裏出力"))
         self.duplex_mode_combo = QComboBox()
         self.duplex_mode_combo.addItem("全員分を1つのPDF", "combined")
-        self.duplex_mode_combo.addItem("生徒ごとに2ページPDF", "per_student")
+        self.duplex_mode_combo.addItem("生徒ごとにPDF", "per_student")
         duplex_row2.addWidget(self.duplex_mode_combo, 1)
         self.duplex_btn = h.button(
             "表裏一体PDFを生成", self._on_duplex_batch, variant="primary"
@@ -461,15 +462,24 @@ class Step14Page(QWidget):
             return
         self.duplex_btn.setEnabled(True)
 
-        def fill_combo(combo: QComboBox, select_id: str | None) -> None:
+        def fill_combo(
+            combo: QComboBox,
+            select_id: str | None,
+            *,
+            allow_none: bool = False,
+        ) -> None:
             combo.blockSignals(True)
             combo.clear()
+            if allow_none:
+                combo.addItem("裏なし", "")
             for t in candidates:
                 combo.addItem(self._duplex_combo_label(t), str(t.get("testSsId") or ""))
             if select_id:
                 idx = combo.findData(select_id)
                 if idx >= 0:
                     combo.setCurrentIndex(idx)
+            elif allow_none:
+                combo.setCurrentIndex(0)
             combo.blockSignals(False)
 
         fill_combo(self.duplex_front_combo, active_test_id)
@@ -481,7 +491,7 @@ class Step14Page(QWidget):
                 break
         if back_default is None and len(candidates) > 1:
             back_default = str(candidates[1].get("testSsId") or "")
-        fill_combo(self.duplex_back_combo, back_default)
+        fill_combo(self.duplex_back_combo, back_default, allow_none=True)
 
     # ---------- 合計欄 ----------
 
@@ -777,17 +787,19 @@ class Step14Page(QWidget):
         front_id = str(self.duplex_front_combo.currentData() or "").strip()
         back_id = str(self.duplex_back_combo.currentData() or "").strip()
         mode = str(self.duplex_mode_combo.currentData() or "combined")
-        if not front_id or not back_id:
-            h.warn(self, "表裏一体印刷", "表側・裏側のテストを選択してください。")
+        if not front_id:
+            h.warn(self, "表裏一体印刷", "表側のテストを選択してください。")
             return
-        if front_id == back_id:
+        if back_id and front_id == back_id:
             h.warn(self, "表裏一体印刷", "表側と裏側は異なるテストを選んでください。")
             return
 
         self.batch_btn.setEnabled(False)
         self.duplex_btn.setEnabled(False)
         self.batch_progress.setValue(0)
-        self.batch_status.setText("表裏一体PDFを生成中…")
+        self.batch_status.setText(
+            "表面の個票を生成中…" if not back_id else "表裏一体PDFを生成中…"
+        )
 
         bridge = ProgressBridge(self)
         bridge.updated.connect(self._on_batch_progress)
@@ -823,9 +835,11 @@ class Step14Page(QWidget):
         if out_dir:
             self._last_output_dir = out_dir
         mode = result.get("mode") or "combined"
+        front_only_n = len(result.get("frontOnly") or [])
+        front_note = f" / 裏なし {front_only_n} 名" if front_only_n else ""
         if mode == "combined":
             msg = (
-                f"表裏一体 / {result.get('savedStudents', 0)} 名 / "
+                f"表裏出力 / {result.get('savedStudents', 0)} 名{front_note} / "
                 f"{result.get('pageCount', 0)} ページ / "
                 f"スキップ {len(result.get('skipped') or [])} 件 / "
                 f"エラー {len(result.get('errors') or [])} 件\n"
@@ -834,7 +848,7 @@ class Step14Page(QWidget):
         else:
             files = result.get("perStudentFiles") or []
             msg = (
-                f"表裏個別 / {result.get('savedStudents', 0)} 名 / "
+                f"生徒ごと / {result.get('savedStudents', 0)} 名{front_note} / "
                 f"{len(files)} ファイル / "
                 f"スキップ {len(result.get('skipped') or [])} 件 / "
                 f"エラー {len(result.get('errors') or [])} 件\n"

@@ -69,42 +69,23 @@ def rows_by_student_id(rows: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
     return out
 
 
-def validate_duplex_student_sets(
+def pair_duplex_students(
     front_rows: list[dict[str, Any]],
-    back_rows: list[dict[str, Any]],
-) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, dict[str, Any]]]:
+    back_rows: list[dict[str, Any]] | None,
+) -> tuple[list[str], dict[str, dict[str, Any]], dict[str, dict[str, Any]], list[str]]:
+    """表の生徒を順に並べ、裏が無い ID は front_only として返す。"""
     front_map = rows_by_student_id(front_rows)
-    back_map = rows_by_student_id(back_rows)
-    front_ids = set(front_map.keys())
-    back_ids = set(back_map.keys())
-    if front_ids != back_ids:
-        only_front = sorted(front_ids - back_ids, key=_sid_sort_key)
-        only_back = sorted(back_ids - front_ids, key=_sid_sort_key)
-        parts = [
-            f"受験者IDが一致しません: 表 {len(front_ids)} 名 / 裏 {len(back_ids)} 名。"
-        ]
-        if only_front:
-            sample = ", ".join(only_front[:8])
-            more = f" 他{len(only_front) - 8}件" if len(only_front) > 8 else ""
-            parts.append(f"表のみ: {sample}{more}")
-        if only_back:
-            sample = ", ".join(only_back[:8])
-            more = f" 他{len(only_back) - 8}件" if len(only_back) > 8 else ""
-            parts.append(f"裏のみ: {sample}{more}")
-        raise DuplexMatchError(
-            "\n".join(parts),
-            front_count=len(front_ids),
-            back_count=len(back_ids),
-            front_only=only_front,
-            back_only=only_back,
-        )
-    if not front_ids:
+    back_map = rows_by_student_id(back_rows or [])
+    if not front_map:
         raise DuplexMatchError(
             "有効な生徒ID（4桁ID・? なし）を持つ受験者が見つかりません。"
             "⑦で ID・氏名を割り当ててください。",
+            front_count=0,
+            back_count=len(back_map),
         )
-    ordered = sorted(front_ids, key=_sid_sort_key)
-    return ordered, front_map, back_map
+    ordered = sorted(front_map.keys(), key=_sid_sort_key)
+    front_only = [sid for sid in ordered if sid not in back_map]
+    return ordered, front_map, back_map, front_only
 
 
 def _ensure_output_slots(test_id: str, side_label: str) -> None:
@@ -114,10 +95,20 @@ def _ensure_output_slots(test_id: str, side_label: str) -> None:
         )
 
 
-def duplex_feedback_filename(student_id: str, student_name: str) -> str:
+def duplex_feedback_filename(student_id: str, student_name: str, *, front_only: bool = False) -> str:
     sid = _safe_name(student_id or "不明")
     sname = _safe_name(student_name or "")
-    return f"個票_表裏_{sid}_{sname}.pdf"
+    kind = "表" if front_only else "表裏"
+    return f"個票_{kind}_{sid}_{sname}.pdf"
+
+
+def _append_blank_page(doc: fitz.Document) -> None:
+    """直前ページと同じ大きさの白紙を足し、次の表が裏面に回らないようにする。"""
+    if doc.page_count <= 0:
+        doc.new_page(width=595, height=842)
+        return
+    rect = doc[-1].rect
+    doc.new_page(width=rect.width, height=rect.height)
 
 
 def list_duplex_candidate_tests(limit: int = 50) -> list[dict[str, Any]]:
@@ -190,35 +181,77 @@ def batch_export_duplex_feedback(
     mode: DuplexExportMode = "combined",
     on_progress: Callable[[int, int, str], None] | None = None,
 ) -> dict[str, Any]:
-    """表裏2テストを生徒IDで突き合わせ、奇数＝表・偶数＝裏の PDF を出力する。"""
+    """表を出力し、裏がある生徒は続けて裏を付ける。裏が無い生徒は表だけ出す。
+
+    全員を1つの PDF にするとき、裏テストを選んでいて裏が無い生徒には白紙を入れ、
+    次の表が前の人の裏面に印刷されないようにする。裏側を空にすると全員が表のみ。
+    """
     front_test_id = str(front_test_id or "").strip()
     back_test_id = str(back_test_id or "").strip()
-    if not front_test_id or not back_test_id:
-        raise ValueError("表側・裏側の両方のテストを選択してください。")
-    if front_test_id == back_test_id:
+    if not front_test_id:
+        raise ValueError("表側のテストを選択してください。")
+    if back_test_id and front_test_id == back_test_id:
         raise ValueError("表側と裏側は異なるテストを選択してください。")
 
     _ensure_output_slots(front_test_id, "表")
-    _ensure_output_slots(back_test_id, "裏")
+    if back_test_id:
+        _ensure_output_slots(back_test_id, "裏")
 
     front_rows = _load_rows_with_extras(front_test_id)
-    back_rows = _load_rows_with_extras(back_test_id)
-    ordered_ids, front_map, back_map = validate_duplex_student_sets(
+    back_rows = _load_rows_with_extras(back_test_id) if back_test_id else []
+    ordered_ids, front_map, back_map, _front_only = pair_duplex_students(
         front_rows, back_rows
     )
+    insert_blank_back = bool(back_test_id)
 
     front_ctx = build_feedback_shared_context(front_test_id)
-    back_ctx = build_feedback_shared_context(back_test_id)
+    back_ctx = (
+        build_feedback_shared_context(back_test_id) if back_test_id else {}
+    )
     out_dir = test_feedback(front_test_id)
     out_dir.mkdir(parents=True, exist_ok=True)
 
     total = len(ordered_ids)
     saved_pages = 0
     saved_students = 0
+    front_only_saved: list[str] = []
     skipped: list[str] = []
     errors: list[dict[str, str]] = []
     combined_path: Path | None = None
     per_files: list[str] = []
+
+    def _append_student(doc: fitz.Document, sid: str) -> tuple[int, bool]:
+        """ページを足し、(追加ページ数, 裏なしで表だけ出せたか) を返す。"""
+        f_row = front_map[sid]
+        pages_before = doc.page_count
+        front_ok = _try_append_side(
+            doc,
+            front_test_id,
+            f_row,
+            front_ctx,
+            student_id=sid,
+            side_label="表",
+            errors=errors,
+            skipped=skipped,
+        )
+        back_ok = False
+        b_row = back_map.get(sid)
+        if b_row is not None and back_test_id:
+            back_ok = _try_append_side(
+                doc,
+                back_test_id,
+                b_row,
+                back_ctx,
+                student_id=sid,
+                side_label="裏",
+                errors=errors,
+                skipped=skipped,
+            )
+        only_front = front_ok and not back_ok
+        if only_front and insert_blank_back:
+            _append_blank_page(doc)
+        added = doc.page_count - pages_before
+        return added, only_front and added > 0
 
     if mode == "combined":
         master = fitz.open()
@@ -226,38 +259,20 @@ def batch_export_duplex_feedback(
             for i, sid in enumerate(ordered_ids):
                 if on_progress:
                     on_progress(i + 1, total, sid)
-                f_row = front_map[sid]
-                b_row = back_map[sid]
-                pages_before = master.page_count
-                _try_append_side(
-                    master,
-                    front_test_id,
-                    f_row,
-                    front_ctx,
-                    student_id=sid,
-                    side_label="表",
-                    errors=errors,
-                    skipped=skipped,
-                )
-                _try_append_side(
-                    master,
-                    back_test_id,
-                    b_row,
-                    back_ctx,
-                    student_id=sid,
-                    side_label="裏",
-                    errors=errors,
-                    skipped=skipped,
-                )
-                added = master.page_count - pages_before
+                added, only_front = _append_student(master, sid)
                 saved_pages += added
-                if added >= 2:
+                if added > 0:
                     saved_students += 1
+                if only_front:
+                    front_only_saved.append(sid)
             if saved_pages <= 0:
                 raise ValueError(
-                    "出力可能な表裏ページがありません（補正画像のある行がありません）。"
+                    "出力可能なページがありません（補正画像のある行がありません）。"
                 )
-            combined_path = out_dir / DUPLEX_COMBINED_FILENAME
+            combined_name = (
+                "個票_表面.pdf" if not back_test_id else DUPLEX_COMBINED_FILENAME
+            )
+            combined_path = out_dir / combined_name
             master.save(str(combined_path))
         finally:
             master.close()
@@ -266,46 +281,28 @@ def batch_export_duplex_feedback(
             if on_progress:
                 on_progress(i + 1, total, sid)
             f_row = front_map[sid]
-            b_row = back_map[sid]
-            name = str(f_row.get("name") or b_row.get("name") or "")
+            b_row = back_map.get(sid)
+            name = str(f_row.get("name") or (b_row or {}).get("name") or "")
             mini = fitz.open()
             try:
-                pages_before = mini.page_count
-                _try_append_side(
-                    mini,
-                    front_test_id,
-                    f_row,
-                    front_ctx,
-                    student_id=sid,
-                    side_label="表",
-                    errors=errors,
-                    skipped=skipped,
-                )
-                _try_append_side(
-                    mini,
-                    back_test_id,
-                    b_row,
-                    back_ctx,
-                    student_id=sid,
-                    side_label="裏",
-                    errors=errors,
-                    skipped=skipped,
-                )
-                added = mini.page_count - pages_before
+                added, only_front = _append_student(mini, sid)
                 if added <= 0:
                     continue
-                out_path = out_dir / duplex_feedback_filename(sid, name)
+                out_path = out_dir / duplex_feedback_filename(
+                    sid, name, front_only=only_front or not back_test_id
+                )
                 mini.save(str(out_path))
                 per_files.append(str(out_path))
                 saved_pages += added
-                if added >= 2:
-                    saved_students += 1
+                saved_students += 1
+                if only_front:
+                    front_only_saved.append(sid)
             finally:
                 mini.close()
 
         if not per_files:
             raise ValueError(
-                "出力可能な表裏 PDF がありません（補正画像のある行がありません）。"
+                "出力可能な PDF がありません（補正画像のある行がありません）。"
             )
 
     touch_progress(front_test_id, 10, "表裏一体個票出力済み")
@@ -316,6 +313,7 @@ def batch_export_duplex_feedback(
         "backTestId": back_test_id,
         "studentCount": total,
         "savedStudents": saved_students,
+        "frontOnly": front_only_saved,
         "pageCount": saved_pages,
         "outputDir": str(out_dir),
         "combinedFile": str(combined_path) if combined_path else None,
