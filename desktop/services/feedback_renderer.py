@@ -19,12 +19,7 @@ from config import test_feedback
 from models.domain_repo import DOMAIN_KINDS, _domain_groups, get_domain_settings
 from models.output_repo import get_feedback_style, get_output_slots
 from models.test_repo import get_all_results, get_answer_fields
-from services.compositor import (
-    REGION_FILL_ALPHA,
-    REGION_STROKE_NORMAL,
-    hex_to_rgba,
-    render_supersampled_rgba,
-)
+from services.compositor import hex_to_rgba, render_supersampled_rgba
 from services.image_loader import imread_bgr
 
 _FONT_CANDIDATES_BOLD = ["meiryob.ttc", "YuGothB.ttc", "msgothic.ttc", "arialbd.ttf"]
@@ -198,6 +193,37 @@ def slot_prints_frame(slot: dict[str, Any]) -> bool:
     return bool(value)
 
 
+# 画面の細緑線は、高解像度ページを用紙へ縮めると消える。印刷は不透明な箱にする。
+TOTAL_FRAME_FILL = "#dcfce7"
+TOTAL_FRAME_STROKE = "#052e16"
+TOTAL_FRAME_HEADING = "#111827"
+_A4_WIDTH_PT = 595.0
+
+
+def _units_for_print_points(page_width: float, points: float) -> float:
+    """ページを A4 幅に収めて印刷したとき、指定 pt になる長さ。"""
+    return float(points) * max(float(page_width), 1.0) / _A4_WIDTH_PT
+
+
+def frame_print_metrics(
+    page_width: float,
+    w: float,
+    h: float,
+    style: dict[str, Any],
+) -> tuple[float, float, float, float]:
+    """枠線の太さ、見出しサイズ、見出し帯、点数サイズ。w・h・page_width は同じ座標。"""
+    w = max(float(w), 1.0)
+    h = max(float(h), 1.0)
+    line_w = max(_units_for_print_points(page_width, 2.75), min(w, h) * 0.06)
+    line_w = min(line_w, min(w, h) * 0.16)
+    head, band, score = total_frame_layout(w, h, style)
+    head = min(max(head, _units_for_print_points(page_width, 13.0)), h * 0.46)
+    band = min(h * 0.55, max(band, head * 1.35))
+    remain = max(8.0, h - band)
+    score = min(max(score, min(_units_for_print_points(page_width, 14.0), remain * 0.72)), remain * 0.9)
+    return line_w, head, band, score
+
+
 def total_frame_layout(w: float, h: float, style: dict[str, Any]) -> tuple[float, float, float]:
     """見出しの文字サイズ、見出し帯の高さ、点数の文字サイズ。"""
     st = style["total"]
@@ -230,12 +256,15 @@ def _draw_top_left_text(
     font_size: int,
     max_width: float,
     max_height: float,
+    *,
+    min_size: int = 8,
 ) -> None:
-    size = max(8, int(font_size))
+    floor = max(8, int(min_size))
+    size = max(floor, int(font_size))
     font = _load_font(size)
     tw, th = _text_size(font, text)
-    while (tw > max_width or th > max_height) and size > 8:
-        size = max(8, int(size * 0.9))
+    while (tw > max_width or th > max_height) and size > floor:
+        size = max(floor, int(size * 0.9))
         font = _load_font(size)
         tw, th = _text_size(font, text)
     draw.text((x, y), text, font=font, fill=color, anchor="lt")
@@ -251,7 +280,17 @@ def draw_total(layer: Image.Image, slot: dict[str, Any], value: Any, style: dict
     w, h = float(slot["width"]), float(slot["height"])
     draw = ImageDraw.Draw(layer)
     if framed:
-        _draw_total_frame(draw, x, y, w, h, slot, value if has_value else None, style)
+        _draw_total_frame(
+            draw,
+            x,
+            y,
+            w,
+            h,
+            slot,
+            value if has_value else None,
+            style,
+            page_width=float(layer.size[0]),
+        )
         return
     font_size = max(
         int(st.get("minFontSize", 10)), int(min(w, h) * float(st.get("sizeRatio", 0.5)))
@@ -276,28 +315,35 @@ def _draw_total_frame(
     slot: dict[str, Any],
     value: Any,
     style: dict[str, Any],
+    *,
+    page_width: float,
 ) -> None:
-    """配置画面の緑枠と同じ色で枠と見出しを描き、点数を枠内に置く。"""
+    """濃い枠線と黒い見出しを、用紙へ縮めても残る太さで描く。"""
     if w <= 1 or h <= 1:
         return
-    line_w = max(2, int(round(min(w, h) * 0.02)))
+    line_w, head_size, band, score_size = frame_print_metrics(page_width, w, h, style)
+    stroke_px = max(2, int(round(line_w)))
     draw.rectangle(
         [x, y, x + w, y + h],
-        fill=hex_to_rgba(REGION_STROKE_NORMAL, REGION_FILL_ALPHA),
-        outline=hex_to_rgba(REGION_STROKE_NORMAL, 1.0),
-        width=line_w,
+        fill=hex_to_rgba(TOTAL_FRAME_FILL, 1.0),
     )
-    head_size, band, score_size = total_frame_layout(w, h, style)
-    pad = max(3.0, min(w, h) * 0.04)
+    inset = stroke_px / 2.0
+    draw.rectangle(
+        [x + inset, y + inset, x + w - inset, y + h - inset],
+        outline=hex_to_rgba(TOTAL_FRAME_STROKE, 1.0),
+        width=stroke_px,
+    )
+    pad = max(line_w, min(w, h) * 0.06)
     _draw_top_left_text(
         draw,
         x + pad,
         y + pad,
         slot_heading(slot),
-        hex_to_rgba(REGION_STROKE_NORMAL, 1.0),
-        int(head_size),
+        hex_to_rgba(TOTAL_FRAME_HEADING, 1.0),
+        int(round(head_size)),
         max(8.0, w - pad * 2),
         max(8.0, band - pad),
+        min_size=max(8, int(round(head_size * 0.72))),
     )
     if value is None or str(value) == "":
         return

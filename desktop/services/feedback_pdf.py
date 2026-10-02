@@ -13,14 +13,16 @@ import numpy as np
 from PIL import Image
 
 from services.compositor import hex_to_rgba
-from services.compositor import REGION_FILL_ALPHA, REGION_STROKE_NORMAL
 from services.feedback_renderer import (
+    TOTAL_FRAME_FILL,
+    TOTAL_FRAME_HEADING,
+    TOTAL_FRAME_STROKE,
     _inset_rect,
     format_total_text,
+    frame_print_metrics,
     normalize_judgment,
     slot_heading,
     slot_prints_frame,
-    total_frame_layout,
 )
 from services.image_loader import imread_bgr
 
@@ -216,7 +218,8 @@ def _draw_topleft_text_mapped(
     if not text or w <= 0 or h <= 0:
         return
     path = _resolve_font_file(bold=bold)
-    fs = _fit_font_size(text, path, min(font_size, h * 0.9), w, min_size=8.0)
+    target = min(font_size, h * 0.9)
+    fs = _fit_font_size(text, path, target, w, min_size=max(8.0, target * 0.72))
     font = fitz.Font(fontfile=path)
     baseline = y + float(font.ascender) * fs
     px, py = _map_xy(matrix, x, baseline)
@@ -251,26 +254,39 @@ def _draw_total_frame_pdf(
 ) -> None:
     if w <= 1 or h <= 1:
         return
-    green = _hex_to_rgb01(REGION_STROKE_NORMAL)
     _right, _down, scale = _axes_at(matrix, x + w / 2.0, y + h / 2.0)
-    line_w = max(2.0, min(w, h) * 0.02) * scale
+    scale = max(float(scale), 0.2)
+    line_w, head_page, band_page, score_page = frame_print_metrics(
+        float(page.rect.width), w * scale, h * scale, style
+    )
+    head_size = head_page / scale
+    band = band_page / scale
+    score_size = score_page / scale
     quad = _map_pts(
         matrix,
         [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)],
     )
-    shape = page.new_shape()
-    shape.draw_polyline(quad)
-    shape.finish(
-        color=green,
-        fill=green,
-        fill_opacity=REGION_FILL_ALPHA,
+    fill = page.new_shape()
+    fill.draw_polyline(quad)
+    fill.finish(
+        color=_hex_to_rgb01(TOTAL_FRAME_FILL),
+        fill=_hex_to_rgb01(TOTAL_FRAME_FILL),
+        width=0,
+        closePath=True,
+    )
+    fill.commit()
+    stroke = page.new_shape()
+    stroke.draw_polyline(quad)
+    stroke.finish(
+        color=_hex_to_rgb01(TOTAL_FRAME_STROKE),
         width=line_w,
+        stroke_opacity=1,
         closePath=True,
         lineJoin=1,
+        lineCap=1,
     )
-    shape.commit()
-    head_size, band, score_size = total_frame_layout(w, h, style)
-    pad = max(3.0, min(w, h) * 0.04)
+    stroke.commit()
+    pad = max(line_w / scale, min(w, h) * 0.06)
     _draw_topleft_text_mapped(
         page,
         matrix,
@@ -279,7 +295,7 @@ def _draw_total_frame_pdf(
         max(8.0, w - pad * 2),
         max(8.0, band - pad),
         slot_heading(slot),
-        green,
+        _hex_to_rgb01(TOTAL_FRAME_HEADING),
         head_size,
         bold=True,
     )
