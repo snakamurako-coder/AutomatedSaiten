@@ -683,7 +683,14 @@ class Step14Page(QWidget):
                 h.error(self, "プレビューエラー", str(err))
                 return
             self._preview_state = result
-            if image_basis == FEEDBACK_IMAGE_BASIS_ORIGINAL:
+            if (
+                image_basis == FEEDBACK_IMAGE_BASIS_ORIGINAL
+                and is_pdf_export_format(export_format)
+            ):
+                self.preview_mode_label.setText(
+                    "プレビュー: 元画像 PDF（判定と配点はベクトル描画、氏名欄は元画像のまま）"
+                )
+            elif image_basis == FEEDBACK_IMAGE_BASIS_ORIGINAL:
                 self.preview_mode_label.setText(
                     "プレビュー: 元画像に判定を合成（氏名欄は元画像のまま、選択行1件）"
                 )

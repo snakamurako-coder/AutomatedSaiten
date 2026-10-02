@@ -20,10 +20,9 @@ from models.text_annotation_repo import collect_warped_text_annotations
 from models.test_repo import get_test_info
 from services.feedback_pdf import (
     build_feedback_pdf_document,
-    build_pdf_document_from_image,
+    build_original_feedback_pdf_document,
     pdf_document_to_bytes,
     rasterize_pdf_bytes,
-    render_feedback_pdf,
 )
 from services.feedback_renderer import (
     build_feedback_payload,
@@ -199,8 +198,17 @@ def _build_row_pdf_document(
     )
     payload = data["payload"]
     if normalize_feedback_image_basis(image_basis) == FEEDBACK_IMAGE_BASIS_ORIGINAL:
-        image = _compose_row_image(test_id, row, data, image_basis=image_basis)
-        return build_pdf_document_from_image(image)
+        return build_original_feedback_pdf_document(
+            test_id,
+            row,
+            payload["fields"],
+            payload["outputSlots"],
+            payload["fieldMarks"],
+            payload["totals"],
+            data["style"],
+            ink_strokes=data["ink_strokes"],
+            text_annotations=data["text_annotations"],
+        )
     return build_feedback_pdf_document(
         data["warped_path"],
         payload["fields"],
@@ -223,33 +231,22 @@ def export_feedback_row(
     image_basis: str | None = None,
 ) -> Path:
     export_fmt = per_file_export_format(fmt)
-    data = gather_row_render_data(test_id, row, shared=shared)
-    payload = data["payload"]
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     basis = normalize_feedback_image_basis(image_basis)
 
-    if export_fmt == "pdf" and basis != FEEDBACK_IMAGE_BASIS_ORIGINAL:
-        return render_feedback_pdf(
-            data["warped_path"],
-            payload["fields"],
-            payload["outputSlots"],
-            payload["fieldMarks"],
-            payload["totals"],
-            data["style"],
-            ink_strokes=data["ink_strokes"],
-            text_annotations=data["text_annotations"],
-            out_path=out_path,
-        )
-
-    image = _compose_row_image(test_id, row, data, image_basis=basis)
     if export_fmt == "pdf":
-        doc = build_pdf_document_from_image(image)
+        doc = _build_row_pdf_document(
+            test_id, row, shared=shared, image_basis=basis
+        )
         try:
             doc.save(str(out_path))
         finally:
             doc.close()
         return out_path
+
+    data = gather_row_render_data(test_id, row, shared=shared)
+    image = _compose_row_image(test_id, row, data, image_basis=basis)
     if export_fmt == "png":
         image.save(out_path, "PNG")
     else:
@@ -324,7 +321,7 @@ def render_feedback_preview(
     output_slots を渡すと、保存済みではなくその配置（総計点など）を描く。
     """
     basis = normalize_feedback_image_basis(image_basis)
-    if is_pdf_export_format(fmt) and basis != FEEDBACK_IMAGE_BASIS_ORIGINAL:
+    if is_pdf_export_format(fmt):
         doc = _build_row_pdf_document(
             test_id, row, output_slots=output_slots, image_basis=basis
         )
@@ -338,7 +335,9 @@ def render_feedback_preview(
             "mode": "pdf",
             "pdf_bytes": pdf_bytes,
             "native_size": native_size,
-            "image": rasterize_pdf_bytes(pdf_bytes, scale=2.0),
+            "image": rasterize_pdf_bytes(
+                pdf_bytes, scale=_pdf_preview_scale(native_size, 100)
+            ),
         }
 
     export_fmt = per_file_export_format(fmt)
@@ -353,14 +352,26 @@ def render_feedback_preview(
     }
 
 
+def _pdf_preview_scale(native_size: tuple[int, int], zoom_pct: float) -> float:
+    """プレビュー用のラスタ倍率。元画像は画素数が大きいので上限を設ける。"""
+    zoom = max(0.1, float(zoom_pct) / 100.0)
+    scale = max(2.0, zoom * 2.0)
+    longest = max(int(native_size[0]), int(native_size[1]), 1)
+    if longest >= 2200:
+        limit = 5600.0
+        if longest * scale > limit:
+            scale = max(1.0, limit / float(longest))
+    return scale
+
+
 def rasterize_feedback_preview(
     preview: dict[str, Any],
     *,
     zoom_pct: float,
 ) -> Image.Image:
     """プレビュー表示倍率に応じて PDF を再ラスター化する（ズーム時もベクトルの鮮明さを維持）。"""
-    zoom = max(0.1, float(zoom_pct) / 100.0)
     if preview.get("mode") == "pdf" and preview.get("pdf_bytes"):
-        scale = max(2.0, zoom * 2.0)
+        native = preview.get("native_size") or (1, 1)
+        scale = _pdf_preview_scale((int(native[0]), int(native[1])), zoom_pct)
         return rasterize_pdf_bytes(preview["pdf_bytes"], scale=scale)
     return preview["image"]
