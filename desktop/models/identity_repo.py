@@ -127,6 +127,7 @@ def get_verification_data(test_id: str) -> dict[str, Any]:
                 "studentId": r["student_id"] or "",
                 "name": r["name"] or "",
                 "fileName": r["file_name"],
+                "testId": test_id,
                 "warpedPath": r["warped_path"] or "",
                 "sourcePath": r["source_path"] or "",
             }

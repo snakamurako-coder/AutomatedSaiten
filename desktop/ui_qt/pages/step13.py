@@ -111,6 +111,7 @@ class Step13Page(QWidget):
         basis = get_identity_coord_basis(self.app.active_test_id) or "warped"
         field = dict(field)
         field["imageBasis"] = basis
+        field["testId"] = self.app.active_test_id
         basis_label = "元画像" if basis == "original" else "補正画像"
 
         self.status_label.setText(f"画像を読み込み中…（{len(rows)} 件・{basis_label}）")
