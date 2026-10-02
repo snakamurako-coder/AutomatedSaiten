@@ -379,11 +379,21 @@ def assign_ids_from_roster(
 def update_student_identity(
     test_id: str, result_id: int, student_id: str, name: str
 ) -> None:
+    update_student_identities(test_id, [(result_id, student_id, name)])
+
+
+def update_student_identities(
+    test_id: str, rows: list[tuple[int, str, str]]
+) -> None:
+    """複数の解答用紙へ生徒ID・氏名を一度に書き戻す。"""
+    if not rows:
+        return
     with connect() as conn:
-        conn.execute(
-            "UPDATE results SET student_id = ?, name = ? WHERE id = ? AND test_id = ?",
-            (str(student_id or ""), str(name or ""), result_id, test_id),
-        )
+        for result_id, student_id, name in rows:
+            conn.execute(
+                "UPDATE results SET student_id = ?, name = ? WHERE id = ? AND test_id = ?",
+                (str(student_id or ""), str(name or ""), int(result_id), test_id),
+            )
         conn.commit()
 
 
