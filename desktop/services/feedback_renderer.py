@@ -45,6 +45,23 @@ def infer_judgment_from_score(score: float, max_points: float) -> str:
     return "△"
 
 
+def judgment_for_output(judgment: str, score: Any, max_points: Any) -> str:
+    """最終出力の記号。満点未満の得点に○は付けない。"""
+    j = str(judgment or "").strip()
+    if j in ("〇", "◯"):
+        j = "○"
+    if j != "○":
+        return j
+    try:
+        sc = float(score)
+        cap = float(max_points)
+    except (TypeError, ValueError):
+        return j
+    if cap > 0 and sc < cap:
+        return "×" if sc <= 0 else "△"
+    return j
+
+
 def normalize_judgment(judgment: str, score: Any) -> str | None:
     """描画種別 'maru' / 'sankaku' / 'batsu' / None を返す（GAS normalizeJudgment 互換）。"""
     j = str(judgment or "").strip()
@@ -373,11 +390,13 @@ def build_feedback_payload(
         fid = f["id"]
         judgment = str((row.get("judgments") or {}).get(fid, "") or "").strip()
         score = (row.get("scores") or {}).get(fid)
+        cap = points.get(fid, 0)
         if not judgment and score not in (None, ""):
             try:
-                judgment = infer_judgment_from_score(float(score), float(points.get(fid, 0)))
+                judgment = infer_judgment_from_score(float(score), float(cap or 0))
             except (TypeError, ValueError):
                 judgment = ""
+        judgment = judgment_for_output(judgment, score, cap)
         field_marks[fid] = {"judgment": judgment, "score": score}
     totals = _compute_totals(
         test_id,
