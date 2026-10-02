@@ -134,7 +134,7 @@ class Step14Page(QWidget):
         root.addWidget(
             h.muted_label(
                 "回答画像に判定マーク（○/△/×）・小問得点・合計欄・手書き・テキスト注釈を合成した個票を生成します。"
-                "元画像を選ぶと、元の答案の上に判定と氏名を載せて出力します。"
+                "元画像を選ぶと、元の答案の上に判定を載せて出力します。氏名欄は元画像のままです。"
                 "手書き・テキストを含む場合は PDF 出力を推奨します。"
                 "成績一覧は Excel で別途出力できます。"
             )
@@ -310,16 +310,16 @@ class Step14Page(QWidget):
         fmt_row.addWidget(QLabel("出力画像"))
         self.image_basis_combo = QComboBox()
         self.image_basis_combo.addItem("補正画像", "warped")
-        self.image_basis_combo.addItem("元画像（氏名・判定付き）", FEEDBACK_IMAGE_BASIS_ORIGINAL)
+        self.image_basis_combo.addItem("元画像（判定付き）", FEEDBACK_IMAGE_BASIS_ORIGINAL)
         self.image_basis_combo.currentIndexChanged.connect(self._on_image_basis_changed)
         fmt_row.addWidget(self.image_basis_combo, 1)
         lay.addLayout(fmt_row)
         lay.addWidget(
             h.caption_label(
                 "PDF は手書き・テキストをベクトル描画します。"
-                "元画像を選ぶと、答案の元画像へ判定（○△×）と氏名を合成します。"
+                "元画像を選ぶと、答案の元画像へ判定（○△×）を合成します。"
                 "判定の位置は、模範解答を切り取った範囲を逆算して合わせます。"
-                "氏名欄が⑫にあるときはその枠へ、無いときは用紙上部に氏名を出します。"
+                "氏名欄は印字せず、元画像に写っている氏名をそのまま残します。"
                 "「1件プレビュー」は選択行1件のみ表示（全件1ファイル PDF でも同様）。"
             )
         )
@@ -685,7 +685,7 @@ class Step14Page(QWidget):
             self._preview_state = result
             if image_basis == FEEDBACK_IMAGE_BASIS_ORIGINAL:
                 self.preview_mode_label.setText(
-                    "プレビュー: 元画像に判定と氏名を合成（選択行1件）"
+                    "プレビュー: 元画像に判定を合成（氏名欄は元画像のまま、選択行1件）"
                 )
             elif is_pdf_export_format(export_format):
                 self.preview_mode_label.setText(

@@ -6,21 +6,13 @@ from typing import Any
 
 import cv2
 import numpy as np
-from PIL import Image, ImageDraw
+from PIL import Image
 
-from models.identity_repo import (
-    IDENTITY_BASIS_ORIGINAL,
-    get_identity_coord_basis,
-    get_identity_fields,
-)
 from services.crop_preview import resolve_source_path
-from services.feedback_renderer import (
-    _draw_centered_text,
-    render_feedback_overlay_layer,
-)
+from services.feedback_renderer import render_feedback_overlay_layer
 from services.image_loader import load_image_bgr
 from services.image_warp import Corners
-from services.model_crop import corners_for_image, get_model_crop, scale_box
+from services.model_crop import corners_for_image, get_model_crop
 
 
 def render_feedback_on_original(
@@ -36,7 +28,7 @@ def render_feedback_on_original(
     ink_strokes: list[dict[str, Any]] | None = None,
     text_annotations: list[dict[str, Any]] | None = None,
 ) -> Image.Image:
-    """元画像に判定・合計欄・氏名を載せた RGB 画像を返す。
+    """元画像に判定・合計欄を載せた RGB 画像を返す。氏名欄は元画像のまま残す。
 
     判定の座標は模範解答の補正画像上にある。原稿の切り出し四隅へ戻してから、
     生徒の元画像ではその相対位置に載せる。
@@ -69,79 +61,8 @@ def render_feedback_on_original(
             render_ink_layer(overlay.size, ink_strokes, scale=1.0, supersample=1),
         )
 
-    name = str(row.get("name") or "").strip()
-    name_box = _name_field(test_id)
-    basis = get_identity_coord_basis(test_id) or ""
-    drew_name = False
-    if name and name_box is not None and basis != IDENTITY_BASIS_ORIGINAL:
-        _draw_name_in_box(overlay, name_box, name)
-        drew_name = True
-
     composited = _project_overlay(original, overlay, corners)
-    if name and name_box is not None and basis == IDENTITY_BASIS_ORIGINAL:
-        name_on_sheet = scale_box(
-            name_box,
-            crop.source_width,
-            crop.source_height,
-            orig_w,
-            orig_h,
-        )
-        _draw_name_in_box(composited, name_on_sheet, name)
-        drew_name = True
-    if name and not drew_name:
-        _draw_name_banner(composited, name)
     return composited.convert("RGB")
-
-
-def _name_field(test_id: str) -> dict[str, Any] | None:
-    for field in get_identity_fields(test_id):
-        if str(field.get("type") or "") == "氏名":
-            return field
-    return None
-
-
-def _draw_name_in_box(image: Image.Image, box: dict[str, Any], name: str) -> None:
-    x = float(box.get("x") or 0)
-    y = float(box.get("y") or 0)
-    w = float(box.get("width") or 0)
-    h = float(box.get("height") or 0)
-    if w < 8 or h < 8:
-        _draw_name_banner(image, name)
-        return
-    draw = ImageDraw.Draw(image)
-    fill = (255, 255, 255, 220) if image.mode == "RGBA" else (255, 255, 255)
-    draw.rectangle([x, y, x + w, y + h], fill=fill)
-    _draw_centered_text(
-        draw,
-        x + w / 2,
-        y + h / 2,
-        name,
-        (17, 24, 39, 255),
-        max(12, int(min(w, h) * 0.55)),
-        w * 0.9,
-        min_size=10,
-    )
-
-
-def _draw_name_banner(image: Image.Image, name: str) -> None:
-    width, height = image.size
-    box_h = max(36, int(height * 0.04))
-    box_w = max(160, int(width * 0.32))
-    margin = max(8, int(min(width, height) * 0.012))
-    draw = ImageDraw.Draw(image)
-    x, y = margin, margin
-    fill = (255, 255, 255, 230) if image.mode == "RGBA" else (255, 255, 255)
-    draw.rectangle([x, y, x + box_w, y + box_h], fill=fill)
-    _draw_centered_text(
-        draw,
-        x + box_w / 2,
-        y + box_h / 2,
-        name,
-        (17, 24, 39, 255),
-        max(14, int(box_h * 0.62)),
-        box_w * 0.9,
-        min_size=12,
-    )
 
 
 def _project_overlay(

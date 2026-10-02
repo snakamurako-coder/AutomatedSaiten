@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any
 
 import cv2
 import numpy as np
@@ -79,24 +78,6 @@ def corners_for_image(crop: ModelCrop, image_width: int, image_height: int) -> C
     sx = float(image_width) / float(src_w)
     sy = float(image_height) / float(src_h)
     return scale_corners(crop.corners, sx, sy)
-
-
-def scale_box(
-    box: dict[str, Any],
-    from_width: int,
-    from_height: int,
-    to_width: int,
-    to_height: int,
-) -> dict[str, Any]:
-    sx = float(to_width) / float(max(1, from_width))
-    sy = float(to_height) / float(max(1, from_height))
-    return {
-        **box,
-        "x": float(box.get("x") or 0) * sx,
-        "y": float(box.get("y") or 0) * sy,
-        "width": float(box.get("width") or 0) * sx,
-        "height": float(box.get("height") or 0) * sy,
-    }
 
 
 def get_model_crop(test_id: str) -> ModelCrop:
