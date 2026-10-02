@@ -23,7 +23,13 @@ from PySide6.QtWidgets import (
 )
 
 from models.identity_repo import get_identity_coord_basis, get_verification_data
-from models.roster_repo import update_student_identities, update_student_identity
+from models.roster_repo import (
+    _norm_person_name,
+    get_roster_rows,
+    get_selected_roster_name,
+    update_student_identities,
+    update_student_identity,
+)
 from services.crop_preview import load_crops_for_rows
 from ui_qt import helpers as h
 from ui_qt.helpers import pil_to_qpixmap
@@ -156,6 +162,7 @@ class Step13Page(QWidget):
         self.app = app
         self._crop_results: list[dict[str, Any]] = []
         self._edits: dict[int, tuple[QLineEdit, QLineEdit]] = {}
+        self._roster_ids_by_name: dict[str, list[str]] = {}
         self._undo_stack: list[_Snapshot] = []
         self._in_render = False
         self._last_viewport_w = 0
@@ -272,9 +279,17 @@ class Step13Page(QWidget):
             self._crop_results = results
             self._undo_stack.clear()
             self._refresh_undo_button()
+            self._load_roster_ids()
             ok = sum(1 for r in results if r.get("ok"))
+            resolved, missing = self._roster_id_counts()
+            note = ""
+            if resolved:
+                note += f" 名簿からIDを{resolved}件読み出しました。"
+            if missing:
+                note += f" IDを特定できない氏名が{missing}件あります。"
             self.status_label.setText(
                 f"{ok}/{len(results)} 件を表示中（{basis_label}） — 値を修正したら「修正を保存」"
+                f"{note}"
             )
             self._render_grid()
 
@@ -383,21 +398,64 @@ class Step13Page(QWidget):
 
         name_edit = QLineEdit(str(row.get("name") or ""))
         name_edit.setPlaceholderText("氏名")
-        id_edit = QLineEdit(str(row.get("studentId") or ""))
+        id_edit = QLineEdit(self._id_text_for_row(row))
         id_edit.setPlaceholderText("ID")
-        for edit in (name_edit, id_edit):
-            edit.setMinimumWidth(0)
-            edit.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        gap = 4
+        id_w = max(28, (image_w - gap) // 3)
+        name_w = max(28, image_w - gap - id_w)
+        name_edit.setFixedWidth(name_w)
+        id_edit.setFixedWidth(id_w)
         edit_row = QWidget()
         edit_row.setFixedWidth(image_w)
         edit_lay = QHBoxLayout(edit_row)
         edit_lay.setContentsMargins(0, 0, 0, 0)
-        edit_lay.setSpacing(4)
-        edit_lay.addWidget(name_edit, 2)
-        edit_lay.addWidget(id_edit, 1)
+        edit_lay.setSpacing(gap)
+        edit_lay.addWidget(name_edit)
+        edit_lay.addWidget(id_edit)
         self._edits[int(row["id"])] = (name_edit, id_edit)
         lay.addWidget(edit_row)
         return tile
+
+    def _load_roster_ids(self) -> None:
+        """選択中の名簿を、正規化した氏名 → ID の一覧にする。"""
+        grouped: dict[str, list[str]] = {}
+        roster_name = get_selected_roster_name(self.app.active_test_id).strip()
+        if roster_name:
+            for roster_row in get_roster_rows(roster_name):
+                key = _norm_person_name(str(roster_row.get("name") or ""))
+                sid = str(roster_row.get("studentId") or "").strip()
+                if not key or not sid:
+                    continue
+                bucket = grouped.setdefault(key, [])
+                if sid not in bucket:
+                    bucket.append(sid)
+        self._roster_ids_by_name = grouped
+
+    def _id_text_for_row(self, row: dict[str, Any]) -> str:
+        """ID欄に出す値。保存値が氏名そのものなら、名簿のIDを読む。"""
+        sid = str(row.get("studentId") or "").strip()
+        name = str(row.get("name") or "").strip()
+        if not sid or _norm_person_name(sid) != _norm_person_name(name):
+            return sid
+        matches = self._roster_ids_by_name.get(_norm_person_name(name), [])
+        if len(matches) == 1:
+            return matches[0]
+        return ""
+
+    def _roster_id_counts(self) -> tuple[int, int]:
+        resolved = 0
+        missing = 0
+        for item in self._crop_results:
+            row = item.get("row") or {}
+            stored = str(row.get("studentId") or "").strip()
+            name = str(row.get("name") or "").strip()
+            if not stored or _norm_person_name(stored) != _norm_person_name(name):
+                continue
+            if self._id_text_for_row(row):
+                resolved += 1
+            else:
+                missing += 1
+        return resolved, missing
 
     def _id_key(self, value: str) -> str:
         return unicodedata.normalize("NFKC", str(value or "")).strip()
@@ -468,8 +526,19 @@ class Step13Page(QWidget):
             row["studentId"] = student_id
             row["name"] = name
             saved += 1
+        self._refresh_external_match_dialog()
         h.info(self, "保存完了", f"{saved} 件の ID・氏名を更新しました。")
         self.status_label.setText(f"{saved} 件を更新しました。")
+
+    def _refresh_external_match_dialog(self) -> None:
+        pages = getattr(self.app, "pages", None) or {}
+        page = pages.get(11)
+        dialog = getattr(page, "_external_dialog", None) if page is not None else None
+        if dialog is None or not dialog.isVisible():
+            return
+        if str(getattr(dialog, "test_id", "") or "") != str(self.app.active_test_id or ""):
+            return
+        dialog.reload()
 
     def _refresh_undo_button(self) -> None:
         self.undo_btn.setEnabled(bool(self._undo_stack))
@@ -493,7 +562,7 @@ class Step13Page(QWidget):
             return
         name_edit, id_edit = edits
         name_edit.setText(str(row.get("name") or ""))
-        id_edit.setText(str(row.get("studentId") or ""))
+        id_edit.setText(self._id_text_for_row(row))
 
     def _apply_snapshot(self, snapshot: _Snapshot) -> list[tuple[int, str, str]]:
         by_id = {int(item["row"]["id"]): item["row"] for item in self._ok_items()}

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -12,10 +12,12 @@ from PySide6.QtWidgets import (
     QDialog,
     QGroupBox,
     QHBoxLayout,
+    QHeaderView,
     QLabel,
     QLineEdit,
     QListWidget,
     QPlainTextEdit,
+    QPushButton,
     QSizePolicy,
     QTableWidget,
     QTableWidgetItem,
@@ -25,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from models.domain_repo import calculate_domain_scores
 from models.roster_repo import (
+    _norm_person_name,
     ROSTER_MAPPING_FIELDS,
     assign_ids_from_roster,
     compare_external_scores,
@@ -51,23 +54,29 @@ from ui_qt.style import COLORS
 class ExternalScoreMatchDialog(QDialog):
     """外部の ID・氏名・得点を、本体採点の ID・氏名と突き合わせて確認する。"""
 
-    def __init__(
-        self,
-        parent: QWidget,
-        rows: list[dict[str, Any]],
-    ) -> None:
+    importRequested = Signal()
+
+    def __init__(self, parent: QWidget) -> None:
         super().__init__(parent)
         self.setWindowTitle("外部得点の照合")
-        self.resize(960, 520)
+        self.resize(1040, 520)
+        self.setWindowModality(Qt.WindowModality.NonModal)
+        self.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, False)
         h.enable_dialog_maximize(self)
         self.accepted_import = False
-        self._rows = rows
+        self.test_id = ""
+        self.feed_rows: list[dict[str, Any]] = []
+        self._rows: list[dict[str, Any]] = []
         self._skip_boxes: list[QCheckBox | None] = []
+        self._sheet_dialog: QDialog | None = None
 
         lay = QVBoxLayout(self)
         note = QLabel(
             "基準は ID です。氏名は空白と記号を除いて比べます。"
             "違う行の氏名は赤で示します。外字や異体字で字面だけ違うときは「スルー」にすると、その違いは確認済みになります。"
+            "このウィンドウは開いたまま、他のステップも操作できます。"
+            "⑬で「修正を保存」すると、ID・氏名と照合結果を更新します。"
+            "「元画像」でその答案の全体を確認できます。"
             "取り込むと、このテストの外部得点をこの一覧の ID で置き換えます。"
             "同じ ID が複数あるときは、最後の得点を採用します。"
         )
@@ -77,14 +86,63 @@ class ExternalScoreMatchDialog(QDialog):
         self._summary = QLabel("")
         lay.addWidget(self._summary)
 
-        self._table = QTableWidget(len(rows), 6)
+        self._table = QTableWidget(0, 7)
         self._table.setHorizontalHeaderLabels(
-            ["照合", "ID", "本体の氏名", "外部の氏名", "得点", "スルー"]
+            ["照合", "ID", "本体の氏名", "外部の氏名", "得点", "スルー", "元画像"]
         )
         self._table.verticalHeader().setVisible(False)
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
-        self._table.horizontalHeader().setStretchLastSection(True)
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(3, QHeaderView.ResizeMode.Stretch)
+        lay.addWidget(self._table, 1)
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(h.button("氏名の違いをすべてスルー", self._skip_all_name_diffs))
+        buttons.addStretch()
+        buttons.addWidget(h.button("閉じる", self.reject))
+        buttons.addWidget(h.button("この内容で取り込む", self._accept_import, variant="primary"))
+        lay.addLayout(buttons)
+
+    def set_comparison(
+        self,
+        test_id: str,
+        feed_rows: list[dict[str, Any]],
+        rows: list[dict[str, Any]],
+    ) -> None:
+        self.test_id = test_id
+        self.feed_rows = list(feed_rows)
+        self.accepted_import = False
+        self._populate(rows, self._skipped_ids())
+
+    def reload(self) -> None:
+        """本体の ID・氏名を読み直し、照合と不一致表示を更新する。"""
+        if not self.test_id:
+            return
+        skipped = self._skipped_ids()
+        try:
+            compared = compare_external_scores(self.test_id, self.feed_rows)
+        except Exception as e:
+            h.error(self, "照合エラー", str(e))
+            return
+        self._populate(compared, skipped)
+
+    def _skipped_ids(self) -> set[str]:
+        ids: set[str] = set()
+        for index, row in enumerate(self._rows):
+            box = self._skip_boxes[index] if index < len(self._skip_boxes) else None
+            if box is not None and box.isChecked():
+                sid = str(row.get("studentId") or "").strip()
+                if sid:
+                    ids.add(sid)
+        return ids
+
+    def _populate(self, rows: list[dict[str, Any]], skipped_ids: set[str]) -> None:
+        self._rows = list(rows)
+        self._skip_boxes = []
+        self._table.setRowCount(0)
+        self._table.setRowCount(len(rows))
         for i, row in enumerate(rows):
             score = row.get("score")
             score_text = "" if score is None else str(score)
@@ -94,11 +152,15 @@ class ExternalScoreMatchDialog(QDialog):
                 str(row.get("bodyName") or ""),
                 str(row.get("feedName") or ""),
                 score_text,
+                "",
             ]
             for col, text in enumerate(values):
                 self._table.setItem(i, col, QTableWidgetItem(text))
             if row.get("nameDiffers"):
                 box = QCheckBox("スルー")
+                sid = str(row.get("studentId") or "").strip()
+                if sid in skipped_ids:
+                    box.setChecked(True)
                 box.toggled.connect(lambda _checked, index=i: self._on_skip_toggled(index))
                 wrap = QWidget()
                 box_lay = QHBoxLayout(wrap)
@@ -109,19 +171,22 @@ class ExternalScoreMatchDialog(QDialog):
                 self._skip_boxes.append(box)
             else:
                 self._skip_boxes.append(None)
+            open_btn = QPushButton("元画像")
+            open_btn.clicked.connect(lambda _checked=False, index=i: self._open_original(index))
+            self._table.setCellWidget(i, 6, open_btn)
             self._paint_row(i)
         self._table.resizeColumnsToContents()
         self._table.setColumnWidth(0, 180)
         self._table.setColumnWidth(5, 90)
-        lay.addWidget(self._table, 1)
+        self._table.setColumnWidth(6, 88)
         self._refresh_summary()
 
-        buttons = QHBoxLayout()
-        buttons.addWidget(h.button("氏名の違いをすべてスルー", self._skip_all_name_diffs))
-        buttons.addStretch()
-        buttons.addWidget(h.button("閉じる", self.reject))
-        buttons.addWidget(h.button("この内容で取り込む", self._accept_import, variant="primary"))
-        lay.addLayout(buttons)
+    def reject(self) -> None:  # noqa: N802
+        self.hide()
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self.hide()
+        event.ignore()
 
     def _paint_row(self, index: int) -> None:
         row = self._rows[index]
@@ -195,7 +260,78 @@ class ExternalScoreMatchDialog(QDialog):
 
     def _accept_import(self) -> None:
         self.accepted_import = True
-        self.accept()
+        self.importRequested.emit()
+
+    def _find_result(self, row: dict[str, Any]) -> tuple[dict[str, Any] | None, str]:
+        from models.test_repo import get_all_results
+
+        results = get_all_results(self.test_id)
+        sid = str(row.get("studentId") or "").strip()
+        if sid:
+            by_id = [
+                item
+                for item in results
+                if str(item.get("studentId") or "").strip() == sid
+            ]
+            if len(by_id) == 1:
+                return by_id[0], ""
+            if len(by_id) > 1:
+                return None, f"ID {sid} の答案が複数あります。"
+        keys = {
+            _norm_person_name(part)
+            for part in str(row.get("bodyName") or "").split("/")
+            if _norm_person_name(part)
+        }
+        by_name = [
+            item
+            for item in results
+            if keys and _norm_person_name(str(item.get("name") or "")) in keys
+        ]
+        if len(by_name) == 1:
+            return by_name[0], ""
+        if len(by_name) > 1:
+            return None, "同じ氏名の答案が複数あります。"
+        return None, "この行に対応する答案が見つかりません。"
+
+    def _open_original(self, index: int) -> None:
+        from services.crop_preview import resolve_source_path
+        from ui_qt.full_sheet_grade_dialog import FullSheetGradeDialog
+
+        if index < 0 or index >= len(self._rows):
+            return
+        result, message = self._find_result(self._rows[index])
+        if result is None:
+            h.warn(self, "元画像", message)
+            return
+        try:
+            path = resolve_source_path(result, test_id=self.test_id)
+        except FileNotFoundError as e:
+            h.warn(self, "元画像", str(e))
+            return
+        old = self._sheet_dialog
+        self._sheet_dialog = None
+        if old is not None:
+            old.close()
+        dialog = FullSheetGradeDialog(
+            self.parent() or self,
+            test_id=self.test_id,
+            result_row=result,
+            warped_path=path,
+            fields=[],
+            points={},
+            original_view=True,
+        )
+        dialog.setWindowModality(Qt.WindowModality.NonModal)
+        dialog.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        self._sheet_dialog = dialog
+        dialog.destroyed.connect(lambda _obj=None, current=dialog: self._forget_sheet(current))
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _forget_sheet(self, dialog: QDialog) -> None:
+        if self._sheet_dialog is dialog:
+            self._sheet_dialog = None
 
 
 class RosterImportDialog(QDialog):
@@ -333,6 +469,7 @@ class Step11Page(QWidget):
         self.app = app
         self._roster_rows: list[dict[str, Any]] = []
         self._absent_keys: set[str] = set()
+        self._external_dialog: ExternalScoreMatchDialog | None = None
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -757,12 +894,27 @@ class Step11Page(QWidget):
         except Exception as e:
             h.error(self, "照合エラー", str(e))
             return
-        dialog = ExternalScoreMatchDialog(self, compared)
-        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.accepted_import:
+        dialog = self._external_dialog
+        if dialog is None:
+            dialog = ExternalScoreMatchDialog(self.app)
+            dialog.importRequested.connect(self._on_external_dialog_import)
+            self._external_dialog = dialog
+        dialog.set_comparison(self.app.active_test_id, rows, compared)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
+
+    def _on_external_dialog_import(self) -> None:
+        dialog = self._external_dialog
+        if dialog is None or not dialog.accepted_import:
             return
         try:
-            count = import_external_scores(self.app.active_test_id, rows)
-            self.score_status_label.setText(f"外部得点 {count} 件を取り込み、総計点を再計算しました。")
-            h.info(self, "取込完了", f"外部得点 {count} 件を取り込みました。")
+            count = import_external_scores(dialog.test_id, dialog.feed_rows)
         except Exception as e:
+            dialog.accepted_import = False
             h.error(self, "エラー", str(e))
+            return
+        dialog.accepted_import = False
+        dialog.hide()
+        self.score_status_label.setText(f"外部得点 {count} 件を取り込み、総計点を再計算しました。")
+        h.info(self, "取込完了", f"外部得点 {count} 件を取り込みました。")

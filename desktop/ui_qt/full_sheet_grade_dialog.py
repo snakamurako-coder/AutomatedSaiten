@@ -198,9 +198,10 @@ class FullSheetGradeDialog(QDialog):
         points: dict[str, int],
         initial_field_id: str = "",
         palette_controller: Any | None = None,
+        original_view: bool = False,
     ) -> None:
         super().__init__(parent)
-        self.setWindowTitle("一枚全容採点")
+        self.setWindowTitle("一枚全容（元画像）" if original_view else "一枚全容採点")
         self.resize(1100, 760)
         # WindowModal: メインはブロックしつつ、子にしたフローティングパレットは操作可能
         self.setWindowModality(Qt.WindowModality.WindowModal)
@@ -213,10 +214,11 @@ class FullSheetGradeDialog(QDialog):
         self._points = {str(k): int(v) for k, v in (points or {}).items()}
         self._judgments = dict(self._row.get("judgments") or {})
         self._scores = dict(self._row.get("scores") or {})
-        self._show_outlines = True
-        self._show_marks = True
+        self._show_outlines = not original_view
+        self._show_marks = not original_view
         self._tool_mode = MODE_GRADE
-        self._palette_controller = palette_controller
+        self._original_view = original_view
+        self._palette_controller = None if original_view else palette_controller
         self._palette_key: str | None = None
         self._selected_field_id = str(initial_field_id or "").strip()
         if self._selected_field_id and not any(
@@ -301,12 +303,12 @@ class FullSheetGradeDialog(QDialog):
             toolbar.addWidget(btn)
 
         self._chk_outlines = QCheckBox("枠欄を表示")
-        self._chk_outlines.setChecked(True)
+        self._chk_outlines.setChecked(not self._original_view)
         self._chk_outlines.toggled.connect(self._on_show_outlines_toggled)
         toolbar.addWidget(self._chk_outlines)
 
         self._chk_marks = QCheckBox("判定得点を表示")
-        self._chk_marks.setChecked(True)
+        self._chk_marks.setChecked(not self._original_view)
         self._chk_marks.toggled.connect(self._on_show_marks_toggled)
         toolbar.addWidget(self._chk_marks)
         toolbar.addStretch(1)
@@ -352,7 +354,19 @@ class FullSheetGradeDialog(QDialog):
         self._highlight_current_grade()
         self._refresh_info()
         self._apply_tool_mode()
-        if self._palette_controller is not None:
+        if self._original_view:
+            self._btn_grade.hide()
+            self._btn_draw.hide()
+            self._chk_outlines.hide()
+            self._chk_marks.hide()
+            self._palette_frame.hide()
+            self._hint.setText("元画像の全体です。確認したら閉じてください。")
+            self._title.setText(f"{self._title.text()}　元画像")
+            name = str(self._row.get("name") or "")
+            file_name = str(self._row.get("fileName") or "")
+            self._field_label.setText(name or "氏名なし")
+            self._ocr_label.setText(file_name)
+        elif self._palette_controller is not None:
             self._palette_controller.bind_full_sheet_dialog(self)
 
     def _load_sheet_strokes(self) -> list[dict[str, Any]]:
@@ -391,6 +405,8 @@ class FullSheetGradeDialog(QDialog):
         if self._base_bgr is None:
             return Image.new("RGB", (400, 300), (240, 240, 240))
         rgba = bgr_to_rgba_image(self._base_bgr)
+        if self._original_view:
+            return rgba.convert("RGB")
         if self._show_marks:
             try:
                 self._row["judgments"] = dict(self._judgments)
@@ -423,8 +439,12 @@ class FullSheetGradeDialog(QDialog):
     def _rebuild_workspace(self) -> None:
         zoom = self._zoom.zoom_value() / 100.0
         pil = self._compose_display_pil()
-        sheet_strokes = self._load_sheet_strokes()
-        sheet_ann = self._load_sheet_annotations()
+        if self._original_view:
+            sheet_strokes: list[dict[str, Any]] = []
+            sheet_ann: list[dict[str, Any]] = []
+        else:
+            sheet_strokes = self._load_sheet_strokes()
+            sheet_ann = self._load_sheet_annotations()
 
         self._stack = CropInkImageStack(
             pil_image=pil,
@@ -433,8 +453,8 @@ class FullSheetGradeDialog(QDialog):
             strokes=sheet_strokes,
             annotations=sheet_ann,
             zoom=zoom,
-            on_strokes_changed=self._on_sheet_strokes_changed,
-            on_annotations_changed=self._on_sheet_annotations_changed,
+            on_strokes_changed=None if self._original_view else self._on_sheet_strokes_changed,
+            on_annotations_changed=None if self._original_view else self._on_sheet_annotations_changed,
         )
 
         self._workspace = QWidget()
@@ -882,6 +902,9 @@ class FullSheetGradeDialog(QDialog):
             self._refresh_hit_overlay()
 
     def accept(self) -> None:
+        if self._original_view:
+            super().accept()
+            return
         if self._palette_controller is not None:
             self._palette_controller.unbind_full_sheet_dialog(self)
         if self._stack is not None:

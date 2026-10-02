@@ -462,24 +462,16 @@ def parse_external_scores_csv(csv_text: str) -> list[dict[str, Any]]:
 
 
 def list_grading_identities(test_id: str) -> dict[str, dict[str, Any]]:
-    """本体採点の名簿。選択中の名簿を優先し、無ければ採点結果の ID・氏名を使う。"""
+    """採点結果についている ID・氏名。⑬の修正を保存した内容が照合に出る。"""
     init_db()
-    roster_name = get_selected_roster_name(test_id).strip()
-    source_rows: list[dict[str, Any]]
-    if roster_name:
-        source_rows = [
-            {"studentId": row.get("studentId"), "name": row.get("name")}
-            for row in get_roster_rows(roster_name)
-        ]
-    else:
-        with connect() as conn:
-            fetched = conn.execute(
-                "SELECT student_id, name FROM results WHERE test_id = ? ORDER BY id",
-                (test_id,),
-            ).fetchall()
-        source_rows = [
-            {"studentId": row["student_id"], "name": row["name"]} for row in fetched
-        ]
+    with connect() as conn:
+        fetched = conn.execute(
+            "SELECT student_id, name FROM results WHERE test_id = ? ORDER BY id",
+            (test_id,),
+        ).fetchall()
+    source_rows = [
+        {"studentId": row["student_id"], "name": row["name"]} for row in fetched
+    ]
     by_id: dict[str, dict[str, Any]] = {}
     for row in source_rows:
         sid = str(row.get("studentId") or "").strip()
