@@ -164,6 +164,21 @@ def warp_output_size(
     return out_w, out_h
 
 
+def warp_from_corners_to_size(
+    image_bgr: np.ndarray,
+    corners: Corners,
+    out_w: int,
+    out_h: int,
+) -> np.ndarray:
+    """四隅を、指定サイズの矩形へ透視変換する。"""
+    width = max(1, int(out_w))
+    height = max(1, int(out_h))
+    src = np.float32([corners.tl, corners.tr, corners.br, corners.bl])
+    dst = np.float32([[0, 0], [width, 0], [width, height], [0, height]])
+    matrix = cv2.getPerspectiveTransform(src, dst)
+    return cv2.warpPerspective(image_bgr, matrix, (width, height))
+
+
 def warp_from_corners(
     image_bgr: np.ndarray,
     corners: Corners,
@@ -171,10 +186,7 @@ def warp_from_corners(
 ) -> np.ndarray:
     """四隅を矩形へ透視変換する。出力は切り取り領域のアスペクト比を保つ。"""
     out_w, out_h = warp_output_size(corners, orientation)
-    src = np.float32([corners.tl, corners.tr, corners.br, corners.bl])
-    dst = np.float32([[0, 0], [out_w, 0], [out_w, out_h], [0, out_h]])
-    matrix = cv2.getPerspectiveTransform(src, dst)
-    return cv2.warpPerspective(image_bgr, matrix, (out_w, out_h))
+    return warp_from_corners_to_size(image_bgr, corners, out_w, out_h)
 
 
 def warp_image_file(
@@ -194,6 +206,8 @@ class WarpResult:
     image: np.ndarray
     corners: Corners
     corners_detected: bool
+    source_width: int = 0
+    source_height: int = 0
 
 
 def warp_image_from_path_result(
@@ -203,17 +217,19 @@ def warp_image_from_path_result(
 ) -> WarpResult:
     """透視変換結果と、外枠自動検出の成否を返す。"""
     image = load_image_bgr(source_path)
+    src_h, src_w = image.shape[:2]
     try:
         corners = detect_paper_corners(image, thresh_val)
         detected = True
     except ValueError:
-        h, w = image.shape[:2]
-        corners = default_paper_corners(w, h)
+        corners = default_paper_corners(src_w, src_h)
         detected = False
     return WarpResult(
         image=warp_from_corners(image, corners, orientation),
         corners=corners,
         corners_detected=detected,
+        source_width=src_w,
+        source_height=src_h,
     )
 
 

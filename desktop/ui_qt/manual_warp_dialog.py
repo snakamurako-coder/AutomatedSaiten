@@ -782,6 +782,15 @@ class ManualWarpDialog(QDialog):
             raise ValueError("補正プレビューがありません。範囲を指定して四隅を調整してください。")
         if self._purpose == "model":
             out_path = save_model_answer_image(self._test_id, self._preview_bgr)
+            corners = self._current_corners_snapshot()
+            if corners is not None and self._image_bgr is not None:
+                from services.model_crop import save_model_crop
+
+                src_h, src_w = self._image_bgr.shape[:2]
+                warp_h, warp_w = self._preview_bgr.shape[:2]
+                save_model_crop(
+                    self._test_id, corners, src_w, src_h, warp_w, warp_h
+                )
             return out_path, self._preview_bgr.copy()
         from services.image_warp import warped_file_name
 

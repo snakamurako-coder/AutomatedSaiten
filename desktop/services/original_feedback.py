@@ -18,14 +18,15 @@ from services.feedback_renderer import (
     _draw_centered_text,
     render_feedback_overlay_layer,
 )
-from services.image_loader import imread_bgr, load_image_bgr
-from services.image_warp import default_paper_corners, detect_paper_corners
+from services.image_loader import load_image_bgr
+from services.image_warp import Corners
+from services.model_crop import corners_for_image, get_model_crop, scale_box
 
 
 def render_feedback_on_original(
     test_id: str,
     row: dict[str, Any],
-    warped_path: str,
+    warped_path: str,  # 呼び出し側の共通引数。位置合わせには使わない
     fields: list[dict[str, Any]],
     output_slots: list[dict[str, Any]],
     field_marks: dict[str, dict[str, Any]],
@@ -35,16 +36,19 @@ def render_feedback_on_original(
     ink_strokes: list[dict[str, Any]] | None = None,
     text_annotations: list[dict[str, Any]] | None = None,
 ) -> Image.Image:
-    """元画像に判定・合計欄・氏名を載せた RGB 画像を返す。"""
-    warped = imread_bgr(warped_path)
-    if warped is None:
-        raise ValueError(f"補正画像を読み込めません: {warped_path}")
-    warp_h, warp_w = warped.shape[:2]
+    """元画像に判定・合計欄・氏名を載せた RGB 画像を返す。
+
+    判定の座標は模範解答の補正画像上にある。原稿の切り出し四隅へ戻してから、
+    生徒の元画像ではその相対位置に載せる。
+    """
+    crop = get_model_crop(test_id)
     source_path = resolve_source_path(row, test_id=test_id)
     original = load_image_bgr(source_path)
+    orig_h, orig_w = original.shape[:2]
+    corners = corners_for_image(crop, orig_w, orig_h)
 
     overlay = render_feedback_overlay_layer(
-        (warp_w, warp_h),
+        (crop.warp_width, crop.warp_height),
         fields,
         output_slots,
         field_marks,
@@ -73,9 +77,16 @@ def render_feedback_on_original(
         _draw_name_in_box(overlay, name_box, name)
         drew_name = True
 
-    composited = _project_overlay(original, overlay, warp_w, warp_h)
+    composited = _project_overlay(original, overlay, corners)
     if name and name_box is not None and basis == IDENTITY_BASIS_ORIGINAL:
-        _draw_name_in_box(composited, name_box, name)
+        name_on_sheet = scale_box(
+            name_box,
+            crop.source_width,
+            crop.source_height,
+            orig_w,
+            orig_h,
+        )
+        _draw_name_in_box(composited, name_on_sheet, name)
         drew_name = True
     if name and not drew_name:
         _draw_name_banner(composited, name)
@@ -136,14 +147,10 @@ def _draw_name_banner(image: Image.Image, name: str) -> None:
 def _project_overlay(
     original_bgr: np.ndarray,
     overlay: Image.Image,
-    warp_w: int,
-    warp_h: int,
+    corners: Corners,
 ) -> Image.Image:
     orig_h, orig_w = original_bgr.shape[:2]
-    try:
-        corners = detect_paper_corners(original_bgr)
-    except ValueError:
-        corners = default_paper_corners(orig_w, orig_h)
+    warp_w, warp_h = overlay.size
     src = np.float32([[0, 0], [warp_w, 0], [warp_w, warp_h], [0, warp_h]])
     dst = np.float32([corners.tl, corners.tr, corners.br, corners.bl])
     matrix = cv2.getPerspectiveTransform(src, dst)

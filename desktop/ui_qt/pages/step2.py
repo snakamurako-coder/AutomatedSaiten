@@ -33,6 +33,7 @@ from models.test_repo import (
 )
 from services.image_loader import is_supported_input_path
 from services.image_warp import warp_image_from_path_result
+from services.model_crop import save_model_crop
 from ui_qt import helpers as h
 from ui_qt.manual_warp_dialog import ManualWarpDialog
 from ui_qt.region_editor import AnswerRegionEditor
@@ -236,6 +237,14 @@ class Step2Page(QWidget):
             hh, ww = warped.shape[:2]
             keep = existing_fields if ref_w == ww and ref_h == hh and existing_fields else []
             save_model_answer_image(test_id, warped)
+            save_model_crop(
+                test_id,
+                result.corners,
+                result.source_width,
+                result.source_height,
+                ww,
+                hh,
+            )
             archived = archive_model_answer_source(test_id, path)
             return warped, keep, archived, bool(result.corners_detected)
 
