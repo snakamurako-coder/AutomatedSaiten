@@ -163,6 +163,7 @@ class Step13Page(QWidget):
         self._crop_results: list[dict[str, Any]] = []
         self._edits: dict[int, tuple[QLineEdit, QLineEdit]] = {}
         self._roster_ids_by_name: dict[str, list[str]] = {}
+        self._persisted: dict[int, tuple[str, str]] = {}
         self._undo_stack: list[_Snapshot] = []
         self._in_render = False
         self._last_viewport_w = 0
@@ -175,8 +176,9 @@ class Step13Page(QWidget):
         root.addWidget(
             h.muted_label(
                 "切り出し画像は用紙に残したまま、生徒IDと氏名を調整します。"
+                "元画像と補正画像は同じ答案なので、IDと氏名も共通です。"
                 "タイルの中央へドロップすると入れ替え、上下の端へドロップするとその位置へ挿入して間を1つずつずらします。"
-                "「取り消し」で直前の調整に戻ります。"
+                "入れ替えはすぐに答案へ保存されます。欄の文字を直したときは「修正を保存」で答案に書き込みます。"
             )
         )
 
@@ -277,6 +279,7 @@ class Step13Page(QWidget):
                 h.error(self, "読込エラー", str(err))
                 return
             self._crop_results = results
+            self._capture_persisted()
             self._undo_stack.clear()
             self._refresh_undo_button()
             self._load_roster_ids()
@@ -416,6 +419,24 @@ class Step13Page(QWidget):
         lay.addWidget(edit_row)
         return tile
 
+    def _capture_persisted(self) -> None:
+        """答案行に保存されている ID・氏名。画面表示で上書きしない。"""
+        saved: dict[int, tuple[str, str]] = {}
+        for item in self._crop_results:
+            row = item.get("row") or {}
+            rid = row.get("id")
+            if rid is None:
+                continue
+            saved[int(rid)] = (
+                str(row.get("studentId") or ""),
+                str(row.get("name") or ""),
+            )
+        self._persisted = saved
+
+    def _remember_persisted(self, rows: list[tuple[int, str, str]]) -> None:
+        for rid, sid, name in rows:
+            self._persisted[int(rid)] = (str(sid or ""), str(name or ""))
+
     def _load_roster_ids(self) -> None:
         """選択中の名簿を、正規化した氏名 → ID の一覧にする。"""
         grouped: dict[str, list[str]] = {}
@@ -520,11 +541,13 @@ class Step13Page(QWidget):
             name_edit, id_edit = edits
             student_id = id_edit.text().strip()
             name = name_edit.text().strip()
-            if student_id == str(row.get("studentId") or "") and name == str(row.get("name") or ""):
+            old_sid, old_name = self._persisted.get(rid, ("", ""))
+            if student_id == old_sid and name == old_name:
                 continue
             update_student_identity(self.app.active_test_id, rid, student_id, name)
             row["studentId"] = student_id
             row["name"] = name
+            self._persisted[rid] = (student_id, name)
             saved += 1
         self._refresh_external_match_dialog()
         h.info(self, "保存完了", f"{saved} 件の ID・氏名を更新しました。")
@@ -562,7 +585,7 @@ class Step13Page(QWidget):
             return
         name_edit, id_edit = edits
         name_edit.setText(str(row.get("name") or ""))
-        id_edit.setText(self._id_text_for_row(row))
+        id_edit.setText(str(row.get("studentId") or ""))
 
     def _apply_snapshot(self, snapshot: _Snapshot) -> list[tuple[int, str, str]]:
         by_id = {int(item["row"]["id"]): item["row"] for item in self._ok_items()}
@@ -609,7 +632,9 @@ class Step13Page(QWidget):
             self._apply_snapshot(before)
             h.error(self, "更新エラー", str(e))
             return
+        self._remember_persisted(changed)
         self._refresh_undo_button()
+        self._refresh_external_match_dialog()
         self.status_label.setText(message)
 
     def _on_identity_drop(self, source_id: int, target_id: int, action: str) -> None:
@@ -665,5 +690,7 @@ class Step13Page(QWidget):
             self._undo_stack.append(before)
             h.error(self, "取り消しエラー", str(e))
             return
+        self._remember_persisted(changed)
         self._refresh_undo_button()
+        self._refresh_external_match_dialog()
         self.status_label.setText("直前のID調整を取り消しました。")
