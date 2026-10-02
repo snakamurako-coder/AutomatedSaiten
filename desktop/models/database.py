@@ -155,6 +155,7 @@ CREATE TABLE IF NOT EXISTS external_scores (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     test_id TEXT NOT NULL,
     student_id TEXT NOT NULL,
+    student_name TEXT DEFAULT '',
     score REAL DEFAULT 0,
     source TEXT DEFAULT 'CSV取込',
     imported_at TEXT NOT NULL,
@@ -231,6 +232,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     }
     if "ocr_engine" not in field_cols:
         conn.execute("ALTER TABLE answer_fields ADD COLUMN ocr_engine TEXT DEFAULT ''")
+    ext_cols = {
+        row[1] for row in conn.execute("PRAGMA table_info(external_scores)").fetchall()
+    }
+    if ext_cols and "student_name" not in ext_cols:
+        conn.execute("ALTER TABLE external_scores ADD COLUMN student_name TEXT DEFAULT ''")
 
 
 def init_db() -> None:

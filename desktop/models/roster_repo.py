@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import unicodedata
 from datetime import datetime
 from typing import Any
 
@@ -399,41 +400,212 @@ def update_student_identities(
 
 # ==================== 外部連携得点 ====================
 
+def _norm_person_name(value: str) -> str:
+    """氏名比較用。空白と記号を除き、外字・異体字はそのまま残す。"""
+    text = unicodedata.normalize("NFKC", str(value or ""))
+    chars: list[str] = []
+    for ch in text:
+        if ch.isspace():
+            continue
+        category = unicodedata.category(ch)
+        if category[:1] in {"P", "S", "C"}:
+            continue
+        chars.append(ch)
+    return "".join(chars)
+
+
+def _person_names_differ(feed_name: str, body_names: list[str]) -> bool:
+    feed_norm = _norm_person_name(feed_name)
+    body_norms = {_norm_person_name(name) for name in body_names}
+    body_norms.discard("")
+    if not feed_norm and not body_norms:
+        return False
+    return feed_norm not in body_norms
+
+
+def _external_header_row(cells: list[str]) -> bool:
+    if len(cells) < 3:
+        return False
+    try:
+        float(str(cells[2]).replace("，", ""))
+        return False
+    except ValueError:
+        pass
+    head = "".join(cells[:3])
+    return any(token in head for token in ("ID", "ＩＤ", "氏名", "得点", "名前"))
+
+
 def parse_external_scores_csv(csv_text: str) -> list[dict[str, Any]]:
+    """外部得点。列は ID, 氏名, 得点 の3列。照合の基準は ID。"""
     rows = []
     for ln in (csv_text or "").splitlines():
         if not ln.strip():
             continue
-        cells = [c.strip() for c in re.split(r"[,;\t]", ln)]
-        if len(cells) < 2:
+        cells = [c.strip() for c in re.split(r"[,;\t，]", ln)]
+        if _external_header_row(cells):
+            continue
+        if len(cells) < 3 or not cells[0]:
             continue
         try:
-            score = float(cells[1])
+            score = float(str(cells[2]).replace("，", ""))
         except ValueError:
-            continue  # ヘッダー行など数値でない行はスキップ
+            continue
         rows.append(
             {
                 "studentId": cells[0],
+                "name": cells[1],
                 "score": score,
-                "source": cells[2] if len(cells) > 2 and cells[2] else "CSV取込",
+                "source": "CSV取込",
             }
         )
     return rows
 
 
+def list_grading_identities(test_id: str) -> dict[str, dict[str, Any]]:
+    """本体採点の名簿。選択中の名簿を優先し、無ければ採点結果の ID・氏名を使う。"""
+    init_db()
+    roster_name = get_selected_roster_name(test_id).strip()
+    source_rows: list[dict[str, Any]]
+    if roster_name:
+        source_rows = [
+            {"studentId": row.get("studentId"), "name": row.get("name")}
+            for row in get_roster_rows(roster_name)
+        ]
+    else:
+        with connect() as conn:
+            fetched = conn.execute(
+                "SELECT student_id, name FROM results WHERE test_id = ? ORDER BY id",
+                (test_id,),
+            ).fetchall()
+        source_rows = [
+            {"studentId": row["student_id"], "name": row["name"]} for row in fetched
+        ]
+    by_id: dict[str, dict[str, Any]] = {}
+    for row in source_rows:
+        sid = str(row.get("studentId") or "").strip()
+        if not sid:
+            continue
+        name = str(row.get("name") or "").strip()
+        slot = by_id.get(sid)
+        if slot is None:
+            by_id[sid] = {"studentId": sid, "name": name, "names": [name] if name else []}
+            continue
+        if name and name not in slot["names"]:
+            slot["names"].append(name)
+            if not slot["name"]:
+                slot["name"] = name
+    return by_id
+
+
+def compare_external_scores(
+    test_id: str, feed_rows: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
+    """外部の3列を、本体採点の ID・氏名と ID 基準で突き合わせる。"""
+    grading = list_grading_identities(test_id)
+    feed_by_id: dict[str, list[dict[str, Any]]] = {}
+    for row in feed_rows:
+        sid = str(row.get("studentId") or "").strip()
+        if not sid:
+            continue
+        feed_by_id.setdefault(sid, []).append(row)
+
+    compared: list[dict[str, Any]] = []
+    for sid, items in feed_by_id.items():
+        chosen = items[-1]
+        body = grading.get(sid)
+        body_names = list(body["names"]) if body else []
+        body_name = " / ".join(body_names)
+        feed_name = str(chosen.get("name") or "").strip()
+        duplicate = len(items) > 1
+        name_differs = False
+        if body is None:
+            status = "本体にない"
+        elif len(body_names) > 1:
+            status = "本体の氏名が複数"
+            name_differs = _person_names_differ(feed_name, body_names)
+        elif _person_names_differ(feed_name, body_names):
+            status = "氏名が違う"
+            name_differs = True
+        else:
+            status = "一致"
+        if duplicate and status == "一致":
+            status = "IDが重複"
+        elif duplicate:
+            status = f"{status}・IDが重複"
+        compared.append(
+            {
+                "studentId": sid,
+                "bodyName": body_name,
+                "feedName": feed_name,
+                "score": chosen.get("score"),
+                "status": status,
+                "duplicateCount": len(items),
+                "nameDiffers": name_differs,
+            }
+        )
+    for sid, body in grading.items():
+        if sid in feed_by_id:
+            continue
+        compared.append(
+            {
+                "studentId": sid,
+                "bodyName": " / ".join(body["names"]),
+                "feedName": "",
+                "score": None,
+                "status": "外部にない",
+                "duplicateCount": 0,
+                "nameDiffers": False,
+            }
+        )
+
+    rank = {
+        "氏名が違う": 0,
+        "本体の氏名が複数": 1,
+        "本体にない": 2,
+        "外部にない": 3,
+        "IDが重複": 4,
+    }
+
+    def sort_key(row: dict[str, Any]) -> tuple:
+        status = str(row.get("status") or "")
+        base = next((rank[key] for key in rank if key in status), 5)
+        return (base, _student_id_sort_key({"studentId": row.get("studentId")}))
+
+    compared.sort(key=sort_key)
+    return compared
+
+
 def import_external_scores(test_id: str, rows: list[dict[str, Any]]) -> int:
-    """外部得点を追記し、結果行へ反映・総計点を再計算する。"""
+    """外部得点を追記し、結果行へ反映・総計点を再計算する。同一IDは後の行を採用する。"""
     if not rows:
-        raise ValueError("取込対象の行がありません（形式: 生徒ID,得点[,ソース]）。")
+        raise ValueError("取込対象の行がありません（形式: ID,氏名,得点）。")
+    init_db()
+    ordered: dict[str, dict[str, Any]] = {}
+    for row in rows:
+        sid = str(row.get("studentId") or "").strip()
+        if not sid:
+            continue
+        ordered[sid] = row
+    if not ordered:
+        raise ValueError("取込対象の行がありません（形式: ID,氏名,得点）。")
     now = _now()
     with connect() as conn:
-        for r in rows:
+        conn.execute("DELETE FROM external_scores WHERE test_id = ?", (test_id,))
+        for sid, row in ordered.items():
             conn.execute(
                 """
-                INSERT INTO external_scores(test_id, student_id, score, source, imported_at)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO external_scores(
+                    test_id, student_id, student_name, score, source, imported_at
+                ) VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (test_id, str(r["studentId"]), float(r["score"]), str(r.get("source") or "CSV取込"), now),
+                (
+                    test_id,
+                    sid,
+                    str(row.get("name") or ""),
+                    float(row.get("score") or 0),
+                    str(row.get("source") or "CSV取込"),
+                    now,
+                ),
             )
         touch_progress_conn(conn, test_id, 7)
         conn.commit()
@@ -441,19 +613,21 @@ def import_external_scores(test_id: str, rows: list[dict[str, Any]]) -> int:
     from models.domain_repo import calculate_domain_scores
 
     calculate_domain_scores(test_id)
-    return len(rows)
+    return len(ordered)
 
 
 def get_external_scores(test_id: str) -> list[dict[str, Any]]:
+    init_db()
     with connect() as conn:
         rows = conn.execute(
-            "SELECT student_id, score, source, imported_at FROM external_scores "
+            "SELECT student_id, student_name, score, source, imported_at FROM external_scores "
             "WHERE test_id = ? ORDER BY id",
             (test_id,),
         ).fetchall()
     return [
         {
             "studentId": r["student_id"],
+            "name": r["student_name"] or "",
             "score": r["score"],
             "source": r["source"],
             "importedAt": r["imported_at"],

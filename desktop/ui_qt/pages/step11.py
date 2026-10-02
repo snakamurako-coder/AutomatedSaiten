@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any
 
 from PySide6.QtCore import Qt
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -26,6 +27,7 @@ from models.domain_repo import calculate_domain_scores
 from models.roster_repo import (
     ROSTER_MAPPING_FIELDS,
     assign_ids_from_roster,
+    compare_external_scores,
     get_id_assignment_status,
     get_roster_absent_state,
     get_roster_assignment_preview,
@@ -44,6 +46,156 @@ from models.roster_repo import (
 from ui_qt import helpers as h
 from ui_qt.layout_helpers import make_expanding
 from ui_qt.style import COLORS
+
+
+class ExternalScoreMatchDialog(QDialog):
+    """外部の ID・氏名・得点を、本体採点の ID・氏名と突き合わせて確認する。"""
+
+    def __init__(
+        self,
+        parent: QWidget,
+        rows: list[dict[str, Any]],
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("外部得点の照合")
+        self.resize(960, 520)
+        h.enable_dialog_maximize(self)
+        self.accepted_import = False
+        self._rows = rows
+        self._skip_boxes: list[QCheckBox | None] = []
+
+        lay = QVBoxLayout(self)
+        note = QLabel(
+            "基準は ID です。氏名は空白と記号を除いて比べます。"
+            "違う行の氏名は赤で示します。外字や異体字で字面だけ違うときは「スルー」にすると、その違いは確認済みになります。"
+            "取り込むと、このテストの外部得点をこの一覧の ID で置き換えます。"
+            "同じ ID が複数あるときは、最後の得点を採用します。"
+        )
+        note.setWordWrap(True)
+        lay.addWidget(note)
+
+        self._summary = QLabel("")
+        lay.addWidget(self._summary)
+
+        self._table = QTableWidget(len(rows), 6)
+        self._table.setHorizontalHeaderLabels(
+            ["照合", "ID", "本体の氏名", "外部の氏名", "得点", "スルー"]
+        )
+        self._table.verticalHeader().setVisible(False)
+        self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
+        self._table.horizontalHeader().setStretchLastSection(True)
+        for i, row in enumerate(rows):
+            score = row.get("score")
+            score_text = "" if score is None else str(score)
+            values = [
+                str(row.get("status") or ""),
+                str(row.get("studentId") or ""),
+                str(row.get("bodyName") or ""),
+                str(row.get("feedName") or ""),
+                score_text,
+            ]
+            for col, text in enumerate(values):
+                self._table.setItem(i, col, QTableWidgetItem(text))
+            if row.get("nameDiffers"):
+                box = QCheckBox("スルー")
+                box.toggled.connect(lambda _checked, index=i: self._on_skip_toggled(index))
+                wrap = QWidget()
+                box_lay = QHBoxLayout(wrap)
+                box_lay.setContentsMargins(8, 0, 8, 0)
+                box_lay.addWidget(box)
+                box_lay.addStretch()
+                self._table.setCellWidget(i, 5, wrap)
+                self._skip_boxes.append(box)
+            else:
+                self._skip_boxes.append(None)
+            self._paint_row(i)
+        self._table.resizeColumnsToContents()
+        self._table.setColumnWidth(0, 180)
+        self._table.setColumnWidth(5, 90)
+        lay.addWidget(self._table, 1)
+        self._refresh_summary()
+
+        buttons = QHBoxLayout()
+        buttons.addWidget(h.button("氏名の違いをすべてスルー", self._skip_all_name_diffs))
+        buttons.addStretch()
+        buttons.addWidget(h.button("閉じる", self.reject))
+        buttons.addWidget(h.button("この内容で取り込む", self._accept_import, variant="primary"))
+        lay.addLayout(buttons)
+
+    def _paint_row(self, index: int) -> None:
+        row = self._rows[index]
+        status = str(row.get("status") or "")
+        skipped = self._skip_boxes[index] is not None and self._skip_boxes[index].isChecked()
+        name_differs = bool(row.get("nameDiffers"))
+        warn_bg = QColor("#fef3c7")
+        miss_bg = QColor(COLORS["danger_soft"])
+        name_bg = QColor("#fecaca")
+        name_fg = QColor("#991b1b")
+        skip_bg = QColor(COLORS["success_soft"])
+        plain = QColor(COLORS["surface"])
+        text = QColor(COLORS["text"])
+        row_bg = plain
+        if status != "一致" and not (name_differs and skipped and status == "氏名が違う"):
+            row_bg = miss_bg if "ない" in status else warn_bg
+        if name_differs and skipped and "ない" not in status and "重複" not in status and "複数" not in status:
+            row_bg = skip_bg
+        status_item = self._table.item(index, 0)
+        if status_item is not None:
+            status_item.setText(self._status_text(status, name_differs and skipped))
+        for col in range(5):
+            item = self._table.item(index, col)
+            if item is None:
+                continue
+            highlight_name = name_differs and not skipped and col in (0, 2, 3)
+            if highlight_name:
+                item.setBackground(name_bg)
+                item.setForeground(name_fg)
+            else:
+                item.setBackground(row_bg)
+                item.setForeground(text)
+
+    @staticmethod
+    def _status_text(status: str, skipped: bool) -> str:
+        if not skipped:
+            return status
+        rest = status.replace("氏名が違う・", "").replace("氏名が違う", "").strip("・")
+        if not rest:
+            return "スルー"
+        return f"スルー・{rest}"
+
+    def _on_skip_toggled(self, index: int) -> None:
+        self._paint_row(index)
+        self._refresh_summary()
+
+    def _skip_all_name_diffs(self) -> None:
+        for box in self._skip_boxes:
+            if box is not None:
+                box.setChecked(True)
+
+    def _refresh_summary(self) -> None:
+        matched = 0
+        name_diff = 0
+        skipped = 0
+        other = 0
+        for index, row in enumerate(self._rows):
+            box = self._skip_boxes[index]
+            if row.get("nameDiffers"):
+                if box is not None and box.isChecked():
+                    skipped += 1
+                else:
+                    name_diff += 1
+            elif row.get("status") == "一致":
+                matched += 1
+            else:
+                other += 1
+        self._summary.setText(
+            f"一致 {matched} 件 / 氏名が違う {name_diff} 件 / スルー {skipped} 件 / その他 {other} 件"
+        )
+
+    def _accept_import(self) -> None:
+        self.accepted_import = True
+        self.accept()
 
 
 class RosterImportDialog(QDialog):
@@ -286,16 +438,17 @@ class Step11Page(QWidget):
 
         lay.addWidget(
             h.caption_label(
-                "外部得点（マーク式など別システムの得点）を「生徒ID,得点[,ソース]」の形式で貼り付けて取り込みます。"
+                "外部得点は「ID,氏名,得点」の3列で貼り付けます。"
+                "取込前に、IDを基準にして本体採点の氏名と照合します。"
                 "総計点 = 記述欄得点の合計 + 外部得点。"
             )
         )
         self.external_edit = QPlainTextEdit()
-        self.external_edit.setPlaceholderText("例:\n1001,45\n1002,38,マークシート")
+        self.external_edit.setPlaceholderText("例:\nID,氏名,得点\n1001,山田太郎,45\n1002,佐藤花子,38")
         self.external_edit.setFixedHeight(110)
         lay.addWidget(self.external_edit)
         ext_row = QHBoxLayout()
-        ext_row.addWidget(h.button("外部得点を取込", self._on_import_external, variant="success"))
+        ext_row.addWidget(h.button("照合して取込", self._on_import_external, variant="success"))
         ext_row.addStretch()
         lay.addLayout(ext_row)
 
@@ -331,7 +484,10 @@ class Step11Page(QWidget):
         ext = get_external_scores(self.app.active_test_id)
         if ext:
             self.external_edit.setPlainText(
-                "\n".join(f"{e['studentId']},{e['score']},{e['source']}" for e in ext)
+                "ID,氏名,得点\n"
+                + "\n".join(
+                    f"{e['studentId']},{e.get('name') or ''},{e['score']}" for e in ext
+                )
             )
         self._update_roster_import_button()
 
@@ -594,7 +750,15 @@ class Step11Page(QWidget):
             return
         rows = parse_external_scores_csv(self.external_edit.toPlainText())
         if not rows:
-            h.warn(self, "形式エラー", "「生徒ID,得点[,ソース]」の形式で入力してください。")
+            h.warn(self, "形式エラー", "「ID,氏名,得点」の3列で入力してください。")
+            return
+        try:
+            compared = compare_external_scores(self.app.active_test_id, rows)
+        except Exception as e:
+            h.error(self, "照合エラー", str(e))
+            return
+        dialog = ExternalScoreMatchDialog(self, compared)
+        if dialog.exec() != QDialog.DialogCode.Accepted or not dialog.accepted_import:
             return
         try:
             count = import_external_scores(self.app.active_test_id, rows)
