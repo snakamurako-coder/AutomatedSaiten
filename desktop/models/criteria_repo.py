@@ -362,16 +362,41 @@ def result_ids_for_answers(
     return ids
 
 
+def existing_grade_disagrees(
+    existing_judgment: Any,
+    existing_score: Any,
+    new_judgment: Any,
+    new_score: Any,
+) -> bool:
+    """確定済みの手動判定が、書き込もうとする自動判定と違う。"""
+    manual = normalize_judgment(existing_judgment)
+    if manual not in FINAL_JUDGMENTS:
+        return False
+    auto = normalize_judgment(new_judgment)
+    try:
+        manual_score = int(existing_score or 0)
+    except (TypeError, ValueError):
+        manual_score = 0
+    try:
+        auto_score = int(new_score or 0)
+    except (TypeError, ValueError):
+        auto_score = 0
+    return (manual, manual_score) != (auto, auto_score)
+
+
 def apply_criteria_rules_to_results(
     test_id: str,
     field_id: str,
     rules: list[dict[str, Any]],
 ) -> int:
-    """採点基準の判定・配点を results（手動採点）へ回答文字列単位で書き込む。"""
+    """採点基準の判定・配点を results へ回答文字列単位で書き込む。
+
+    すでに ○△× が付いていて基準と違う答案は上書きしない。
+    """
     fid = str(field_id or "").strip()
     if not test_id or not fid or not rules:
         return 0
-    by_grade: dict[tuple[str, int], set[str]] = {}
+    by_answer: dict[str, tuple[str, int]] = {}
     for rule in rules:
         ans = str(rule.get("answer_text") or "").strip() or "なし"
         judgment = normalize_judgment(rule.get("judgment"))
@@ -382,12 +407,28 @@ def apply_criteria_rules_to_results(
         except (TypeError, ValueError):
             score = 0
         judgment, score = _coerce_judgment_score(judgment, score)
-        by_grade.setdefault((judgment, score), set()).add(ans)
-    updated = 0
-    for (judgment, score), answers in by_grade.items():
-        ids = result_ids_for_answers(test_id, fid, answers)
-        if not ids:
+        by_answer[ans] = (judgment, score)
+    if not by_answer:
+        return 0
+    grouped: dict[tuple[str, int], list[int]] = defaultdict(list)
+    for row in get_all_results(test_id):
+        ans = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
+        grade = by_answer.get(ans)
+        if grade is None:
             continue
+        judgment, score = grade
+        if existing_grade_disagrees(
+            (row.get("judgments") or {}).get(fid, ""),
+            (row.get("scores") or {}).get(fid),
+            judgment,
+            score,
+        ):
+            continue
+        rid = int(row.get("id") or 0)
+        if rid > 0:
+            grouped[(judgment, score)].append(rid)
+    updated = 0
+    for (judgment, score), ids in grouped.items():
         updated += update_results_field_grades(test_id, fid, ids, judgment, score)
     return updated
 

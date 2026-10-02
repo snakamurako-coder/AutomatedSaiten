@@ -14,6 +14,9 @@ STYLE_STATE_KEY = "feedback_style"
 EXPORT_FORMAT_STATE_KEY = "feedback_export_format"
 DEFAULT_FEEDBACK_EXPORT_FORMAT = "pdf"
 VALID_FEEDBACK_EXPORT_FORMATS = frozenset({"pdf", "pdf_combined", "jpeg", "png"})
+FEEDBACK_IMAGE_BASIS_KEY = "個票出力画像"
+FEEDBACK_IMAGE_BASIS_WARPED = "warped"
+FEEDBACK_IMAGE_BASIS_ORIGINAL = "original"
 
 DEFAULT_FEEDBACK_STYLE: dict[str, Any] = {
     "mark": {
@@ -184,6 +187,39 @@ def get_feedback_export_format() -> str:
         if fmt in VALID_FEEDBACK_EXPORT_FORMATS:
             return fmt
     return DEFAULT_FEEDBACK_EXPORT_FORMAT
+
+
+def normalize_feedback_image_basis(basis: str | None) -> str:
+    value = str(basis or "").strip()
+    if value == FEEDBACK_IMAGE_BASIS_ORIGINAL:
+        return FEEDBACK_IMAGE_BASIS_ORIGINAL
+    return FEEDBACK_IMAGE_BASIS_WARPED
+
+
+def get_feedback_image_basis(test_id: str) -> str:
+    """個票の下地。未設定は補正画像。"""
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM test_info WHERE test_id = ? AND key = ?",
+            (test_id, FEEDBACK_IMAGE_BASIS_KEY),
+        ).fetchone()
+    return normalize_feedback_image_basis(row["value"] if row else "")
+
+
+def save_feedback_image_basis(test_id: str, basis: str) -> str:
+    normalized = normalize_feedback_image_basis(basis)
+    init_db()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO test_info(test_id, key, value) VALUES (?, ?, ?)
+            ON CONFLICT(test_id, key) DO UPDATE SET value = excluded.value
+            """,
+            (test_id, FEEDBACK_IMAGE_BASIS_KEY, normalized),
+        )
+        conn.commit()
+    return normalized
 
 
 def save_feedback_export_format(fmt: str) -> str:

@@ -1718,8 +1718,8 @@ class Step8Page(QWidget):
             criteria_rules=self._checkpoint_criteria_rules(),
             title="手動採点へ反映",
             detail_lines=[
-                f"採点基準 {len(rules)} 件の判定・配点を、同じ回答文字列の答案へ上書きします。",
-                "手動で付けた例外判定も基準どおりに置き換わります。",
+                f"採点基準 {len(rules)} 件の判定・配点を、同じ回答文字列の答案へ反映します。",
+                "すでに付いている判定が基準と違う答案は、手動採点のまま残します。",
             ],
         ):
             return

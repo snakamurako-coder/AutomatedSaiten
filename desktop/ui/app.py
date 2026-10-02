@@ -1239,15 +1239,18 @@ class AutomatedSaitenApp(Step4OutlierMixin, tk.Tk):
             return
         try:
             res = execute_grading(self.active_test_id)
+            kept = int(res.get("keptManualCount") or 0)
             self.grading_status_var.set(
                 f"採点完了: {res['gradedCount']} 件 / "
-                f"未登録パターン照合: {res['unregisteredCount']} 件"
+                f"未登録パターン照合: {res['unregisteredCount']} 件 / "
+                f"手動採点を採用: {kept} 件"
             )
             self._fill_summary_tree(get_summary_data(self.active_test_id))
             messagebox.showinfo(
                 "採点完了",
                 f"{res['gradedCount']} 件を採点しました。\n"
-                f"採点基準に無い回答: {res['unregisteredCount']} 件（×・0点として処理）",
+                f"採点基準に無い回答: {res['unregisteredCount']} 件（×・0点として処理）\n"
+                f"基準と違っていた手動採点: {kept} 件（判定・得点をそのまま採用）",
             )
         except Exception as e:
             messagebox.showerror("採点エラー", str(e))

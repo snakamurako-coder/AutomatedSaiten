@@ -461,6 +461,7 @@ def batch_generate_feedback(
     on_progress: Callable[[int, int, str], None] | None = None,
     *,
     export_format: str | None = None,
+    image_basis: str | None = None,
 ) -> dict[str, Any]:
     """全結果行の個票を生成して 個票/ フォルダに保存する。"""
     from services.feedback_exporter import (
@@ -471,6 +472,7 @@ def batch_generate_feedback(
         is_combined_pdf_export,
         normalize_export_format,
         per_file_export_format,
+        sheet_source_ready,
     )
 
     slots = get_output_slots(test_id)
@@ -496,6 +498,7 @@ def batch_generate_feedback(
             combined_path,
             on_progress=on_progress,
             shared=shared,
+            image_basis=image_basis,
         )
         from models.test_repo import touch_progress
 
@@ -518,15 +521,16 @@ def batch_generate_feedback(
         name = str(row.get("fileName") or "")
         if on_progress:
             on_progress(i + 1, total, name)
-        warped = str(row.get("warpedPath") or "").strip()
-        if not warped or not Path(warped).exists():
+        if not sheet_source_ready(row, test_id=test_id, image_basis=image_basis):
             skipped.append(name)
             continue
         try:
             sid = _safe_name(row.get("studentId") or "不明")
             sname = _safe_name(row.get("name") or row.get("fileName") or "")
             out_path = out_dir / feedback_filename(sid, sname, file_fmt)
-            export_feedback_row(test_id, row, out_path, file_fmt, shared=shared)
+            export_feedback_row(
+                test_id, row, out_path, file_fmt, shared=shared, image_basis=image_basis
+            )
             saved += 1
         except Exception as e:
             errors.append({"fileName": name, "error": str(e)})

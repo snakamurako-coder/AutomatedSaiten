@@ -8,6 +8,7 @@ from typing import Any
 
 import cv2
 import fitz
+from PIL import Image
 
 from services.compositor import hex_to_rgba
 from services.feedback_renderer import (
@@ -320,6 +321,24 @@ def rasterize_pdf_bytes(pdf_bytes: bytes, *, scale: float = 2.0) -> Image.Image:
 
 def pdf_document_to_bytes(doc: fitz.Document) -> bytes:
     return doc.tobytes(deflate=True, garbage=3)
+
+
+def build_pdf_document_from_image(
+    image: Image.Image,
+    *,
+    jpeg_quality: int = 92,
+) -> fitz.Document:
+    """合成済み画像を1ページの PDF にする。"""
+    import io
+
+    rgb = image.convert("RGB")
+    buf = io.BytesIO()
+    rgb.save(buf, format="JPEG", quality=int(jpeg_quality))
+    width, height = rgb.size
+    doc = fitz.open()
+    page = doc.new_page(width=float(width), height=float(height))
+    page.insert_image(fitz.Rect(0, 0, width, height), stream=buf.getvalue())
+    return doc
 
 
 def render_feedback_pdf(

@@ -26,12 +26,15 @@ from PySide6.QtWidgets import (
 )
 
 from models.output_repo import (
+    FEEDBACK_IMAGE_BASIS_ORIGINAL,
     get_available_output_slot_keys,
     get_feedback_export_format,
+    get_feedback_image_basis,
     get_feedback_style,
     get_output_slots,
     reset_feedback_style,
     save_feedback_export_format,
+    save_feedback_image_basis,
     save_feedback_style,
     save_output_slots,
 )
@@ -130,7 +133,8 @@ class Step14Page(QWidget):
         root.addWidget(h.title_label("⑭ 個票・成績一覧出力"))
         root.addWidget(
             h.muted_label(
-                "補正済み回答画像に判定マーク（○/△/×）・小問得点・合計欄・手書き・テキスト注釈を合成した個票を生成します。"
+                "回答画像に判定マーク（○/△/×）・小問得点・合計欄・手書き・テキスト注釈を合成した個票を生成します。"
+                "元画像を選ぶと、元の答案の上に判定と氏名を載せて出力します。"
                 "手書き・テキストを含む場合は PDF 出力を推奨します。"
                 "成績一覧は Excel で別途出力できます。"
             )
@@ -303,10 +307,18 @@ class Step14Page(QWidget):
         self.export_format_combo.addItem("PNG（1枚ずつ）", "png")
         self.export_format_combo.currentIndexChanged.connect(self._on_export_format_changed)
         fmt_row.addWidget(self.export_format_combo, 1)
+        fmt_row.addWidget(QLabel("出力画像"))
+        self.image_basis_combo = QComboBox()
+        self.image_basis_combo.addItem("補正画像", "warped")
+        self.image_basis_combo.addItem("元画像（氏名・判定付き）", FEEDBACK_IMAGE_BASIS_ORIGINAL)
+        self.image_basis_combo.currentIndexChanged.connect(self._on_image_basis_changed)
+        fmt_row.addWidget(self.image_basis_combo, 1)
         lay.addLayout(fmt_row)
         lay.addWidget(
             h.caption_label(
                 "PDF は手書き・テキストをベクトル描画します。"
+                "元画像を選ぶと、答案の元画像へ判定（○△×）と氏名を合成します。"
+                "氏名欄が⑫にあるときはその枠へ、無いときは用紙上部に氏名を出します。"
                 "「1件プレビュー」は選択行1件のみ表示（全件1ファイル PDF でも同様）。"
             )
         )
@@ -435,6 +447,7 @@ class Step14Page(QWidget):
         # 書式
         self._load_style_to_form(get_feedback_style())
         self._load_export_format_to_form()
+        self._load_image_basis_to_form()
 
         # プレビュー行
         self._rows = _load_rows_with_extras(test_id)
@@ -573,6 +586,24 @@ class Step14Page(QWidget):
         self.export_format_combo.setCurrentIndex(idx if idx >= 0 else 0)
         self.export_format_combo.blockSignals(False)
 
+    def _selected_image_basis(self) -> str:
+        return str(self.image_basis_combo.currentData() or "warped")
+
+    def _load_image_basis_to_form(self) -> None:
+        basis = get_feedback_image_basis(self.app.active_test_id)
+        idx = self.image_basis_combo.findData(basis)
+        self.image_basis_combo.blockSignals(True)
+        self.image_basis_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        self.image_basis_combo.blockSignals(False)
+
+    def _on_image_basis_changed(self) -> None:
+        if not self.app.active_test_id:
+            return
+        try:
+            save_feedback_image_basis(self.app.active_test_id, self._selected_image_basis())
+        except Exception as e:
+            h.error(self, "保存エラー", str(e))
+
     def _on_export_format_changed(self) -> None:
         fmt = self.export_format_combo.currentData()
         if not fmt:
@@ -634,6 +665,7 @@ class Step14Page(QWidget):
         row = self._rows[idx]
         test_id = self.app.active_test_id
         export_format = str(self.export_format_combo.currentData() or "pdf")
+        image_basis = self._selected_image_basis()
         output_slots = self._editor_output_slots()
         self._preview_state = None
         self.preview_host.set_pixmap(None)
@@ -650,7 +682,11 @@ class Step14Page(QWidget):
                 h.error(self, "プレビューエラー", str(err))
                 return
             self._preview_state = result
-            if is_pdf_export_format(export_format):
+            if image_basis == FEEDBACK_IMAGE_BASIS_ORIGINAL:
+                self.preview_mode_label.setText(
+                    "プレビュー: 元画像に判定と氏名を合成（選択行1件）"
+                )
+            elif is_pdf_export_format(export_format):
                 self.preview_mode_label.setText(
                     "プレビュー: PDF ベクトル合成（選択行1件）— ズームで鮮明さを確認できます"
                 )
@@ -663,7 +699,11 @@ class Step14Page(QWidget):
         h.run_in_thread(
             self,
             lambda: render_feedback_preview(
-                test_id, row, export_format, output_slots=output_slots
+                test_id,
+                row,
+                export_format,
+                output_slots=output_slots,
+                image_basis=image_basis,
             ),
             done,
         )
@@ -724,6 +764,7 @@ class Step14Page(QWidget):
             return
         test_id = self.app.active_test_id
         export_format = str(self.export_format_combo.currentData() or "pdf")
+        image_basis = self._selected_image_basis()
         self.batch_btn.setEnabled(False)
         self.duplex_btn.setEnabled(False)
         self.batch_progress.setValue(0)
@@ -737,7 +778,10 @@ class Step14Page(QWidget):
                 bridge.updated.emit(current, total, name)
 
             return batch_generate_feedback(
-                test_id, on_progress=on_progress, export_format=export_format
+                test_id,
+                on_progress=on_progress,
+                export_format=export_format,
+                image_basis=image_basis,
             )
 
         h.run_in_thread(self, task, self._on_batch_done)
@@ -787,6 +831,7 @@ class Step14Page(QWidget):
         front_id = str(self.duplex_front_combo.currentData() or "").strip()
         back_id = str(self.duplex_back_combo.currentData() or "").strip()
         mode = str(self.duplex_mode_combo.currentData() or "combined")
+        image_basis = self._selected_image_basis()
         if not front_id:
             h.warn(self, "表裏一体印刷", "表側のテストを選択してください。")
             return
@@ -813,6 +858,7 @@ class Step14Page(QWidget):
                 back_id,
                 mode=mode,  # type: ignore[arg-type]
                 on_progress=on_progress,
+                image_basis=image_basis,
             )
 
         h.run_in_thread(self, task, self._on_duplex_batch_done)

@@ -32,6 +32,7 @@ class Step9Page(QWidget):
         root.addWidget(
             h.muted_label(
                 "保存済みの採点基準に従い、全受験者の判定・得点を一括反映し、考査総括を生成します。"
+                "すでに付いている判定が基準と違う答案は、手動採点の判定・得点を残します。"
             )
         )
 
@@ -74,15 +75,19 @@ class Step9Page(QWidget):
             return
         try:
             res = execute_grading(self.app.active_test_id)
+            kept = int(res.get("keptManualCount") or 0)
             self.status_label.setText(
-                f"採点完了: {res['gradedCount']} 件 / 未登録パターン照合: {res['unregisteredCount']} 件"
+                f"採点完了: {res['gradedCount']} 件 / "
+                f"未登録パターン照合: {res['unregisteredCount']} 件 / "
+                f"手動採点を採用: {kept} 件"
             )
             self._fill_summary(get_summary_data(self.app.active_test_id))
             h.info(
                 self,
                 "採点完了",
                 f"{res['gradedCount']} 件を採点しました。\n"
-                f"採点基準に無い回答: {res['unregisteredCount']} 件（×・0点として処理）",
+                f"採点基準に無い回答: {res['unregisteredCount']} 件（×・0点として処理）\n"
+                f"基準と違っていた手動採点: {kept} 件（判定・得点をそのまま採用）",
             )
         except Exception as e:
             h.error(self, "採点エラー", str(e))

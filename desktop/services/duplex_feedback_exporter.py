@@ -9,9 +9,13 @@ from typing import Any, Literal
 import fitz
 
 from config import test_feedback
-from models.output_repo import get_output_slots
+from models.output_repo import (
+    FEEDBACK_IMAGE_BASIS_ORIGINAL,
+    get_output_slots,
+    normalize_feedback_image_basis,
+)
 from models.test_repo import get_all_results, list_tests, touch_progress
-from services.feedback_exporter import build_row_pdf_document
+from services.feedback_exporter import build_row_pdf_document, sheet_source_ready
 from services.feedback_renderer import (
     _load_rows_with_extras,
     build_feedback_shared_context,
@@ -38,6 +42,12 @@ class DuplexMatchError(ValueError):
         self.back_count = back_count
         self.front_only = list(front_only or [])
         self.back_only = list(back_only or [])
+
+
+def _missing_sheet_note(image_basis: str | None) -> str:
+    if normalize_feedback_image_basis(image_basis) == FEEDBACK_IMAGE_BASIS_ORIGINAL:
+        return "元画像または補正画像のある行がありません"
+    return "補正画像のある行がありません"
 
 
 def _safe_name(value: str) -> str:
@@ -135,8 +145,12 @@ def _append_row_pdf(
     test_id: str,
     row: dict[str, Any],
     shared: dict[str, Any],
+    *,
+    image_basis: str | None = None,
 ) -> None:
-    doc = build_row_pdf_document(test_id, row, shared=shared)
+    doc = build_row_pdf_document(
+        test_id, row, shared=shared, image_basis=image_basis
+    )
     try:
         master.insert_pdf(doc)
     finally:
@@ -153,14 +167,14 @@ def _try_append_side(
     side_label: str,
     errors: list[dict[str, str]],
     skipped: list[str],
+    image_basis: str | None = None,
 ) -> bool:
-    warped = str(row.get("warpedPath") or "").strip()
     name = str(row.get("fileName") or student_id)
-    if not warped or not Path(warped).exists():
+    if not sheet_source_ready(row, test_id=test_id, image_basis=image_basis):
         skipped.append(f"{side_label}:{name}")
         return False
     try:
-        _append_row_pdf(master, test_id, row, shared)
+        _append_row_pdf(master, test_id, row, shared, image_basis=image_basis)
         return True
     except Exception as exc:
         errors.append(
@@ -180,6 +194,7 @@ def batch_export_duplex_feedback(
     *,
     mode: DuplexExportMode = "combined",
     on_progress: Callable[[int, int, str], None] | None = None,
+    image_basis: str | None = None,
 ) -> dict[str, Any]:
     """表を出力し、裏がある生徒は続けて裏を付ける。裏が無い生徒は表だけ出す。
 
@@ -233,6 +248,7 @@ def batch_export_duplex_feedback(
             side_label="表",
             errors=errors,
             skipped=skipped,
+            image_basis=image_basis,
         )
         back_ok = False
         b_row = back_map.get(sid)
@@ -246,6 +262,7 @@ def batch_export_duplex_feedback(
                 side_label="裏",
                 errors=errors,
                 skipped=skipped,
+                image_basis=image_basis,
             )
         only_front = front_ok and not back_ok
         if only_front and insert_blank_back:
@@ -266,9 +283,7 @@ def batch_export_duplex_feedback(
                 if only_front:
                     front_only_saved.append(sid)
             if saved_pages <= 0:
-                raise ValueError(
-                    "出力可能なページがありません（補正画像のある行がありません）。"
-                )
+                raise ValueError(f"出力可能なページがありません（{_missing_sheet_note(image_basis)}）。")
             combined_name = (
                 "個票_表面.pdf" if not back_test_id else DUPLEX_COMBINED_FILENAME
             )
@@ -301,9 +316,7 @@ def batch_export_duplex_feedback(
                 mini.close()
 
         if not per_files:
-            raise ValueError(
-                "出力可能な PDF がありません（補正画像のある行がありません）。"
-            )
+            raise ValueError(f"出力可能な PDF がありません（{_missing_sheet_note(image_basis)}）。")
 
     touch_progress(front_test_id, 10, "表裏一体個票出力済み")
 

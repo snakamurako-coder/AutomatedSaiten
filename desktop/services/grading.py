@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from models.criteria_repo import build_rule_map
+from models.criteria_repo import build_rule_map, existing_grade_disagrees
 from models.database import connect, init_db
 from models.test_repo import (
     get_all_results,
@@ -24,10 +24,11 @@ def execute_grading(test_id: str) -> dict[str, Any]:
     fields = get_answer_fields(test_id)
     rule_map = build_rule_map(test_id)
     unregistered_count = 0
+    kept_manual_count = 0
 
     with connect() as conn:
         for row in results:
-            # 手動採点と共有する同一カラムへ、記述欄単位でマージ（他フィールドの手修正を消さない）
+            # 手動採点と共有する同一カラム。基準と違う確定判定は残す。
             judgments = dict(row.get("judgments") or {})
             scores = dict(row.get("scores") or {})
             for f in fields:
@@ -40,11 +41,22 @@ def execute_grading(test_id: str) -> dict[str, Any]:
                         j = "○"
                     elif j in ("x", "X", "✕", "✖"):
                         j = "×"
-                    judgments[fid] = j or "×"
-                    scores[fid] = int(rule["score"])
+                    j = j or "×"
+                    score = int(rule["score"])
                 else:
-                    judgments[fid] = "×"
-                    scores[fid] = 0
+                    j = "×"
+                    score = 0
+                if existing_grade_disagrees(
+                    judgments.get(fid, ""),
+                    scores.get(fid),
+                    j,
+                    score,
+                ):
+                    kept_manual_count += 1
+                    continue
+                judgments[fid] = j
+                scores[fid] = score
+                if not rule:
                     unregistered_count += 1
 
             conn.execute(
@@ -68,7 +80,11 @@ def execute_grading(test_id: str) -> dict[str, Any]:
 
     calculate_domain_scores(test_id)
     build_summary(test_id, unregistered_count)
-    return {"gradedCount": len(results), "unregisteredCount": unregistered_count}
+    return {
+        "gradedCount": len(results),
+        "unregisteredCount": unregistered_count,
+        "keptManualCount": kept_manual_count,
+    }
 
 
 def build_summary(test_id: str, unregistered_count: int = 0) -> int:

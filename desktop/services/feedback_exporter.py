@@ -10,11 +10,17 @@ import fitz
 from PIL import Image
 
 from models.ink_repo import collect_warped_ink_strokes
-from models.output_repo import get_feedback_export_format, get_feedback_style
+from models.output_repo import (
+    FEEDBACK_IMAGE_BASIS_ORIGINAL,
+    get_feedback_export_format,
+    get_feedback_style,
+    normalize_feedback_image_basis,
+)
 from models.text_annotation_repo import collect_warped_text_annotations
 from models.test_repo import get_test_info
 from services.feedback_pdf import (
     build_feedback_pdf_document,
+    build_pdf_document_from_image,
     pdf_document_to_bytes,
     rasterize_pdf_bytes,
     render_feedback_pdf,
@@ -64,6 +70,27 @@ def feedback_filename(student_id: str, student_name: str, fmt: str | None) -> st
     sname = _safe_name(student_name or "")
     ext = EXPORT_FORMAT_EXTENSIONS[file_fmt]
     return f"個票_{sid}_{sname}{ext}"
+
+
+def sheet_source_ready(
+    row: dict[str, Any],
+    *,
+    test_id: str,
+    image_basis: str | None = None,
+) -> bool:
+    """個票の下地に必要な画像があるか。元画像出力でも判定位置のため補正画像が要る。"""
+    warped = str(row.get("warpedPath") or "").strip()
+    if not warped or not Path(warped).exists():
+        return False
+    if normalize_feedback_image_basis(image_basis) != FEEDBACK_IMAGE_BASIS_ORIGINAL:
+        return True
+    from services.crop_preview import resolve_source_path
+
+    try:
+        resolve_source_path(row, test_id=test_id)
+    except FileNotFoundError:
+        return False
+    return True
 
 
 def gather_row_render_data(
@@ -116,9 +143,47 @@ def build_row_pdf_document(
     row: dict[str, Any],
     *,
     shared: dict[str, Any] | None = None,
+    image_basis: str | None = None,
 ) -> fitz.Document:
     """1生徒分の個票 PDF ドキュメント（表裏一体印刷などから利用）。"""
-    return _build_row_pdf_document(test_id, row, shared=shared)
+    return _build_row_pdf_document(
+        test_id, row, shared=shared, image_basis=image_basis
+    )
+
+
+def _compose_row_image(
+    test_id: str,
+    row: dict[str, Any],
+    data: dict[str, Any],
+    *,
+    image_basis: str | None,
+) -> Image.Image:
+    payload = data["payload"]
+    if normalize_feedback_image_basis(image_basis) == FEEDBACK_IMAGE_BASIS_ORIGINAL:
+        from services.original_feedback import render_feedback_on_original
+
+        return render_feedback_on_original(
+            test_id,
+            row,
+            data["warped_path"],
+            payload["fields"],
+            payload["outputSlots"],
+            payload["fieldMarks"],
+            payload["totals"],
+            data["style"],
+            ink_strokes=data["ink_strokes"],
+            text_annotations=data["text_annotations"],
+        )
+    return render_feedback_image(
+        data["warped_path"],
+        payload["fields"],
+        payload["outputSlots"],
+        payload["fieldMarks"],
+        payload["totals"],
+        style=data["style"],
+        ink_strokes=data["ink_strokes"],
+        text_annotations=data["text_annotations"],
+    )
 
 
 def _build_row_pdf_document(
@@ -127,11 +192,15 @@ def _build_row_pdf_document(
     *,
     shared: dict[str, Any] | None = None,
     output_slots: list[dict[str, Any]] | None = None,
+    image_basis: str | None = None,
 ) -> fitz.Document:
     data = gather_row_render_data(
         test_id, row, shared=shared, output_slots=output_slots
     )
     payload = data["payload"]
+    if normalize_feedback_image_basis(image_basis) == FEEDBACK_IMAGE_BASIS_ORIGINAL:
+        image = _compose_row_image(test_id, row, data, image_basis=image_basis)
+        return build_pdf_document_from_image(image)
     return build_feedback_pdf_document(
         data["warped_path"],
         payload["fields"],
@@ -151,14 +220,16 @@ def export_feedback_row(
     fmt: FeedbackExportFormat | str | None = None,
     *,
     shared: dict[str, Any] | None = None,
+    image_basis: str | None = None,
 ) -> Path:
     export_fmt = per_file_export_format(fmt)
     data = gather_row_render_data(test_id, row, shared=shared)
     payload = data["payload"]
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
+    basis = normalize_feedback_image_basis(image_basis)
 
-    if export_fmt == "pdf":
+    if export_fmt == "pdf" and basis != FEEDBACK_IMAGE_BASIS_ORIGINAL:
         return render_feedback_pdf(
             data["warped_path"],
             payload["fields"],
@@ -171,16 +242,14 @@ def export_feedback_row(
             out_path=out_path,
         )
 
-    image = render_feedback_image(
-        data["warped_path"],
-        payload["fields"],
-        payload["outputSlots"],
-        payload["fieldMarks"],
-        payload["totals"],
-        style=data["style"],
-        ink_strokes=data["ink_strokes"],
-        text_annotations=data["text_annotations"],
-    )
+    image = _compose_row_image(test_id, row, data, image_basis=basis)
+    if export_fmt == "pdf":
+        doc = build_pdf_document_from_image(image)
+        try:
+            doc.save(str(out_path))
+        finally:
+            doc.close()
+        return out_path
     if export_fmt == "png":
         image.save(out_path, "PNG")
     else:
@@ -195,6 +264,7 @@ def export_combined_feedback_pdf(
     on_progress: Callable[[int, int, str], None] | None = None,
     *,
     shared: dict[str, Any] | None = None,
+    image_basis: str | None = None,
 ) -> tuple[int, list[str], list[dict[str, str]]]:
     """全対象行を 1 つの PDF にまとめて保存する。"""
     out_path = Path(out_path)
@@ -210,12 +280,13 @@ def export_combined_feedback_pdf(
             name = str(row.get("fileName") or "")
             if on_progress:
                 on_progress(i + 1, total, name)
-            warped = str(row.get("warpedPath") or "").strip()
-            if not warped or not Path(warped).exists():
+            if not sheet_source_ready(row, test_id=test_id, image_basis=image_basis):
                 skipped.append(name)
                 continue
             try:
-                doc = _build_row_pdf_document(test_id, row, shared=ctx)
+                doc = _build_row_pdf_document(
+                    test_id, row, shared=ctx, image_basis=image_basis
+                )
                 try:
                     master.insert_pdf(doc)
                     saved += 1
@@ -224,7 +295,12 @@ def export_combined_feedback_pdf(
             except Exception as exc:
                 errors.append({"fileName": name, "error": str(exc)})
         if saved <= 0:
-            raise ValueError("出力可能な個票がありません（補正画像のある行がありません）。")
+            missing = (
+                "元画像または補正画像のある行がありません"
+                if normalize_feedback_image_basis(image_basis) == FEEDBACK_IMAGE_BASIS_ORIGINAL
+                else "補正画像のある行がありません"
+            )
+            raise ValueError(f"出力可能な個票がありません（{missing}）。")
         master.save(str(out_path))
     finally:
         master.close()
@@ -241,13 +317,17 @@ def render_feedback_preview(
     fmt: FeedbackExportFormat | str | None = None,
     *,
     output_slots: list[dict[str, Any]] | None = None,
+    image_basis: str | None = None,
 ) -> dict[str, Any]:
     """1 件プレビュー用。PDF 形式時はベクトル PDF を生成し、表示用に高解像度ラスター化する。
 
     output_slots を渡すと、保存済みではなくその配置（総計点など）を描く。
     """
-    if is_pdf_export_format(fmt):
-        doc = _build_row_pdf_document(test_id, row, output_slots=output_slots)
+    basis = normalize_feedback_image_basis(image_basis)
+    if is_pdf_export_format(fmt) and basis != FEEDBACK_IMAGE_BASIS_ORIGINAL:
+        doc = _build_row_pdf_document(
+            test_id, row, output_slots=output_slots, image_basis=basis
+        )
         try:
             page = doc[0]
             native_size = (int(round(page.rect.width)), int(round(page.rect.height)))
@@ -263,17 +343,7 @@ def render_feedback_preview(
 
     export_fmt = per_file_export_format(fmt)
     data = gather_row_render_data(test_id, row, output_slots=output_slots)
-    payload = data["payload"]
-    image = render_feedback_image(
-        data["warped_path"],
-        payload["fields"],
-        payload["outputSlots"],
-        payload["fieldMarks"],
-        payload["totals"],
-        style=data["style"],
-        ink_strokes=data["ink_strokes"],
-        text_annotations=data["text_annotations"],
-    )
+    image = _compose_row_image(test_id, row, data, image_basis=basis)
     return {
         "mode": "raster",
         "pdf_bytes": None,
