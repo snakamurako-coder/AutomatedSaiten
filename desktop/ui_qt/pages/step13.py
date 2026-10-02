@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import unicodedata
 from typing import Any
 
 from PySide6.QtCore import QByteArray, QMimeData, Qt, QTimer, Signal
@@ -65,6 +66,17 @@ class _IdentityTile(QFrame):
             f"QFrame#{self.objectName()} {{ {extra} border-radius: 6px; }}"
         )
 
+    def _line_edit_at(self, pos) -> bool:
+        child = self.childAt(pos)
+        while child is not None and child is not self:
+            if isinstance(child, QLineEdit):
+                return True
+            nxt = child.childAt(child.mapFrom(self, pos))
+            if nxt is None or nxt is child:
+                return False
+            child = nxt
+        return False
+
     def set_drop_hint(self, hint: str) -> None:
         if hint == self._drop_hint:
             return
@@ -73,8 +85,7 @@ class _IdentityTile(QFrame):
 
     def mousePressEvent(self, event) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
-            child = self.childAt(event.position().toPoint())
-            if not isinstance(child, QLineEdit):
+            if not self._line_edit_at(event.position().toPoint()):
                 self._press_pos = event.position().toPoint()
                 event.accept()
                 return
@@ -144,7 +155,7 @@ class Step13Page(QWidget):
         super().__init__()
         self.app = app
         self._crop_results: list[dict[str, Any]] = []
-        self._edits: dict[int, QLineEdit] = {}
+        self._edits: dict[int, tuple[QLineEdit, QLineEdit]] = {}
         self._undo_stack: list[_Snapshot] = []
         self._in_render = False
         self._last_viewport_w = 0
@@ -299,14 +310,13 @@ class Step13Page(QWidget):
                 )
                 return
 
-            mode = self._current_mode()
             zoom = max(30, min(400, self.zoom_slider.value())) / 100.0
             cols = 4
             image_w = self._image_box_width(cols, zoom)
             for idx, item in enumerate(self._crop_results):
                 r, c = divmod(idx, cols)
                 self.grid.addWidget(
-                    self._make_tile(item, mode, image_w),
+                    self._make_tile(item, image_w),
                     r,
                     c,
                     Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
@@ -327,7 +337,7 @@ class Step13Page(QWidget):
         finally:
             self._in_render = False
 
-    def _make_tile(self, item: dict[str, Any], mode: str, image_w: int) -> QWidget:
+    def _make_tile(self, item: dict[str, Any], image_w: int) -> QWidget:
         row = item["row"]
 
         if not item.get("ok"):
@@ -371,28 +381,87 @@ class Step13Page(QWidget):
         img.setStyleSheet("border: none;")
         lay.addWidget(img)
 
-        edit = QLineEdit(str(row.get("studentId" if mode == "ID" else "name") or ""))
-        edit.setPlaceholderText(mode)
-        self._edits[int(row["id"])] = edit
-        lay.addWidget(edit)
+        name_edit = QLineEdit(str(row.get("name") or ""))
+        name_edit.setPlaceholderText("氏名")
+        id_edit = QLineEdit(str(row.get("studentId") or ""))
+        id_edit.setPlaceholderText("ID")
+        for edit in (name_edit, id_edit):
+            edit.setMinimumWidth(0)
+            edit.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Fixed)
+        edit_row = QWidget()
+        edit_row.setFixedWidth(image_w)
+        edit_lay = QHBoxLayout(edit_row)
+        edit_lay.setContentsMargins(0, 0, 0, 0)
+        edit_lay.setSpacing(4)
+        edit_lay.addWidget(name_edit, 2)
+        edit_lay.addWidget(id_edit, 1)
+        self._edits[int(row["id"])] = (name_edit, id_edit)
+        lay.addWidget(edit_row)
         return tile
+
+    def _id_key(self, value: str) -> str:
+        return unicodedata.normalize("NFKC", str(value or "")).strip()
+
+    def _duplicate_id_edits(self) -> dict[str, list[QLineEdit]]:
+        """空欄を除き、2件以上あるIDとその入力欄を返す。"""
+        grouped: dict[str, list[QLineEdit]] = {}
+        counts: dict[str, int] = {}
+        for item in self._crop_results:
+            row = item.get("row") or {}
+            rid = row.get("id")
+            if rid is None:
+                continue
+            edits = self._edits.get(int(rid))
+            if edits is not None:
+                sid = self._id_key(edits[1].text())
+                edit = edits[1]
+            else:
+                sid = self._id_key(str(row.get("studentId") or ""))
+                edit = None
+            if not sid:
+                continue
+            counts[sid] = counts.get(sid, 0) + 1
+            if edit is not None:
+                grouped.setdefault(sid, []).append(edit)
+        return {sid: grouped.get(sid, []) for sid, count in counts.items() if count > 1}
+
+    def _mark_duplicate_ids(self, duplicates: dict[str, list[QLineEdit]]) -> None:
+        flagged = {id(edit) for edits in duplicates.values() for edit in edits if edit is not None}
+        for edits in self._edits.values():
+            id_edit = edits[1]
+            if id(id_edit) in flagged:
+                id_edit.setStyleSheet(
+                    f"background: {COLORS['danger_soft']}; color: {COLORS['danger']};"
+                )
+            else:
+                id_edit.setStyleSheet("")
 
     def _on_save(self) -> None:
         if not self.app.require_active_test() or not self._crop_results:
             return
-        mode = self._current_mode()
+        duplicates = self._duplicate_id_edits()
+        self._mark_duplicate_ids(duplicates)
+        if duplicates:
+            listed = "、".join(sorted(duplicates))
+            h.warn(
+                self,
+                "IDが重複",
+                f"同じIDが複数あるため保存できません。\n{listed}",
+            )
+            self.status_label.setText("同じIDが複数あるため保存できません。")
+            return
         saved = 0
         for item in self._crop_results:
             if not item.get("ok"):
                 continue
             row = item["row"]
             rid = int(row["id"])
-            edit = self._edits.get(rid)
-            if edit is None:
+            edits = self._edits.get(rid)
+            if edits is None:
                 continue
-            value = edit.text().strip()
-            student_id = value if mode == "ID" else str(row.get("studentId") or "")
-            name = value if mode == "氏名" else str(row.get("name") or "")
+            name_edit, id_edit = edits
+            student_id = id_edit.text().strip()
+            name = name_edit.text().strip()
             if student_id == str(row.get("studentId") or "") and name == str(row.get("name") or ""):
                 continue
             update_student_identity(self.app.active_test_id, rid, student_id, name)
@@ -409,24 +478,22 @@ class Step13Page(QWidget):
         return [item for item in self._crop_results if item.get("ok") and item.get("row")]
 
     def _sync_edits_to_rows(self) -> None:
-        mode = self._current_mode()
         for item in self._ok_items():
             row = item["row"]
-            edit = self._edits.get(int(row["id"]))
-            if edit is None:
+            edits = self._edits.get(int(row["id"]))
+            if edits is None:
                 continue
-            value = edit.text().strip()
-            if mode == "ID":
-                row["studentId"] = value
-            else:
-                row["name"] = value
+            name_edit, id_edit = edits
+            row["name"] = name_edit.text().strip()
+            row["studentId"] = id_edit.text().strip()
 
     def _show_identity(self, row: dict[str, Any]) -> None:
-        edit = self._edits.get(int(row["id"]))
-        if edit is None:
+        edits = self._edits.get(int(row["id"]))
+        if edits is None:
             return
-        key = "studentId" if self._current_mode() == "ID" else "name"
-        edit.setText(str(row.get(key) or ""))
+        name_edit, id_edit = edits
+        name_edit.setText(str(row.get("name") or ""))
+        id_edit.setText(str(row.get("studentId") or ""))
 
     def _apply_snapshot(self, snapshot: _Snapshot) -> list[tuple[int, str, str]]:
         by_id = {int(item["row"]["id"]): item["row"] for item in self._ok_items()}
