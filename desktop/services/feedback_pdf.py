@@ -13,10 +13,14 @@ import numpy as np
 from PIL import Image
 
 from services.compositor import hex_to_rgba
+from services.compositor import REGION_FILL_ALPHA, REGION_STROKE_NORMAL
 from services.feedback_renderer import (
     _inset_rect,
     format_total_text,
     normalize_judgment,
+    slot_heading,
+    slot_prints_frame,
+    total_frame_layout,
 )
 from services.image_loader import imread_bgr
 
@@ -66,6 +70,23 @@ def _fit_font_size(
     return size
 
 
+def _write_font_text(
+    page: fitz.Page,
+    x: float,
+    y: float,
+    text: str,
+    fontsize: float,
+    color: tuple[float, float, float],
+    fontfile: str,
+    morph: tuple[fitz.Point, fitz.Matrix] | None = None,
+) -> None:
+    """ベースライン左端 (x, y) に文字を置く。日本語は TextWriter でないと欠ける。"""
+    font = fitz.Font(fontfile=fontfile)
+    writer = fitz.TextWriter(page.rect)
+    writer.append(fitz.Point(x, y), text, font=font, fontsize=fontsize)
+    writer.write_text(page, color=color, morph=morph)
+
+
 def _draw_centered_textbox(
     page: fitz.Page,
     rect: fitz.Rect,
@@ -80,14 +101,13 @@ def _draw_centered_textbox(
         return
     path = font_path or _resolve_font_file(bold=bold)
     fs = _fit_font_size(text, path, font_size, rect.width * 0.92, min_size=8.0)
-    page.insert_textbox(
-        rect,
-        text,
-        fontfile=path,
-        fontsize=fs,
-        color=color,
-        align=fitz.TEXT_ALIGN_CENTER,
-    )
+    font = fitz.Font(fontfile=path)
+    text_w = float(font.text_length(text, fontsize=fs))
+    asc = float(font.ascender)
+    desc = float(font.descender)
+    left = rect.x0 + (rect.width - text_w) / 2.0
+    baseline = rect.y0 + rect.height / 2.0 + (asc + desc) * fs / 2.0
+    _write_font_text(page, left, baseline, text, fs, color, path)
 
 
 def _draw_mark_pdf(
@@ -179,13 +199,128 @@ def _draw_mark_pdf(
     )
 
 
+def _draw_topleft_text_mapped(
+    page: fitz.Page,
+    matrix: np.ndarray,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    text: str,
+    color: tuple[float, float, float],
+    font_size: float,
+    *,
+    bold: bool = False,
+) -> None:
+    """(x, y) を左上として、用紙の向きに沿った文字を置く。"""
+    if not text or w <= 0 or h <= 0:
+        return
+    path = _resolve_font_file(bold=bold)
+    fs = _fit_font_size(text, path, min(font_size, h * 0.9), w, min_size=8.0)
+    font = fitz.Font(fontfile=path)
+    baseline = y + float(font.ascender) * fs
+    px, py = _map_xy(matrix, x, baseline)
+    right, down, _scale = _axes_at(matrix, x, baseline)
+    _write_font_text(
+        page,
+        px,
+        py,
+        text,
+        fs,
+        color,
+        path,
+        morph=(fitz.Point(px, py), _text_morph(right, down)),
+    )
+
+
+def _identity_page_matrix() -> np.ndarray:
+    """補正画像の PDF はページ座標＝画素座標なので、写像は恒等。"""
+    return np.eye(3, dtype=np.float32)
+
+
+def _draw_total_frame_pdf(
+    page: fitz.Page,
+    matrix: np.ndarray,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    slot: dict[str, Any],
+    value: Any,
+    style: dict[str, Any],
+) -> None:
+    if w <= 1 or h <= 1:
+        return
+    green = _hex_to_rgb01(REGION_STROKE_NORMAL)
+    _right, _down, scale = _axes_at(matrix, x + w / 2.0, y + h / 2.0)
+    line_w = max(2.0, min(w, h) * 0.02) * scale
+    quad = _map_pts(
+        matrix,
+        [(x, y), (x + w, y), (x + w, y + h), (x, y + h), (x, y)],
+    )
+    shape = page.new_shape()
+    shape.draw_polyline(quad)
+    shape.finish(
+        color=green,
+        fill=green,
+        fill_opacity=REGION_FILL_ALPHA,
+        width=line_w,
+        closePath=True,
+        lineJoin=1,
+    )
+    shape.commit()
+    head_size, band, score_size = total_frame_layout(w, h, style)
+    pad = max(3.0, min(w, h) * 0.04)
+    _draw_topleft_text_mapped(
+        page,
+        matrix,
+        x + pad,
+        y + pad,
+        max(8.0, w - pad * 2),
+        max(8.0, band - pad),
+        slot_heading(slot),
+        green,
+        head_size,
+        bold=True,
+    )
+    if value is None or str(value) == "":
+        return
+    st = style["total"]
+    _draw_centered_text_mapped(
+        page,
+        matrix,
+        x + pad,
+        y + band,
+        max(8.0, w - pad * 2),
+        max(8.0, h - band - pad),
+        str(value),
+        _hex_to_rgb01(st["color"]),
+        score_size,
+        bold=True,
+    )
+
+
 def _draw_total_pdf(
     page: fitz.Page,
     slot: dict[str, Any],
     value: Any,
     style: dict[str, Any],
 ) -> None:
-    if value is None or str(value) == "":
+    has_value = value is not None and str(value) != ""
+    if slot_prints_frame(slot):
+        _draw_total_frame_pdf(
+            page,
+            _identity_page_matrix(),
+            float(slot["x"]),
+            float(slot["y"]),
+            float(slot["width"]),
+            float(slot["height"]),
+            slot,
+            value if has_value else None,
+            style,
+        )
+        return
+    if not has_value:
         return
     st = style["total"]
     x, y = float(slot["x"]), float(slot["y"])
@@ -301,7 +436,7 @@ def _axes_at(
 
 
 def _text_morph(right: tuple[float, float], down: tuple[float, float]) -> fitz.Matrix:
-    """用紙の向きに文字を沿わせる。insert_text の morph は PDF の上向き Y で掛かる。"""
+    """用紙の向きに文字を沿わせる。morph は PDF の上向き Y で掛かる。"""
     rx, ry = right
     dx, dy = down
     return fitz.Matrix(rx, -ry, -dx, dy, 0, 0)
@@ -346,12 +481,14 @@ def _draw_centered_text_mapped(
     baseline = y + h / 2.0 + (asc + desc) * fs / 2.0
     px, py = _map_xy(matrix, left, baseline)
     right, down, _scale = _axes_at(matrix, left, baseline)
-    page.insert_text(
-        fitz.Point(px, py),
+    _write_font_text(
+        page,
+        px,
+        py,
         text,
-        fontfile=path,
-        fontsize=fs,
-        color=color,
+        fs,
+        color,
+        path,
         morph=(fitz.Point(px, py), _text_morph(right, down)),
     )
 
@@ -479,11 +616,25 @@ def _draw_total_pdf_mapped(
     value: Any,
     style: dict[str, Any],
 ) -> None:
-    if value is None or str(value) == "":
-        return
-    st = style["total"]
+    has_value = value is not None and str(value) != ""
     x, y = float(slot["x"]), float(slot["y"])
     w, h = float(slot["width"]), float(slot["height"])
+    if slot_prints_frame(slot):
+        _draw_total_frame_pdf(
+            page,
+            matrix,
+            x,
+            y,
+            w,
+            h,
+            slot,
+            value if has_value else None,
+            style,
+        )
+        return
+    if not has_value:
+        return
+    st = style["total"]
     font_size = max(float(st.get("minFontSize", 10)), min(w, h) * float(st.get("sizeRatio", 0.5)))
     _draw_centered_text_mapped(
         page,

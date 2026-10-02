@@ -575,6 +575,19 @@ class AnswerRegionEditor(QScrollArea):
         if 0 <= index < len(self._canvas.regions):
             self._canvas.regions[index]["ocrEngine"] = _normalize_region_ocr_engine(engine)
 
+    def set_region_display_name(self, region_id: str, display_name: str) -> None:
+        """配置済み矩形の見出し表示だけを差し替える。"""
+        updated = False
+        for region in self._canvas.regions:
+            if region.get("id") != region_id:
+                continue
+            if region.get("displayName") == display_name:
+                continue
+            region["displayName"] = display_name
+            updated = True
+        if updated:
+            self._canvas.update()
+
     def set_pending_label(self, label: str | None, *, replace_same: bool = True) -> None:
         """次にドラッグで作る矩形の ID を指定する（⑩欄種別 / ⑫slotKey 用）。"""
         self._canvas.pending_label = label

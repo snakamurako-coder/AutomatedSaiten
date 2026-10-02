@@ -19,7 +19,12 @@ from config import test_feedback
 from models.domain_repo import DOMAIN_KINDS, _domain_groups, get_domain_settings
 from models.output_repo import get_feedback_style, get_output_slots
 from models.test_repo import get_all_results, get_answer_fields
-from services.compositor import hex_to_rgba, render_supersampled_rgba
+from services.compositor import (
+    REGION_FILL_ALPHA,
+    REGION_STROKE_NORMAL,
+    hex_to_rgba,
+    render_supersampled_rgba,
+)
 from services.image_loader import imread_bgr
 
 _FONT_CANDIDATES_BOLD = ["meiryob.ttc", "YuGothB.ttc", "msgothic.ttc", "arialbd.ttf"]
@@ -178,30 +183,133 @@ def draw_mark(
     )
 
 
+def slot_heading(slot: dict[str, Any]) -> str:
+    """合計欄の見出し。外部連携得点は任意の見出し、空なら欄の名前。"""
+    custom = str(slot.get("heading") or "").strip()
+    if custom:
+        return custom
+    return str(slot.get("slotKey") or "")
+
+
+def slot_prints_frame(slot: dict[str, Any]) -> bool:
+    value = slot.get("printFrame")
+    if isinstance(value, str):
+        return value.strip().lower() in ("1", "true", "yes", "on")
+    return bool(value)
+
+
+def total_frame_layout(w: float, h: float, style: dict[str, Any]) -> tuple[float, float, float]:
+    """見出しの文字サイズ、見出し帯の高さ、点数の文字サイズ。"""
+    st = style["total"]
+    score_ratio = float(st.get("sizeRatio", 0.5))
+    min_font = float(st.get("minFontSize", 10))
+    head = max(8.0, min(h * 0.28, max(w, 1.0) * 0.45))
+    band = min(h * 0.42, head * 1.45)
+    if band + 8.0 > h:
+        band = h * 0.38
+        head = max(8.0, band * 0.72)
+    remain_h = max(8.0, h - band)
+    score = max(min(min_font, remain_h * 0.8), min(w, remain_h) * score_ratio)
+    return head, band, score
+
+
 def format_total_text(slot: dict[str, Any], value: Any) -> str:
     text = "" if value is None else str(value)
-    if slot.get("printMode") == "label":
-        return f"{slot['slotKey']} {text}"
+    if slot.get("printMode") == "label" and not slot_prints_frame(slot):
+        heading = slot_heading(slot)
+        return f"{heading} {text}".strip()
     return text
 
 
+def _draw_top_left_text(
+    draw: ImageDraw.ImageDraw,
+    x: float,
+    y: float,
+    text: str,
+    color: tuple[int, int, int, int],
+    font_size: int,
+    max_width: float,
+    max_height: float,
+) -> None:
+    size = max(8, int(font_size))
+    font = _load_font(size)
+    tw, th = _text_size(font, text)
+    while (tw > max_width or th > max_height) and size > 8:
+        size = max(8, int(size * 0.9))
+        font = _load_font(size)
+        tw, th = _text_size(font, text)
+    draw.text((x, y), text, font=font, fill=color, anchor="lt")
+
+
 def draw_total(layer: Image.Image, slot: dict[str, Any], value: Any, style: dict[str, Any]) -> None:
-    if value is None or str(value) == "":
+    has_value = value is not None and str(value) != ""
+    framed = slot_prints_frame(slot)
+    if not has_value and not framed:
         return
     st = style["total"]
     x, y = float(slot["x"]), float(slot["y"])
     w, h = float(slot["width"]), float(slot["height"])
+    draw = ImageDraw.Draw(layer)
+    if framed:
+        _draw_total_frame(draw, x, y, w, h, slot, value if has_value else None, style)
+        return
     font_size = max(
         int(st.get("minFontSize", 10)), int(min(w, h) * float(st.get("sizeRatio", 0.5)))
     )
     _draw_centered_text(
-        ImageDraw.Draw(layer),
+        draw,
         x + w / 2,
         y + h / 2,
         format_total_text(slot, value),
         hex_to_rgba(st["color"], float(st.get("opacity", 1.0))),
         font_size,
         w * 0.92,
+    )
+
+
+def _draw_total_frame(
+    draw: ImageDraw.ImageDraw,
+    x: float,
+    y: float,
+    w: float,
+    h: float,
+    slot: dict[str, Any],
+    value: Any,
+    style: dict[str, Any],
+) -> None:
+    """配置画面の緑枠と同じ色で枠と見出しを描き、点数を枠内に置く。"""
+    if w <= 1 or h <= 1:
+        return
+    line_w = max(2, int(round(min(w, h) * 0.02)))
+    draw.rectangle(
+        [x, y, x + w, y + h],
+        fill=hex_to_rgba(REGION_STROKE_NORMAL, REGION_FILL_ALPHA),
+        outline=hex_to_rgba(REGION_STROKE_NORMAL, 1.0),
+        width=line_w,
+    )
+    head_size, band, score_size = total_frame_layout(w, h, style)
+    pad = max(3.0, min(w, h) * 0.04)
+    _draw_top_left_text(
+        draw,
+        x + pad,
+        y + pad,
+        slot_heading(slot),
+        hex_to_rgba(REGION_STROKE_NORMAL, 1.0),
+        int(head_size),
+        max(8.0, w - pad * 2),
+        max(8.0, band - pad),
+    )
+    if value is None or str(value) == "":
+        return
+    st = style["total"]
+    _draw_centered_text(
+        draw,
+        x + w / 2,
+        y + band + (h - band) / 2,
+        str(value),
+        hex_to_rgba(st["color"], float(st.get("opacity", 1.0))),
+        int(score_size),
+        w * 0.9,
     )
 
 

@@ -17,6 +17,7 @@ VALID_FEEDBACK_EXPORT_FORMATS = frozenset({"pdf", "pdf_combined", "jpeg", "png"}
 FEEDBACK_IMAGE_BASIS_KEY = "個票出力画像"
 FEEDBACK_IMAGE_BASIS_WARPED = "warped"
 FEEDBACK_IMAGE_BASIS_ORIGINAL = "original"
+EXTERNAL_SCORE_SLOT_KEY = "外部連携得点"
 
 DEFAULT_FEEDBACK_STYLE: dict[str, Any] = {
     "mark": {
@@ -61,6 +62,8 @@ def get_output_slots(test_id: str) -> list[dict[str, Any]]:
                 "width": r["width"],
                 "height": r["height"],
                 "printMode": extra.get("printMode") or "number",
+                "printFrame": bool(extra.get("printFrame")),
+                "heading": str(extra.get("heading") or ""),
             }
         )
     return out
@@ -87,9 +90,7 @@ def save_output_slots(test_id: str, slots: list[dict[str, Any]]) -> int:
                     int(s.get("y") or 0),
                     int(s.get("width") or 0),
                     int(s.get("height") or 0),
-                    json.dumps(
-                        {"printMode": s.get("printMode") or "number"}, ensure_ascii=False
-                    ),
+                    json.dumps(_slot_extra(s), ensure_ascii=False),
                 ),
             )
         touch_progress_conn(conn, test_id, 10)
@@ -101,8 +102,18 @@ def get_available_output_slot_keys(test_id: str) -> list[str]:
     """出力欄の候補キー（⑥領域ラベル + 総計点 + 外部連携得点）。"""
     keys = [label.removesuffix("_得点") for label in get_domain_column_labels(test_id)]
     keys.append("総計点")
-    keys.append("外部連携得点")
+    keys.append(EXTERNAL_SCORE_SLOT_KEY)
     return keys
+
+
+def _slot_extra(slot: dict[str, Any]) -> dict[str, Any]:
+    extra: dict[str, Any] = {"printMode": slot.get("printMode") or "number"}
+    if slot.get("printFrame"):
+        extra["printFrame"] = True
+    heading = str(slot.get("heading") or "").strip()
+    if heading:
+        extra["heading"] = heading
+    return extra
 
 
 # ==================== 出力書式設定 ====================

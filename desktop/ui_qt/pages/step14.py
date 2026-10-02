@@ -8,6 +8,7 @@ from typing import Any
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QPainter, QPixmap
 from PySide6.QtWidgets import (
+    QCheckBox,
     QComboBox,
     QDoubleSpinBox,
     QFileDialog,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
 )
 
 from models.output_repo import (
+    EXTERNAL_SCORE_SLOT_KEY,
     FEEDBACK_IMAGE_BASIS_ORIGINAL,
     get_available_output_slot_keys,
     get_feedback_export_format,
@@ -155,6 +157,7 @@ class Step14Page(QWidget):
             h.caption_label(
                 "項目を選んで模範解答の上をドラッグすると合計欄が配置されます（同じ項目は上書き）。"
                 "候補は ⑩ 領域設定から生成されます。"
+                "「見出し＋枠を印刷」を付けて合計欄を保存すると、配置中の緑の枠と左上の見出しを、点数とともに個票へ出します。"
             )
         )
 
@@ -164,6 +167,9 @@ class Step14Page(QWidget):
         self.print_mode_combo.addItem("数字のみ", "number")
         self.print_mode_combo.addItem("ラベル付き", "label")
         ctrl.addWidget(self.print_mode_combo)
+        self.print_frame_check = QCheckBox("見出し＋枠を印刷")
+        self.print_frame_check.toggled.connect(lambda _on: self._update_slot_status())
+        ctrl.addWidget(self.print_frame_check)
         ctrl.addWidget(h.button("選択欄を削除", self._on_delete_slot, variant="danger-soft"))
         ctrl.addWidget(h.button("合計欄を保存", self._on_save_slots, variant="primary"))
         ctrl.addStretch()
@@ -173,6 +179,7 @@ class Step14Page(QWidget):
         self.slot_btn_row.setSpacing(6)
         lay.addLayout(self.slot_btn_row)
         self._slot_buttons: dict[str, QPushButton] = {}
+        self.external_heading_edit: QLineEdit | None = None
 
         self.slot_hint = h.caption_label("")
         lay.addWidget(self.slot_hint)
@@ -413,11 +420,19 @@ class Step14Page(QWidget):
 
         slots = get_output_slots(test_id)
         self._slot_print_modes = {s["slotKey"]: s["printMode"] for s in slots}
+        self.print_frame_check.blockSignals(True)
+        self.print_frame_check.setChecked(any(s.get("printFrame") for s in slots))
+        self.print_frame_check.blockSignals(False)
+        external_heading = ""
+        for s in slots:
+            if s["slotKey"] == EXTERNAL_SCORE_SLOT_KEY:
+                external_heading = str(s.get("heading") or "")
+                break
         self.slot_editor.set_regions(
             [
                 {
                     "id": s["slotKey"],
-                    "displayName": s["slotKey"],
+                    "displayName": self._slot_display_name(s["slotKey"], external_heading),
                     "x": s["x"],
                     "y": s["y"],
                     "width": s["width"],
@@ -430,9 +445,11 @@ class Step14Page(QWidget):
         # 項目ボタン
         while self.slot_btn_row.count():
             item = self.slot_btn_row.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
         self._slot_buttons = {}
+        self.external_heading_edit = None
         keys = get_available_output_slot_keys(test_id)
         for key in keys:
             btn = QPushButton(key)
@@ -440,6 +457,18 @@ class Step14Page(QWidget):
             btn.clicked.connect(lambda _c=False, k=key: self._select_slot_key(k))
             self._slot_buttons[key] = btn
             self.slot_btn_row.addWidget(btn)
+            if key == EXTERNAL_SCORE_SLOT_KEY:
+                edit = QLineEdit()
+                edit.setPlaceholderText("見出し（任意）")
+                edit.setFixedWidth(168)
+                edit.setClearButtonEnabled(True)
+                edit.setToolTip("空欄のときは「外部連携得点」と出します。")
+                edit.blockSignals(True)
+                edit.setText(external_heading)
+                edit.blockSignals(False)
+                edit.textChanged.connect(self._on_external_heading_changed)
+                self.external_heading_edit = edit
+                self.slot_btn_row.addWidget(edit)
         self.slot_btn_row.addStretch()
         if len(keys) <= 2:
             self.slot_hint.setText("⑩ 領域設定で大問・範囲・能力を設定すると候補が増えます。")
@@ -509,6 +538,27 @@ class Step14Page(QWidget):
 
     # ---------- 合計欄 ----------
 
+    def _slot_display_name(self, key: str, heading: str | None = None) -> str:
+        if key == EXTERNAL_SCORE_SLOT_KEY:
+            text = heading if heading is not None else self._external_heading_text()
+            return text or EXTERNAL_SCORE_SLOT_KEY
+        return key
+
+    def _external_heading_text(self) -> str:
+        edit = self.external_heading_edit
+        if edit is None:
+            return ""
+        return edit.text().strip()
+
+    def _on_external_heading_changed(self, _text: str) -> None:
+        self._sync_external_heading_label()
+
+    def _sync_external_heading_label(self) -> None:
+        self.slot_editor.set_region_display_name(
+            EXTERNAL_SCORE_SLOT_KEY,
+            self._slot_display_name(EXTERNAL_SCORE_SLOT_KEY),
+        )
+
     def _select_slot_key(self, key: str) -> None:
         for k, btn in self._slot_buttons.items():
             btn.setChecked(k == key)
@@ -520,6 +570,7 @@ class Step14Page(QWidget):
         # 新規配置されたスロットに現在の印字形式を割り当てる
         for r in self.slot_editor.get_regions():
             self._slot_print_modes.setdefault(r["id"], self.print_mode_combo.currentData())
+        self._sync_external_heading_label()
         self._update_slot_status()
 
     def _update_slot_status(self) -> None:
@@ -530,11 +581,27 @@ class Step14Page(QWidget):
         parts = []
         for r in regions:
             mode = self._slot_print_modes.get(r["id"], "number")
-            parts.append(f"{r['id']}（{'ラベル付き' if mode == 'label' else '数字のみ'}）")
-        self.slot_status.setText("配置済み: " + "、".join(parts))
+            label = "ラベル付き" if mode == "label" else "数字のみ"
+            parts.append(f"{r['displayName']}（{label}）")
+        suffix = "／見出し＋枠を印刷" if self.print_frame_check.isChecked() else ""
+        self.slot_status.setText("配置済み: " + "、".join(parts) + suffix)
 
     def _on_delete_slot(self) -> None:
         self.slot_editor.delete_selected()
+
+    def _slot_payload(self, key: str, region: dict[str, Any], current_mode: str) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "slotKey": key,
+            "x": region["x"],
+            "y": region["y"],
+            "width": region["width"],
+            "height": region["height"],
+            "printMode": self._slot_print_modes.get(key, current_mode),
+            "printFrame": self.print_frame_check.isChecked(),
+        }
+        if key == EXTERNAL_SCORE_SLOT_KEY:
+            payload["heading"] = self._external_heading_text()
+        return payload
 
     def _editor_output_slots(self) -> list[dict[str, Any]]:
         """上部で配置中の合計欄。プレビューは保存前の位置もこの内容で描く。"""
@@ -544,16 +611,7 @@ class Step14Page(QWidget):
             key = str(region.get("id") or "").strip()
             if not key:
                 continue
-            slots.append(
-                {
-                    "slotKey": key,
-                    "x": region["x"],
-                    "y": region["y"],
-                    "width": region["width"],
-                    "height": region["height"],
-                    "printMode": self._slot_print_modes.get(key, current_mode),
-                }
-            )
+            slots.append(self._slot_payload(key, region, current_mode))
         return slots
 
     def _on_save_slots(self) -> None:
@@ -563,16 +621,7 @@ class Step14Page(QWidget):
         slots = []
         current_mode = self.print_mode_combo.currentData()
         for r in regions:
-            slots.append(
-                {
-                    "slotKey": r["id"],
-                    "x": r["x"],
-                    "y": r["y"],
-                    "width": r["width"],
-                    "height": r["height"],
-                    "printMode": self._slot_print_modes.get(r["id"], current_mode),
-                }
-            )
+            slots.append(self._slot_payload(str(r["id"]), r, current_mode))
         try:
             count = save_output_slots(self.app.active_test_id, slots)
             h.info(self, "保存完了", f"合計欄を {count} 件保存しました。")
