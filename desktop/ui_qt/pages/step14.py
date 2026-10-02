@@ -268,6 +268,7 @@ class Step14Page(QWidget):
         self.preview_zoom.connect_zoom_changed(self._update_preview_pixmap)
         lay.addWidget(self.preview_zoom)
         self.preview_mode_label = h.caption_label(
+            "上部で配置した合計欄（総計点・外部連携得点・領域得点）も、このプレビューに描きます。"
             "出力形式が PDF のとき、プレビューでもベクトル合成の見た目を表示します。"
         )
         lay.addWidget(self.preview_mode_label)
@@ -511,6 +512,26 @@ class Step14Page(QWidget):
     def _on_delete_slot(self) -> None:
         self.slot_editor.delete_selected()
 
+    def _editor_output_slots(self) -> list[dict[str, Any]]:
+        """上部で配置中の合計欄。プレビューは保存前の位置もこの内容で描く。"""
+        current_mode = self.print_mode_combo.currentData()
+        slots: list[dict[str, Any]] = []
+        for region in self.slot_editor.get_regions():
+            key = str(region.get("id") or "").strip()
+            if not key:
+                continue
+            slots.append(
+                {
+                    "slotKey": key,
+                    "x": region["x"],
+                    "y": region["y"],
+                    "width": region["width"],
+                    "height": region["height"],
+                    "printMode": self._slot_print_modes.get(key, current_mode),
+                }
+            )
+        return slots
+
     def _on_save_slots(self) -> None:
         if not self.app.require_active_test():
             return
@@ -603,6 +624,7 @@ class Step14Page(QWidget):
         row = self._rows[idx]
         test_id = self.app.active_test_id
         export_format = str(self.export_format_combo.currentData() or "pdf")
+        output_slots = self._editor_output_slots()
         self._preview_state = None
         self.preview_host.set_pixmap(None)
         self.preview_host.set_placeholder("合成中…")
@@ -630,7 +652,9 @@ class Step14Page(QWidget):
 
         h.run_in_thread(
             self,
-            lambda: render_feedback_preview(test_id, row, export_format),
+            lambda: render_feedback_preview(
+                test_id, row, export_format, output_slots=output_slots
+            ),
             done,
         )
 

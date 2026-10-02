@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import QByteArray, QMimeData, Qt, Signal
+from PySide6.QtCore import QByteArray, QMimeData, Qt, QTimer, Signal
 from PySide6.QtGui import QDrag
 from PySide6.QtWidgets import (
     QApplication,
@@ -146,6 +146,8 @@ class Step13Page(QWidget):
         self._crop_results: list[dict[str, Any]] = []
         self._edits: dict[int, QLineEdit] = {}
         self._undo_stack: list[_Snapshot] = []
+        self._in_render = False
+        self._last_viewport_w = 0
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -187,11 +189,15 @@ class Step13Page(QWidget):
 
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAsNeeded)
+        scroll.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
         make_expanding(scroll)
         scroll.setStyleSheet(
             f"QScrollArea {{ border: 1px solid {COLORS['border']}; border-radius: 6px;"
             f" background: {COLORS['sidebar']}; }}"
         )
+        self.scroll = scroll
         self.grid_panel = QWidget()
         self.grid_panel.setStyleSheet("background: transparent;")
         self.grid = QGridLayout(self.grid_panel)
@@ -199,6 +205,18 @@ class Step13Page(QWidget):
         self.grid.setSpacing(8)
         scroll.setWidget(self.grid_panel)
         root.addWidget(scroll, 1)
+
+    def resizeEvent(self, event) -> None:  # noqa: N802
+        super().resizeEvent(event)
+        if not self._crop_results or self._in_render:
+            return
+        QTimer.singleShot(0, self._render_grid_if_width_changed)
+
+    def _render_grid_if_width_changed(self) -> None:
+        width = self.scroll.viewport().width()
+        if abs(width - self._last_viewport_w) < 8:
+            return
+        self._render_grid()
 
     def refresh(self) -> None:
         pass  # 表示はユーザー操作（本人欄画像を表示）で開始
@@ -251,27 +269,65 @@ class Step13Page(QWidget):
 
         h.run_in_thread(self, task, done)
 
+    def _image_box_width(self, cols: int, zoom: float) -> int:
+        """100% のとき、4列が枠内に収まり切り出し全体が見える幅。"""
+        viewport_w = self.scroll.viewport().width()
+        if viewport_w < 80:
+            viewport_w = max(320, self.width() - 24)
+        margins = self.grid.contentsMargins()
+        spacing = self.grid.spacing()
+        inner = viewport_w - margins.left() - margins.right() - spacing * (cols - 1) - 4
+        col = max(88, inner // cols)
+        tile_pad = 12
+        return max(64, int((col - tile_pad) * zoom))
+
     def _render_grid(self) -> None:
-        while self.grid.count():
-            item = self.grid.takeAt(0)
-            if item.widget():
-                item.widget().deleteLater()
-        self._edits = {}
-        if not self._crop_results:
-            self.grid.addWidget(
-                h.muted_label("「本人欄画像を表示」で切り出し画像を読み込みます"), 0, 0
-            )
+        if self._in_render:
             return
+        self._in_render = True
+        try:
+            self._sync_edits_to_rows()
+            while self.grid.count():
+                item = self.grid.takeAt(0)
+                if item.widget():
+                    item.widget().deleteLater()
+            self._edits = {}
+            if not self._crop_results:
+                self.grid_panel.setMinimumWidth(0)
+                self.grid.addWidget(
+                    h.muted_label("「本人欄画像を表示」で切り出し画像を読み込みます"), 0, 0
+                )
+                return
 
-        mode = self._current_mode()
-        zoom = max(30, min(400, self.zoom_slider.value())) / 100.0
-        cols = 4
-        for idx, item in enumerate(self._crop_results):
-            r, c = divmod(idx, cols)
-            self.grid.addWidget(self._make_tile(item, mode, zoom), r, c, Qt.AlignTop | Qt.AlignLeft)
-        self.grid.setColumnStretch(cols, 1)
+            mode = self._current_mode()
+            zoom = max(30, min(400, self.zoom_slider.value())) / 100.0
+            cols = 4
+            image_w = self._image_box_width(cols, zoom)
+            for idx, item in enumerate(self._crop_results):
+                r, c = divmod(idx, cols)
+                self.grid.addWidget(
+                    self._make_tile(item, mode, image_w),
+                    r,
+                    c,
+                    Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft,
+                )
+            self.grid.setColumnStretch(cols, 1)
+            if zoom > 1.01:
+                margins = self.grid.contentsMargins()
+                content_w = (
+                    cols * (image_w + 12)
+                    + self.grid.spacing() * (cols - 1)
+                    + margins.left()
+                    + margins.right()
+                )
+                self.grid_panel.setMinimumWidth(content_w)
+            else:
+                self.grid_panel.setMinimumWidth(0)
+            self._last_viewport_w = self.scroll.viewport().width()
+        finally:
+            self._in_render = False
 
-    def _make_tile(self, item: dict[str, Any], mode: str, zoom: float) -> QWidget:
+    def _make_tile(self, item: dict[str, Any], mode: str, image_w: int) -> QWidget:
         row = item["row"]
 
         if not item.get("ok"):
@@ -295,18 +351,23 @@ class Step13Page(QWidget):
         lay = QVBoxLayout(tile)
         lay.setContentsMargins(6, 6, 6, 6)
         lay.setSpacing(3)
-        file_label = QLabel(str(row.get("fileName") or "")[:28])
+        file_name = str(row.get("fileName") or "")
+        file_label = QLabel(file_name)
         file_label.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+        file_label.setWordWrap(True)
+        file_label.setFixedWidth(image_w)
+        file_label.setToolTip(file_name)
         file_label.setStyleSheet(
             f"border: none; font-size: 9px; color: {COLORS['text_secondary']};"
         )
         lay.addWidget(file_label)
 
         pix = pil_to_qpixmap(item["pil"])
-        w = max(60, int(pix.width() * zoom))
         img = QLabel()
         img.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
-        img.setPixmap(pix.scaledToWidth(w, Qt.SmoothTransformation))
+        img.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+        if not pix.isNull() and pix.width() > 0:
+            img.setPixmap(pix.scaledToWidth(image_w, Qt.SmoothTransformation))
         img.setStyleSheet("border: none;")
         lay.addWidget(img)
 

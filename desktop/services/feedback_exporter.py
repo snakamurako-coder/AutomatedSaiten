@@ -71,20 +71,24 @@ def gather_row_render_data(
     row: dict[str, Any],
     *,
     shared: dict[str, Any] | None = None,
+    output_slots: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     if shared is None:
         info = get_test_info(test_id)
         points = {k: int(v) for k, v in (info.get("points") or {}).items()}
-        payload = build_feedback_payload(test_id, row, points)
+        payload = build_feedback_payload(
+            test_id, row, points, output_slots=output_slots
+        )
         style = get_feedback_style()
     else:
         points = shared["points"]
+        slots = output_slots if output_slots is not None else shared["output_slots"]
         payload = build_feedback_payload(
             test_id,
             row,
             points,
             fields=shared["fields"],
-            output_slots=shared["output_slots"],
+            output_slots=slots,
             domain_settings=shared.get("domain_settings"),
         )
         style = shared["style"]
@@ -122,8 +126,11 @@ def _build_row_pdf_document(
     row: dict[str, Any],
     *,
     shared: dict[str, Any] | None = None,
+    output_slots: list[dict[str, Any]] | None = None,
 ) -> fitz.Document:
-    data = gather_row_render_data(test_id, row, shared=shared)
+    data = gather_row_render_data(
+        test_id, row, shared=shared, output_slots=output_slots
+    )
     payload = data["payload"]
     return build_feedback_pdf_document(
         data["warped_path"],
@@ -232,10 +239,15 @@ def render_feedback_preview(
     test_id: str,
     row: dict[str, Any],
     fmt: FeedbackExportFormat | str | None = None,
+    *,
+    output_slots: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
-    """1 件プレビュー用。PDF 形式時はベクトル PDF を生成し、表示用に高解像度ラスター化する。"""
+    """1 件プレビュー用。PDF 形式時はベクトル PDF を生成し、表示用に高解像度ラスター化する。
+
+    output_slots を渡すと、保存済みではなくその配置（総計点など）を描く。
+    """
     if is_pdf_export_format(fmt):
-        doc = _build_row_pdf_document(test_id, row)
+        doc = _build_row_pdf_document(test_id, row, output_slots=output_slots)
         try:
             page = doc[0]
             native_size = (int(round(page.rect.width)), int(round(page.rect.height)))
@@ -250,7 +262,7 @@ def render_feedback_preview(
         }
 
     export_fmt = per_file_export_format(fmt)
-    data = gather_row_render_data(test_id, row)
+    data = gather_row_render_data(test_id, row, output_slots=output_slots)
     payload = data["payload"]
     image = render_feedback_image(
         data["warped_path"],
