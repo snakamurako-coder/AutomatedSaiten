@@ -78,6 +78,7 @@ class _EditorCanvas(QWidget):
         self.detect_threshold = 128
         self.detect_roi_margin: int | None = None
         self.require_pending_label_for_detect = False
+        self.empty_message = "PDF / JPG / PNG をドロップ\nまたは「画像を開く」"
         self.default_ocr_lang = "en"
         self.default_ocr_engine = "openai"
         self.setFocusPolicy(Qt.StrongFocus)
@@ -140,7 +141,7 @@ class _EditorCanvas(QWidget):
             painter.drawText(
                 self.rect(),
                 Qt.AlignCenter,
-                "PDF / JPG / PNG をドロップ\nまたは「画像を開く」",
+                self.empty_message,
             )
             return
 
@@ -495,6 +496,20 @@ class AnswerRegionEditor(QScrollArea):
 
     def load_image_from_path(self, path: str) -> None:
         self.set_image(load_image_bgr(path))
+
+    def clear_image(self) -> None:
+        canvas = self._canvas
+        canvas._image_bgr = None
+        canvas._pixmap = None
+        canvas._detect_blur = None
+        canvas.regions = []
+        canvas.selected_idx = -1
+        canvas.setFixedSize(480, 360)
+        canvas.update()
+
+    def set_empty_message(self, message: str) -> None:
+        self._canvas.empty_message = message
+        self._canvas.update()
 
     def set_regions(self, regions: list[dict[str, Any]]) -> None:
         rows = []

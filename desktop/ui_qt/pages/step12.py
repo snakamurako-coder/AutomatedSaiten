@@ -17,8 +17,17 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.identity_repo import IDENTITY_TYPES, get_identity_fields, save_identity_fields
-from models.test_repo import get_test_info
+from models.identity_repo import (
+    IDENTITY_BASIS_ORIGINAL,
+    IDENTITY_BASIS_WARPED,
+    IDENTITY_TYPES,
+    clear_identity_fields,
+    get_identity_coord_basis,
+    get_identity_fields,
+    save_identity_fields,
+    set_identity_coord_basis,
+)
+from models.test_repo import get_model_answer_source_path, get_test_info
 from ui_qt import helpers as h
 from ui_qt.region_editor import AnswerRegionEditor
 from ui_qt.region_mode_widgets import RegionDetectModeToggle, _refresh_segment_button
@@ -30,6 +39,7 @@ class Step12Page(QWidget):
         super().__init__()
         self.app = app
         self._selected_type: str | None = None
+        self._coord_basis: str | None = None
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -37,11 +47,38 @@ class Step12Page(QWidget):
         root.addWidget(h.title_label("⑫ 本人欄設定"))
         root.addWidget(
             h.muted_label(
-                "学年・組・番号・ID・氏名のうち 1 つ以上を選び、模範解答上で本人欄を指定します。"
+                "先に場所の基準（補正画像か元画像）を選び、その画像上で学年・組・番号・ID・氏名の枠を指定します。"
+                "⑬ の照合は、選んだ基準と同じ画像から同じ座標を切り出します。"
                 "「自動認識」では欄の内側をクリック、「手動設定」ではドラッグで矩形を指定します。"
-                "この枠は ⑬ の照合で切り出し画像として使われます（OCR はしません）。"
             )
         )
+
+        basis_row = QHBoxLayout()
+        basis_row.addWidget(QLabel("場所の基準"))
+        self.basis_buttons: dict[str, QPushButton] = {}
+        for key, label, tip in (
+            (
+                IDENTITY_BASIS_WARPED,
+                "補正画像",
+                "ゆがみを直した模範解答上の位置です。生徒の補正画像から同じ座標を切り出します。",
+            ),
+            (
+                IDENTITY_BASIS_ORIGINAL,
+                "元画像",
+                "読み込んだ原稿上の位置です。生徒の元画像から同じ座標を切り出します。",
+            ),
+        ):
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setAutoDefault(False)
+            btn.setDefault(False)
+            btn.setToolTip(tip)
+            set_variant(btn, "nav-segment")
+            btn.clicked.connect(lambda _c=False, basis=key: self._on_basis_clicked(basis))
+            self.basis_buttons[key] = btn
+            basis_row.addWidget(btn)
+        basis_row.addStretch()
+        root.addLayout(basis_row)
 
         toolbar = QHBoxLayout()
         toolbar.addWidget(QLabel("欄種別"))
@@ -88,7 +125,9 @@ class Step12Page(QWidget):
         toolbar.addStretch()
         root.addLayout(toolbar)
 
-        self.hint_label = h.caption_label("欄種別を選んでから、自動認識または手動設定で枠を指定してください。")
+        self.hint_label = h.caption_label(
+            "先に「補正画像」か「元画像」を選んでから、座標を指定してください。"
+        )
         root.addWidget(self.hint_label)
 
         self.editor = AnswerRegionEditor(
@@ -99,6 +138,7 @@ class Step12Page(QWidget):
         self.editor.set_detect_roi_margin(480)
         self.editor.set_click_detect_mode(True)
         self.editor.set_require_pending_label_for_detect(True)
+        self.editor.set_empty_message("補正画像か元画像を選ぶと、模範解答が表示されます。")
         root.addWidget(self.editor, 1)
 
         self.status_label = h.caption_label("")
@@ -123,20 +163,100 @@ class Step12Page(QWidget):
             return "欄の内側をクリックすると自動検出します（再指定で上書き）。"
         return "画像上をドラッグして指定してください（再ドラッグで上書き）。"
 
+    def _basis_label(self) -> str:
+        if self._coord_basis == IDENTITY_BASIS_ORIGINAL:
+            return "元画像"
+        if self._coord_basis == IDENTITY_BASIS_WARPED:
+            return "補正画像"
+        return ""
+
+    def _refresh_hint(self) -> None:
+        if not self._coord_basis:
+            self.hint_label.setText(
+                "先に「補正画像」か「元画像」を選んでから、座標を指定してください。"
+            )
+            return
+        if self._selected_type:
+            self.hint_label.setText(
+                f"「{self._selected_type}」欄（{self._basis_label()}） — {self._region_action_hint()}"
+            )
+            return
+        if self.region_mode_toggle.is_auto_detect():
+            self.hint_label.setText(
+                f"{self._basis_label()}を表示しています。欄種別を選んでから、欄の内側をクリックしてください。"
+            )
+        else:
+            self.hint_label.setText(
+                f"{self._basis_label()}を表示しています。欄種別を選んでから、画像上をドラッグして指定してください。"
+            )
+
+    def _sync_basis_buttons(self) -> None:
+        for key, btn in self.basis_buttons.items():
+            btn.setChecked(key == self._coord_basis)
+            _refresh_segment_button(btn)
+
+    def _model_path_for_basis(self, basis: str) -> str:
+        if basis == IDENTITY_BASIS_ORIGINAL:
+            return get_model_answer_source_path(self.app.active_test_id) or ""
+        info = get_test_info(self.app.active_test_id)
+        return str(info.get("modelAnswerPath") or "")
+
+    def _on_basis_clicked(self, basis: str) -> None:
+        if basis == self._coord_basis:
+            self._sync_basis_buttons()
+            return
+        if not self._apply_basis(basis):
+            self._sync_basis_buttons()
+
+    def _apply_basis(self, basis: str) -> bool:
+        path = self._model_path_for_basis(basis)
+        if not path or not Path(path).exists():
+            if basis == IDENTITY_BASIS_ORIGINAL:
+                h.warn(
+                    self,
+                    "元画像がありません",
+                    "模範解答の原稿が見つかりません。② 回答欄設定で原稿を読み込んでから選んでください。",
+                )
+            else:
+                h.warn(
+                    self,
+                    "補正画像がありません",
+                    "補正済みの模範解答が見つかりません。② 回答欄設定で模範解答を読み込んでから選んでください。",
+                )
+            return False
+        regions = self.editor.get_regions()
+        saved = get_identity_fields(self.app.active_test_id)
+        if regions or saved:
+            if (
+                QMessageBox.question(
+                    self,
+                    "確認",
+                    "場所の基準を変えると、指定済みの本人欄は別の画像の座標になるため、"
+                    "枠を消してから指定し直します。続けますか？",
+                )
+                != QMessageBox.Yes
+            ):
+                return False
+        try:
+            self.editor.load_image_from_path(path)
+        except Exception as e:
+            h.error(self, "画像の表示に失敗", str(e))
+            return False
+        if regions or saved:
+            self.editor.clear_all_regions()
+            clear_identity_fields(self.app.active_test_id)
+            self._update_type_buttons()
+        set_identity_coord_basis(self.app.active_test_id, basis)
+        self._coord_basis = basis
+        self._sync_basis_buttons()
+        self._refresh_hint()
+        self._set_status(f"{self._basis_label()}を基準にしました。欄種別を選んで座標を指定してください。")
+        return True
+
     def _on_region_mode_changed(self, auto_detect: bool) -> None:
         self.editor.set_click_detect_mode(auto_detect)
         self.editor.focus_canvas()
-        hint = (
-            "欄の内側をクリックすると自動検出します（再指定で上書き）。"
-            if auto_detect
-            else "画像上をドラッグして指定してください（再ドラッグで上書き）。"
-        )
-        if self._selected_type:
-            self.hint_label.setText(f"「{self._selected_type}」欄 — {hint}")
-        elif auto_detect:
-            self.hint_label.setText("欄種別を選んでから、欄の内側をクリックしてください。")
-        else:
-            self.hint_label.setText("欄種別を選んでから、画像上をドラッグして指定してください。")
+        self._refresh_hint()
         self._set_status("自動認識モード" if auto_detect else "手動設定モード")
 
     def _on_detect_thresh_changed(self, value: int) -> None:
@@ -145,16 +265,30 @@ class Step12Page(QWidget):
     def refresh(self) -> None:
         if not self.app.require_active_test():
             return
-        info = get_test_info(self.app.active_test_id)
-        model_path = info.get("modelAnswerPath") or ""
-        if model_path and Path(model_path).exists():
-            try:
-                self.editor.load_image_from_path(model_path)
-            except Exception as e:
-                self.status_label.setText(f"模範解答の表示に失敗: {e}")
-                return
-        else:
-            self.status_label.setText("模範解答が未登録です。先に ② 回答欄設定で読み込んでください。")
+        basis = get_identity_coord_basis(self.app.active_test_id)
+        self._coord_basis = basis
+        self._sync_basis_buttons()
+        if not basis:
+            self.editor.clear_image()
+            self._update_type_buttons()
+            self._refresh_hint()
+            self.status_label.setText("場所の基準が未選択です。")
+            return
+        set_identity_coord_basis(self.app.active_test_id, basis)
+        path = self._model_path_for_basis(basis)
+        if not path or not Path(path).exists():
+            self.editor.clear_image()
+            self._update_type_buttons()
+            self._refresh_hint()
+            missing = "元画像" if basis == IDENTITY_BASIS_ORIGINAL else "補正画像"
+            self.status_label.setText(
+                f"{missing}が見つかりません。② 回答欄設定で模範解答を読み込んでください。"
+            )
+            return
+        try:
+            self.editor.load_image_from_path(path)
+        except Exception as e:
+            self.status_label.setText(f"模範解答の表示に失敗: {e}")
             return
         fields = get_identity_fields(self.app.active_test_id)
         self.editor.set_regions(
@@ -173,7 +307,8 @@ class Step12Page(QWidget):
         self._update_type_buttons()
         if self._selected_type:
             self.editor.set_pending_label(self._selected_type, replace_same=True)
-        self.status_label.setText(f"設定済み: {len(fields)} 欄")
+        self._refresh_hint()
+        self.status_label.setText(f"設定済み（{self._basis_label()}）: {len(fields)} 欄")
 
     def _select_type(self, type_name: str) -> None:
         self._selected_type = type_name
@@ -182,7 +317,7 @@ class Step12Page(QWidget):
             _refresh_segment_button(btn)
         self.editor.set_pending_label(type_name, replace_same=True)
         self.editor.focus_canvas()
-        self.hint_label.setText(f"「{type_name}」欄 — {self._region_action_hint()}")
+        self._refresh_hint()
 
     def _on_regions_changed(self) -> None:
         QTimer.singleShot(0, self._update_type_buttons)
@@ -198,8 +333,10 @@ class Step12Page(QWidget):
             btn.style().polish(btn)
             btn.update()
         done_list = [t for t in IDENTITY_TYPES if t in done_types]
-        if done_list:
-            self.status_label.setText("設定済み: " + "、".join(done_list))
+        if done_list and self._coord_basis:
+            self.status_label.setText(
+                f"設定済み（{self._basis_label()}）: " + "、".join(done_list)
+            )
 
     def _on_reset(self) -> None:
         if (
@@ -225,11 +362,19 @@ class Step12Page(QWidget):
             for r in regions
             if r["id"] in IDENTITY_TYPES
         ]
+        if not self._coord_basis:
+            h.error(self, "保存エラー", "先に「補正画像」か「元画像」を選んでください。")
+            return
         if not fields:
             h.error(self, "保存エラー", "本人確認欄を 1 つ以上設定してください。")
             return
         try:
+            set_identity_coord_basis(self.app.active_test_id, self._coord_basis)
             count = save_identity_fields(self.app.active_test_id, fields)
-            h.info(self, "保存完了", f"本人確認欄を {count} 件保存しました。")
+            h.info(
+                self,
+                "保存完了",
+                f"本人確認欄を {count} 件保存しました（{self._basis_label()}の座標）。",
+            )
         except Exception as e:
             h.error(self, "エラー", str(e))

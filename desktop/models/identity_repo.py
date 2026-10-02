@@ -8,6 +8,54 @@ from models.database import connect, init_db
 from models.test_repo import touch_progress_conn
 
 IDENTITY_TYPES = ["学年", "組", "番号", "ID", "氏名"]
+IDENTITY_BASIS_WARPED = "warped"
+IDENTITY_BASIS_ORIGINAL = "original"
+_IDENTITY_BASIS_KEY = "本人欄座標基準"
+
+
+def get_identity_coord_basis(test_id: str) -> str | None:
+    """本人欄の座標がどの画像上か。未選択かつ未保存なら None。
+
+    保存済みで基準が無い古いデータは、従来どおり補正画像とする。
+    """
+    init_db()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT value FROM test_info WHERE test_id = ? AND key = ?",
+            (test_id, _IDENTITY_BASIS_KEY),
+        ).fetchone()
+        stored = str(row["value"] if row else "").strip()
+        if stored in (IDENTITY_BASIS_WARPED, IDENTITY_BASIS_ORIGINAL):
+            return stored
+        has_fields = conn.execute(
+            "SELECT 1 FROM identity_fields WHERE test_id = ? LIMIT 1",
+            (test_id,),
+        ).fetchone()
+    if has_fields:
+        return IDENTITY_BASIS_WARPED
+    return None
+
+
+def set_identity_coord_basis(test_id: str, basis: str) -> None:
+    if basis not in (IDENTITY_BASIS_WARPED, IDENTITY_BASIS_ORIGINAL):
+        raise ValueError("座標の基準は補正画像か元画像です。")
+    init_db()
+    with connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO test_info(test_id, key, value) VALUES (?, ?, ?)
+            ON CONFLICT(test_id, key) DO UPDATE SET value = excluded.value
+            """,
+            (test_id, _IDENTITY_BASIS_KEY, basis),
+        )
+        conn.commit()
+
+
+def clear_identity_fields(test_id: str) -> None:
+    init_db()
+    with connect() as conn:
+        conn.execute("DELETE FROM identity_fields WHERE test_id = ?", (test_id,))
+        conn.commit()
 
 
 def get_identity_fields(test_id: str) -> list[dict[str, Any]]:

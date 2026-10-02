@@ -19,7 +19,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from models.identity_repo import get_verification_data
+from models.identity_repo import get_identity_coord_basis, get_verification_data
 from models.roster_repo import update_student_identity
 from services.crop_preview import load_crops_for_rows
 from ui_qt import helpers as h
@@ -108,8 +108,12 @@ class Step13Page(QWidget):
                 f"「{mode}」欄が未設定です。⑫ 本人欄設定で枠を指定してください。",
             )
             return
+        basis = get_identity_coord_basis(self.app.active_test_id) or "warped"
+        field = dict(field)
+        field["imageBasis"] = basis
+        basis_label = "元画像" if basis == "original" else "補正画像"
 
-        self.status_label.setText(f"画像を読み込み中…（{len(rows)} 件）")
+        self.status_label.setText(f"画像を読み込み中…（{len(rows)} 件・{basis_label}）")
 
         def task():
             return load_crops_for_rows(rows, field)
@@ -121,7 +125,9 @@ class Step13Page(QWidget):
                 return
             self._crop_results = results
             ok = sum(1 for r in results if r.get("ok"))
-            self.status_label.setText(f"{ok}/{len(results)} 件を表示中 — 値を修正したら「修正を保存」")
+            self.status_label.setText(
+                f"{ok}/{len(results)} 件を表示中（{basis_label}） — 値を修正したら「修正を保存」"
+            )
             self._render_grid()
 
         h.run_in_thread(self, task, done)

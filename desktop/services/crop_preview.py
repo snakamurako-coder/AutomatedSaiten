@@ -8,7 +8,7 @@ from typing import Any
 import cv2
 from PIL import Image
 
-from services.image_loader import imread_bgr
+from services.image_loader import imread_bgr, load_image_bgr
 from services.image_warp import crop_region
 
 
@@ -22,11 +22,23 @@ def resolve_warped_path(row: dict[str, Any]) -> str:
     raise FileNotFoundError(f"補正画像が見つかりません: {row.get('fileName', '')}")
 
 
+def resolve_source_path(row: dict[str, Any]) -> str:
+    path = str(row.get("sourcePath") or row.get("source_path") or "").strip()
+    if path and Path(path).exists():
+        return path
+    raise FileNotFoundError(f"元画像が見つかりません: {row.get('fileName', '')}")
+
+
 def crop_field_from_row(row: dict[str, Any], field: dict[str, Any]) -> Image.Image:
-    warped_path = resolve_warped_path(row)
-    image = imread_bgr(warped_path)
-    if image is None:
-        raise ValueError(f"画像を読み込めません: {warped_path}")
+    basis = str(field.get("imageBasis") or "warped").strip()
+    if basis == "original":
+        image_path = resolve_source_path(row)
+        image = load_image_bgr(image_path)
+    else:
+        image_path = resolve_warped_path(row)
+        image = imread_bgr(image_path)
+        if image is None:
+            raise ValueError(f"画像を読み込めません: {image_path}")
     cropped = crop_region(
         image,
         int(field.get("x") or 0),
