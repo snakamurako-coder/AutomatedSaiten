@@ -335,9 +335,7 @@ def render_feedback_preview(
             "mode": "pdf",
             "pdf_bytes": pdf_bytes,
             "native_size": native_size,
-            "image": rasterize_pdf_bytes(
-                pdf_bytes, scale=_pdf_preview_scale(native_size, 100)
-            ),
+            "image": rasterize_pdf_bytes(pdf_bytes, scale=1.0),
         }
 
     export_fmt = per_file_export_format(fmt)
@@ -353,15 +351,16 @@ def render_feedback_preview(
 
 
 def _pdf_preview_scale(native_size: tuple[int, int], zoom_pct: float) -> float:
-    """プレビュー用のラスタ倍率。元画像は画素数が大きいので上限を設ける。"""
+    """表示倍率そのものでラスタ化する。
+
+    いったん大きく描いてから縮小すると、見出しや枠の細い線が平均化で消える。
+    """
     zoom = max(0.1, float(zoom_pct) / 100.0)
-    scale = max(2.0, zoom * 2.0)
     longest = max(int(native_size[0]), int(native_size[1]), 1)
-    if longest >= 2200:
-        limit = 5600.0
-        if longest * scale > limit:
-            scale = max(1.0, limit / float(longest))
-    return scale
+    limit = 8000.0
+    if longest * zoom > limit:
+        return max(0.1, limit / float(longest))
+    return zoom
 
 
 def rasterize_feedback_preview(

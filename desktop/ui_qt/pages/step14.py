@@ -168,7 +168,7 @@ class Step14Page(QWidget):
         self.print_mode_combo.addItem("ラベル付き", "label")
         ctrl.addWidget(self.print_mode_combo)
         self.print_frame_check = QCheckBox("見出し＋枠を印刷")
-        self.print_frame_check.toggled.connect(lambda _on: self._update_slot_status())
+        self.print_frame_check.toggled.connect(self._on_print_frame_toggled)
         ctrl.addWidget(self.print_frame_check)
         ctrl.addWidget(h.button("選択欄を削除", self._on_delete_slot, variant="danger-soft"))
         ctrl.addWidget(h.button("合計欄を保存", self._on_save_slots, variant="primary"))
@@ -423,6 +423,7 @@ class Step14Page(QWidget):
         self.print_frame_check.blockSignals(True)
         self.print_frame_check.setChecked(any(s.get("printFrame") for s in slots))
         self.print_frame_check.blockSignals(False)
+        self.slot_editor.set_print_frame_preview(self.print_frame_check.isChecked())
         external_heading = ""
         for s in slots:
             if s["slotKey"] == EXTERNAL_SCORE_SLOT_KEY:
@@ -467,6 +468,7 @@ class Step14Page(QWidget):
                 edit.setText(external_heading)
                 edit.blockSignals(False)
                 edit.textChanged.connect(self._on_external_heading_changed)
+                edit.editingFinished.connect(self._refresh_open_preview)
                 self.external_heading_edit = edit
                 self.slot_btn_row.addWidget(edit)
         self.slot_btn_row.addStretch()
@@ -553,6 +555,16 @@ class Step14Page(QWidget):
     def _on_external_heading_changed(self, _text: str) -> None:
         self._sync_external_heading_label()
 
+    def _on_print_frame_toggled(self, checked: bool) -> None:
+        self.slot_editor.set_print_frame_preview(checked)
+        self._update_slot_status()
+        self._refresh_open_preview()
+
+    def _refresh_open_preview(self) -> None:
+        if self._preview_state is None:
+            return
+        self._on_preview()
+
     def _sync_external_heading_label(self) -> None:
         self.slot_editor.set_region_display_name(
             EXTERNAL_SCORE_SLOT_KEY,
@@ -572,6 +584,7 @@ class Step14Page(QWidget):
             self._slot_print_modes.setdefault(r["id"], self.print_mode_combo.currentData())
         self._sync_external_heading_label()
         self._update_slot_status()
+        self._refresh_open_preview()
 
     def _update_slot_status(self) -> None:
         regions = self.slot_editor.get_regions()
@@ -795,12 +808,15 @@ class Step14Page(QWidget):
             img = self._preview_state["image"]
 
         pix = pil_to_qpixmap(img)
-        scaled = pix.scaled(
-            target_w,
-            target_h,
-            Qt.AspectRatioMode.KeepAspectRatio,
-            Qt.TransformationMode.SmoothTransformation,
-        )
+        if abs(pix.width() - target_w) <= 2 and abs(pix.height() - target_h) <= 2:
+            scaled = pix
+        else:
+            scaled = pix.scaled(
+                target_w,
+                target_h,
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation,
+            )
         scaled.setDevicePixelRatio(1.0)
         self.preview_host.set_pixmap(scaled)
         self._apply_preview_scroll_height(scaled.height(), scaled.width())

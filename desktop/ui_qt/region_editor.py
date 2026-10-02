@@ -81,6 +81,7 @@ class _EditorCanvas(QWidget):
         self.empty_message = "PDF / JPG / PNG をドロップ\nまたは「画像を開く」"
         self.default_ocr_lang = "en"
         self.default_ocr_engine = "openai"
+        self.print_frame_preview = False
         self.setFocusPolicy(Qt.StrongFocus)
         self.setMouseTracking(True)
         self.setCursor(Qt.CrossCursor)
@@ -149,26 +150,21 @@ class _EditorCanvas(QWidget):
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         painter.drawPixmap(target, self._pixmap, QRectF(self._pixmap.rect()))
 
-        font = painter.font()
-        font.setBold(True)
-        font.setPointSize(9)
-        painter.setFont(font)
-
         for idx, r in enumerate(self.regions):
             rect = self._region_rect_disp(r)
             selected = idx == self.selected_idx
-            stroke = REGION_STROKE_SELECTED if selected else REGION_STROKE_NORMAL
-            alpha = REGION_FILL_ALPHA_SELECTED if selected else REGION_FILL_ALPHA
+            if self.print_frame_preview:
+                stroke = REGION_STROKE_NORMAL
+                alpha = REGION_FILL_ALPHA
+            else:
+                stroke = REGION_STROKE_SELECTED if selected else REGION_STROKE_NORMAL
+                alpha = REGION_FILL_ALPHA_SELECTED if selected else REGION_FILL_ALPHA
             painter.fillRect(rect, _fill_color(stroke, alpha))
             pen = QPen(QColor(stroke))
             pen.setWidth(2)
             painter.setPen(pen)
             painter.drawRect(rect)
-            painter.drawText(
-                rect.adjusted(5, 3, -3, -3),
-                Qt.AlignTop | Qt.AlignLeft,
-                r.get("displayName") or r["id"],
-            )
+            self._paint_region_label(painter, rect, r, stroke)
             if selected:
                 self._paint_handles(painter, rect)
 
@@ -183,6 +179,40 @@ class _EditorCanvas(QWidget):
             painter.setPen(pen)
             painter.setBrush(_fill_color(COLORS["accent"], 0.08))
             painter.drawRect(QRectF(QPointF(x0, y0), QPointF(x1, y1)).normalized())
+
+    def _paint_region_label(
+        self,
+        painter: QPainter,
+        rect: QRectF,
+        region: dict[str, Any],
+        stroke: str,
+    ) -> None:
+        label = str(region.get("displayName") or region.get("id") or "")
+        if not label or rect.width() < 4 or rect.height() < 4:
+            return
+        painter.setPen(QColor(stroke))
+        if self.print_frame_preview:
+            pad = max(3.0, min(rect.width(), rect.height()) * 0.04)
+            font_px = max(8, int(min(rect.height() * 0.28, rect.width() * 0.45)))
+            font = painter.font()
+            font.setBold(True)
+            font.setPixelSize(min(font_px, int(rect.height() * 0.42)))
+            painter.setFont(font)
+            painter.drawText(
+                rect.adjusted(pad, pad, -pad, -pad),
+                Qt.AlignLeft | Qt.AlignTop,
+                label,
+            )
+            return
+        font = painter.font()
+        font.setBold(True)
+        font.setPointSize(9)
+        painter.setFont(font)
+        painter.drawText(
+            rect.adjusted(5, 3, -3, -3),
+            Qt.AlignTop | Qt.AlignLeft,
+            label,
+        )
 
     def _paint_handles(self, painter: QPainter, rect: QRectF) -> None:
         painter.setPen(Qt.NoPen)
@@ -587,6 +617,11 @@ class AnswerRegionEditor(QScrollArea):
             updated = True
         if updated:
             self._canvas.update()
+
+    def set_print_frame_preview(self, enabled: bool) -> None:
+        """合計欄を、印刷時の緑枠＋見出しと同じ見た目で描く。"""
+        self._canvas.print_frame_preview = bool(enabled)
+        self._canvas.update()
 
     def set_pending_label(self, label: str | None, *, replace_same: bool = True) -> None:
         """次にドラッグで作る矩形の ID を指定する（⑩欄種別 / ⑫slotKey 用）。"""
