@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QInputDialog,
     QLabel,
+    QLineEdit,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -30,8 +31,10 @@ from PySide6.QtWidgets import (
 from models.criteria_repo import (
     manual_grade_decisions,
     apply_saved_criteria_to_field,
+    drop_answer_criterion_if_no_final,
     get_unique_answers,
     import_manual_grades_into_criteria,
+    list_manual_criteria_mismatches,
     manual_criteria_mismatch_ids,
     sync_committed_grades_to_criteria,
 )
@@ -59,6 +62,7 @@ from models.test_repo import (
     get_all_results,
     get_answer_fields,
     get_points_conn,
+    rewrite_field_texts_for_result_ids,
     update_results_field_grades,
 )
 from services.crop_preview import load_crops_for_rows
@@ -102,7 +106,7 @@ def _mix_hex_with_white(hex_color: str, white_ratio: float = 0.82) -> str:
 
 
 class GroupGradeDialog(QDialog):
-    """同じOCRの他回答へ、直前の判定を付けるか確認する一時ウィンドウ。"""
+    """同じOCRの未採点を、今付けた答案と並べて同じか切り分ける。"""
 
     def __init__(
         self,
@@ -112,14 +116,23 @@ class GroupGradeDialog(QDialog):
         *,
         judgment: str,
         score: int,
+        reference_items: list[dict] | None = None,
+        lead: str | None = None,
+        window_parent: QWidget | None = None,
     ):
-        super().__init__(parent)
-        self.setWindowTitle(f"同じ判定でよいか確認（OCR: {answer_text}）")
+        super().__init__(window_parent or parent)
+        self.setWindowTitle(f"同じOCRを確認（OCR: {answer_text}）")
         self.setModal(True)
-        self.resize(900, 640)
+        self.resize(980, 720)
         self.page = parent
         self.answer_text = answer_text
-        self.items = group_items
+        self.reference_items = list(reference_items or [])
+        self.reference_ids = {
+            int(i.get("result_id") or 0)
+            for i in self.reference_items
+            if int(i.get("result_id") or 0)
+        }
+        self.items = [*self.reference_items, *group_items]
         self._proposed_judgment = normalize_judgment(judgment) or judgment
         self._proposed_score = int(score)
         self._selected_ids: set[int] = {
@@ -128,26 +141,33 @@ class GroupGradeDialog(QDialog):
             if int(i.get("result_id") or 0)
         }
         self._ink_stacks: list = []
+        self._notation_edits: dict[str, QLineEdit] = {}
 
         lay = QVBoxLayout(self)
         lay.setContentsMargins(10, 10, 10, 10)
         lay.setSpacing(8)
 
+        head = lead or (
+            f"今付けた答案は {self._proposed_judgment}"
+            f"（{self._proposed_score}点）です。先頭にその画像を置いてあります。"
+        )
         tip = h.caption_label(
-            f"⑧採点基準の「{answer_text}」は {self._proposed_judgment}"
-            f"（{self._proposed_score}点）にしました。"
-            "下は同じOCRの他の回答です。同じ判定でよいものは選択したまま"
-            "「選択中に同じ判定」を押してください。"
-            "違う答案は選んで ○△× で個別に付けられます。"
-            "閉じるだけなら他の回答は変更しません。"
+            head
+            + "同じOCRでも、語順や綴りが違って見える答案は同じ内容ではありません。"
+            + "すべて同じなら、選んだまま「選択中に同じ判定」を押してください。"
+            + "切り分けるときは、○△×それぞれの実際の表記を書いてから、"
+            + "その判定を付けてください。表記を空のままにするとOCRは変えません。"
+            + "今のOCRと違う表記を書いたときだけ、その答案のOCRを書き換えます。"
+            + "閉じるだけなら他の回答は変更しません。"
             + (
-                " 判定を付けるとその答案は一覧から消えます。"
+                " 判定を付けると、先頭に置いた答案以外は一覧から消えます。"
                 if group_grade_hide_decided_enabled()
                 else ""
             )
         )
         tip.setWordWrap(True)
         lay.addWidget(tip)
+        lay.addLayout(self._build_notation_row())
 
         ctrl_lay = QHBoxLayout()
         self._info_lbl = QLabel()
@@ -201,7 +221,51 @@ class GroupGradeDialog(QDialog):
 
         self._render_grid(preserve_scroll=False)
 
+    def _build_notation_row(self) -> QHBoxLayout:
+        row = QHBoxLayout()
+        row.setSpacing(8)
+        specs = [("○", "○の実際の表記"), ("△", "△の実際の表記"), ("×", "×の実際の表記")]
+        for judgment, placeholder in specs:
+            box = QVBoxLayout()
+            box.setSpacing(2)
+            box.addWidget(QLabel(placeholder))
+            edit = QLineEdit()
+            edit.setPlaceholderText("空欄ならOCRは変えない")
+            if judgment == self._proposed_judgment:
+                edit.setText(self.answer_text)
+            edit.setClearButtonEnabled(True)
+            self._notation_edits[judgment] = edit
+            box.addWidget(edit)
+            wrap = QWidget()
+            wrap.setLayout(box)
+            if judgment == "△" and self.page._field_max_score() <= 1:
+                wrap.hide()
+            row.addWidget(wrap, 1)
+        return row
+
+    def _notation_override(self, judgment: str) -> str | None:
+        """今のOCRと違う表記だけ返す。空欄や同じ文字列は書き換えない。"""
+        edit = self._notation_edits.get(normalize_judgment(judgment) or "")
+        if edit is None:
+            return None
+        text = edit.text().strip()
+        if not text or text == self.answer_text:
+            return None
+        return text
+
+    def _ids_for_notation(self, judgment: str, selected_ids: list[int]) -> list[int]:
+        ids = [int(i) for i in selected_ids if int(i or 0)]
+        if normalize_judgment(judgment) != normalize_judgment(self._proposed_judgment):
+            return ids
+        for rid in self.reference_ids:
+            if rid not in ids:
+                ids.append(rid)
+        return ids
+
     def keyPressEvent(self, event):  # noqa: N802
+        if isinstance(self.focusWidget(), QLineEdit):
+            super().keyPressEvent(event)
+            return
         if event.key() == Qt.Key_1:
             self._apply_judgment("○")
         elif event.key() == Qt.Key_2:
@@ -224,7 +288,7 @@ class GroupGradeDialog(QDialog):
         self._selected_ids = {
             int(i.get("result_id") or 0)
             for i in self.items
-            if int(i.get("result_id") or 0)
+            if int(i.get("result_id") or 0) not in self.reference_ids
         }
         self._apply_selection_styles()
 
@@ -249,6 +313,14 @@ class GroupGradeDialog(QDialog):
             )
         finally:
             self.page._in_group_dialog = was_in_dialog
+        if ok:
+            self._mirror_grades(ids, self._proposed_judgment, self._proposed_score)
+            if self._notation_override(self._proposed_judgment):
+                self._apply_notation(ids, self._proposed_judgment)
+            else:
+                self.page._sync_uniform_answer(
+                    self.answer_text, self._proposed_judgment
+                )
         self._after_applied(ids, hide=bool(ok))
 
     def _apply_judgment(self, judgment: str) -> None:
@@ -259,6 +331,20 @@ class GroupGradeDialog(QDialog):
         if not resolved:
             return
         nj, score = resolved
+        if (
+            nj in ("○", "△", "×")
+            and nj != normalize_judgment(self._proposed_judgment)
+            and self._notation_override(nj) is None
+        ):
+            h.warn(
+                self,
+                "表記が未入力",
+                f"{nj} に切り分けるときは、「{nj}の実際の表記」に"
+                "今のOCRと違う文字列を入力してください。\n"
+                "同じOCRのまま別の判定にすると、見た目が違う答案が"
+                "再び同じ答案として扱われます。",
+            )
+            return
         ids = list(self._selected_ids)
         self._selected_ids.clear()
         was_in_dialog = getattr(self.page, "_in_group_dialog", False)
@@ -267,24 +353,66 @@ class GroupGradeDialog(QDialog):
             ok = self.page._commit_grades(ids, nj, score, silent=True)
         finally:
             self.page._in_group_dialog = was_in_dialog
+        if ok and nj:
+            self._mirror_grades(ids, nj, score)
+            if self._notation_override(nj):
+                self._apply_notation(ids, nj)
+            else:
+                self.page._sync_uniform_answer(self.answer_text, nj)
         # 判定解除は「決めた」扱いにせず、一覧に残す
         self._after_applied(ids, hide=bool(ok and nj))
 
+    def _mirror_grades(self, ids: list[int], judgment: str, score: int) -> None:
+        id_set = {int(i) for i in ids if int(i or 0)}
+        for item in self.items:
+            if int(item.get("result_id") or 0) not in id_set:
+                continue
+            item["judgment"] = judgment
+            item["score"] = score
+
+    def _apply_notation(self, ids: list[int], judgment: str) -> None:
+        new_text = self._notation_override(judgment)
+        if not new_text:
+            return
+        targets = self._ids_for_notation(judgment, ids)
+        self.page._retarget_ocr_texts(
+            targets,
+            self.answer_text,
+            new_text,
+            judgment,
+            also_items=self.items,
+        )
+
     def _refresh_info_label(self) -> None:
+        others = sum(
+            1
+            for i in self.items
+            if int(i.get("result_id") or 0) not in self.reference_ids
+        )
+        refs = sum(
+            1
+            for i in self.items
+            if int(i.get("result_id") or 0) in self.reference_ids
+        )
         self._info_lbl.setText(
-            f"OCRテキスト: <b>{self.answer_text}</b>"
-            f" （残り {len(self.items)} 枚 / 提案 {self._proposed_judgment}"
+            f"呼び出し時のOCR: <b>{self.answer_text}</b>"
+            f" （今付けた答案 {refs} 枚 / 確認 {others} 枚 / 提案 {self._proposed_judgment}"
             f" {self._proposed_score}点）"
         )
 
     def _after_applied(self, ids: list[int], *, hide: bool) -> None:
         if hide and group_grade_hide_decided_enabled():
-            drop = {int(x) for x in ids if int(x or 0)}
+            drop = {int(x) for x in ids if int(x or 0) and int(x) not in self.reference_ids}
             self.items = [
                 i for i in self.items if int(i.get("result_id") or 0) not in drop
             ]
             self._selected_ids -= drop
-            if not self.items:
+            pending = [
+                i
+                for i in self.items
+                if int(i.get("result_id") or 0) not in self.reference_ids
+            ]
+            if not pending:
                 self.accept()
                 return
         self._refresh_info_label()
@@ -328,6 +456,7 @@ class GroupGradeDialog(QDialog):
                     zoom,
                     selected_ids=self._selected_ids,
                     on_click=self._on_tile_clicked,
+                    show_ocr=True,
                 )
                 self.panel.add_tile(tile, idx)
             self._ink_stacks = list(self.page._ink_stacks)
@@ -336,6 +465,132 @@ class GroupGradeDialog(QDialog):
 
         if preserve_scroll and (saved_v or saved_h):
             self.page._schedule_scroll_restore(self.scroll, saved_v, saved_h)
+
+
+class MismatchOcrPicker(QDialog):
+    """不一致のあるOCRについて、同じ文字列の答案を全部並べて切り分ける。"""
+
+    def __init__(self, page: "StepManualPage", window_parent: QWidget | None = None) -> None:
+        super().__init__(window_parent or page)
+        self.page = page
+        self.setWindowTitle("同じOCRを並べて切り分ける")
+        self.resize(720, 520)
+        lay = QVBoxLayout(self)
+        note = h.caption_label(
+            "判定が食い違うOCRごとに、同じ文字列の答案をすべて表示します。"
+            "一致している答案も一緒に並べ、見た目が違うものは表記を書いて切り分けてください。"
+        )
+        note.setWordWrap(True)
+        lay.addWidget(note)
+        self._host = QWidget()
+        self._host_lay = QVBoxLayout(self._host)
+        self._host_lay.setContentsMargins(0, 0, 0, 0)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(self._host)
+        lay.addWidget(scroll, 1)
+        close_box = QDialogButtonBox(QDialogButtonBox.Close)
+        close_btn = close_box.button(QDialogButtonBox.Close)
+        if close_btn is not None:
+            close_btn.setText("閉じる")
+        close_box.rejected.connect(self.reject)
+        lay.addWidget(close_box)
+        self._reload()
+
+    def _reload(self) -> None:
+        while self._host_lay.count():
+            item = self._host_lay.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.deleteLater()
+        fid = self.page._selected_field_id()
+        test_id = str(self.page.app.active_test_id or "")
+        if not fid or not test_id:
+            self._host_lay.addWidget(QLabel("記述欄が選ばれていません。"))
+            return
+        rows = list_manual_criteria_mismatches(
+            test_id, fid, max_score=self.page._field_max_score()
+        )
+        if not rows:
+            self._host_lay.addWidget(
+                QLabel("この記述欄では、採点基準と手動採点の食い違いはありません。")
+            )
+            self._host_lay.addStretch()
+            return
+        grouped: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            ans = str(row.get("answer_text") or "なし")
+            grouped.setdefault(ans, row)
+        for ans, sample in grouped.items():
+            peers = self.page._peer_items_for_answer(ans)
+            mismatch_n = sum(1 for row in rows if str(row.get("answer_text") or "なし") == ans)
+            btn = QPushButton(
+                f"{ans}    不一致 {mismatch_n} 枚 / 同じOCR {len(peers)} 枚"
+            )
+            btn.setCursor(Qt.PointingHandCursor)
+            btn.clicked.connect(
+                lambda _c=False, a=ans, s=dict(sample): self._open_group(a, s)
+            )
+            self._host_lay.addWidget(btn)
+        self._host_lay.addStretch()
+
+    def _open_group(self, answer_text: str, sample: dict[str, Any]) -> None:
+        page = self.page
+        fid = page._selected_field_id()
+        test_id = str(page.app.active_test_id or "")
+        if not fid or not test_id:
+            return
+        rows = list_manual_criteria_mismatches(
+            test_id, fid, max_score=page._field_max_score()
+        )
+        mismatch_ids = {
+            int(row.get("rowIndex") or 0)
+            for row in rows
+            if str(row.get("answer_text") or "なし") == answer_text
+            and int(row.get("rowIndex") or 0) > 0
+        }
+        cj = normalize_judgment(sample.get("criteria_judgment")) or "○"
+        try:
+            cs = int(sample.get("criteria_score") or 0)
+        except (TypeError, ValueError):
+            cs = 0
+        refs: list[dict[str, Any]] = []
+        others: list[dict[str, Any]] = []
+        for item in page._peer_items_for_answer(answer_text):
+            rid = int(item.get("result_id") or 0)
+            mj = normalize_judgment(item.get("judgment"))
+            if rid in mismatch_ids:
+                others.append(
+                    page._clone_grade_item(item, f"不一致 手動{mj or '未'} / 基準{cj}")
+                )
+            elif mj not in ("○", "△", "×"):
+                others.append(page._clone_grade_item(item, f"未採点 / 基準{cj}"))
+            else:
+                refs.append(page._clone_grade_item(item, "基準と一致"))
+        if not refs and others:
+            anchor = others.pop(0)
+            anchor["_peer_caption"] = "比較用（先頭）"
+            refs.append(anchor)
+        if not refs and not others:
+            h.info(self, "画像なし", "このOCRの答案画像がありません。")
+            return
+        lead = (
+            f"自動採点（採点基準）では「{answer_text}」は {cj}（{cs}点）です。"
+            "先頭は基準と一致している答案、続きは食い違いと未採点です。"
+        )
+        dlg = GroupGradeDialog(
+            page,
+            answer_text,
+            others,
+            judgment=cj,
+            score=cs,
+            reference_items=refs,
+            lead=lead,
+            window_parent=self,
+        )
+        dlg.exec()
+        QTimer.singleShot(0, self._reload)
+
 
 class StepManualPage(QWidget):
     """記述欄画像を並べ、複数選択して ○△×/? を一括反映する手動採点。"""
@@ -377,6 +632,8 @@ class StepManualPage(QWidget):
         self._scroll_restore_token: object | None = None
         self._criteria_mismatch_ids: set[int] = set()
         self._in_group_dialog = False
+        self._patterns_moved = False
+        self._loaded_field_id: str | None = None
 
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         root = QVBoxLayout(self)
@@ -1323,7 +1580,7 @@ class StepManualPage(QWidget):
             tri_btn.setVisible(max_score > 1)
         self._rebuild_palette_buttons()
 
-    def _load_crops_async(self) -> None:
+    def _load_crops_async(self, on_ready: Any = None) -> None:
         fid = self._selected_field_id()
         test_id = self.app.active_test_id
         if not fid or not test_id:
@@ -1339,6 +1596,8 @@ class StepManualPage(QWidget):
                 "採点結果がありません。手動採点の「空DB作成」を実行するか、"
                 "自動採点の ⑦ OCR実行 でテキスト化してください。"
             )
+            if on_ready is not None:
+                h.warn(self, "画像なし", "採点結果がないため、切り分けを開けません。")
             return
         rows = [
             {
@@ -1353,6 +1612,7 @@ class StepManualPage(QWidget):
             }
             for r in results
         ]
+        self._loaded_field_id = None
         self._clear_grid()
         self.crop_panel.set_message(f"画像を読み込み中…（{len(rows)}枚）")
         self.status_label.setText(f"{len(rows)} 件を読み込み中…")
@@ -1398,8 +1658,37 @@ class StepManualPage(QWidget):
             self._refresh_filter_snapshot()
             self._render_grid(preserve_scroll=False)
             self._update_status_summary()
+            self._loaded_field_id = fid
+            if on_ready is not None:
+                on_ready()
 
         h.run_in_thread(self, lambda: load_crops_for_rows(rows, field), done)
+
+    def open_mismatch_ocr_split(
+        self, field_id: str, window_parent: QWidget | None = None
+    ) -> None:
+        """不一致のあるOCRと、同じ文字列の答案をまとめて切り分ける。"""
+        fid = str(field_id or "").strip()
+        self._split_window_parent = window_parent
+        if not fid or not self.app.active_test_id:
+            return
+        if not self._fields:
+            self._fields = get_answer_fields(self.app.active_test_id)
+            self._rebuild_field_combo(prefer_fid=fid)
+        matched = next((i for i, f in enumerate(self._fields) if f["id"] == fid), -1)
+        if matched < 0:
+            h.warn(self, "記述欄なし", "その記述欄は見つかりません。")
+            return
+        self.field_combo.blockSignals(True)
+        self.field_combo.setCurrentIndex(matched)
+        self.field_combo.blockSignals(False)
+        if self._loaded_field_id == fid and self._items:
+            self._show_mismatch_ocr_picker()
+            return
+        self._load_crops_async(on_ready=self._show_mismatch_ocr_picker)
+
+    def _show_mismatch_ocr_picker(self) -> None:
+        MismatchOcrPicker(self, getattr(self, "_split_window_parent", None)).exec()
 
     def viewer_scroll(self) -> QScrollArea:
         return self.crop_scroll
@@ -2011,18 +2300,135 @@ class StepManualPage(QWidget):
         for ans in answers:
             fn(field_id, ans, judgment, score)
 
+    @staticmethod
+    def _clone_grade_item(item: dict[str, Any], caption: str = "") -> dict[str, Any]:
+        cloned = dict(item)
+        row = item.get("row")
+        if isinstance(row, dict):
+            cloned["row"] = dict(row)
+        if caption:
+            cloned["_peer_caption"] = caption
+        return cloned
+
+    @staticmethod
+    def _write_answer_text(items: list[dict[str, Any]], result_ids: set[int], text: str) -> None:
+        for item in items:
+            if int(item.get("result_id") or 0) not in result_ids:
+                continue
+            item["answer_text"] = text
+            row = item.get("row")
+            if isinstance(row, dict):
+                row["answer_text"] = text
+
+    def _retarget_ocr_texts(
+        self,
+        result_ids: list[int],
+        old_text: str,
+        new_text: str,
+        judgment: str,
+        *,
+        also_items: list[dict[str, Any]] | None = None,
+    ) -> None:
+        """同じOCRに見えていた答案を、実際の表記へ移す。"""
+        fid = self._selected_field_id()
+        test_id = str(self.app.active_test_id or "")
+        ids = [int(i) for i in result_ids if int(i or 0)]
+        new_val = str(new_text or "").strip()
+        old_val = str(old_text or "").strip() or "なし"
+        if not fid or not test_id or not ids or not new_val or new_val == old_val:
+            return
+        try:
+            rewrite_field_texts_for_result_ids(test_id, fid, ids, new_val)
+        except Exception as e:
+            h.warn(self, "OCRの修正に失敗", str(e))
+            return
+        id_set = set(ids)
+        self._write_answer_text(self._items, id_set, new_val)
+        if also_items is not None:
+            self._write_answer_text(also_items, id_set, new_val)
+        self._patterns_moved = True
+        self._sync_uniform_answer(new_val, judgment)
+        try:
+            drop_answer_criterion_if_no_final(test_id, fid, old_val)
+            self._refresh_step8_patterns()
+        except Exception as e:
+            h.warn(self, "採点基準の整理に失敗", str(e))
+
+    def _sync_uniform_answer(self, answer_text: str, judgment: str) -> None:
+        """同じ表記の答案がすべて同じ○△×のときだけ、採点基準へ書く。"""
+        if not manual_auto_grading_link_enabled():
+            return
+        fid = self._selected_field_id()
+        test_id = str(self.app.active_test_id or "")
+        ans = str(answer_text or "").strip() or "なし"
+        if not fid or not test_id or normalize_judgment(judgment) not in ("○", "△", "×"):
+            return
+        ids: list[int] = []
+        seen: set[tuple[str, int]] = set()
+        for item in self._items:
+            if self._item_answer_text(item) != ans:
+                continue
+            nj = normalize_judgment(item.get("judgment"))
+            if nj not in ("○", "△", "×"):
+                return
+            try:
+                sc = int(item.get("score") or 0)
+            except (TypeError, ValueError):
+                sc = 0
+            seen.add((nj, sc))
+            rid = int(item.get("result_id") or 0)
+            if rid:
+                ids.append(rid)
+        if len(seen) != 1 or not ids:
+            return
+        nj, sc = next(iter(seen))
+        try:
+            sync_committed_grades_to_criteria(
+                test_id,
+                fid,
+                ids,
+                nj,
+                sc,
+                max_score=self._field_max_score(),
+                propagate_to_results=False,
+            )
+            self._push_criteria_to_step8(fid, {ans}, nj, sc)
+        except Exception as e:
+            h.warn(self, "採点基準への同期失敗", str(e))
+
+    def _refresh_step8_patterns(self) -> None:
+        pages = getattr(self.app, "pages", None)
+        step8 = pages.get(8) if isinstance(pages, dict) else None
+        if step8 is None:
+            return
+        current = getattr(step8, "_selected_field_id", None)
+        if not callable(current) or str(current() or "") != str(self._selected_field_id() or ""):
+            return
+        refresh = getattr(step8, "_aggregate", None)
+        if callable(refresh):
+            refresh()
+
     def _open_peer_checks(
         self,
         answers: list[str],
         judgment: str,
         score: int,
-        exclude_ids: set[int],
+        graded_ids: list[int],
     ) -> None:
+        id_order = [int(i) for i in graded_ids if int(i or 0)]
+        id_set = set(id_order)
         for ans in answers:
+            peers = self._peer_items_for_answer(ans)
+            refs: list[dict[str, Any]] = []
+            for rid in id_order:
+                for item in peers:
+                    if int(item.get("result_id") or 0) == rid:
+                        refs.append(self._clone_grade_item(item, "今付けた答案"))
+                        break
             others = [
-                i
-                for i in self._peer_items_for_answer(ans)
-                if int(i.get("result_id") or 0) not in exclude_ids
+                self._clone_grade_item(item)
+                for item in peers
+                if int(item.get("result_id") or 0) not in id_set
             ]
             if not others:
                 continue
@@ -2034,15 +2440,21 @@ class StepManualPage(QWidget):
                     others,
                     judgment=judgment,
                     score=score,
+                    reference_items=refs,
                 )
                 dlg.exec()
             finally:
                 self._in_group_dialog = False
-        if self._print_mark_mode or self._sort_mode in ("judgment_file", "judgment_id"):
+        if (
+            self._patterns_moved
+            or self._print_mark_mode
+            or self._sort_mode in ("judgment_file", "judgment_id")
+        ):
             self._render_grid(preserve_scroll=True)
         else:
             self._sync_tile_judgment_chrome()
             self._update_selection_label()
+        self._patterns_moved = False
         self._update_status_summary()
         self._rebuild_field_combo(prefer_fid=self._selected_field_id())
 
@@ -2081,8 +2493,14 @@ class StepManualPage(QWidget):
         linked_judgment = nj
         linked_score = score
         # リンクONのときだけ、今決めた判定を⑧の当該回答へ即反映する。
-        # 同じOCRの他答案へは自動で広げない（確認ポップアップで一件ずつ決める）。
-        if manual_auto_grading_link_enabled() and nj in ("○", "△", "×"):
+        # 同じOCRの未採点が残っている間は基準にしない。確認で同じと
+        # 揃うか、表記を切り分けてから基準へ書く。
+        if (
+            manual_auto_grading_link_enabled()
+            and nj in ("○", "△", "×")
+            and not peer_answers
+            and not self._in_group_dialog
+        ):
             try:
                 sync_res = sync_committed_grades_to_criteria(
                     self.app.active_test_id,
@@ -2147,9 +2565,9 @@ class StepManualPage(QWidget):
         if peer_answers:
             QTimer.singleShot(
                 0,
-                lambda a=list(peer_answers), j=linked_judgment, s=linked_score, ids=set(graded_ids): (
-                    self._open_peer_checks(a, j, s, ids)
-                ),
+            lambda a=list(peer_answers), j=linked_judgment, s=linked_score, ids=list(result_ids): (
+                self._open_peer_checks(a, j, s, ids)
+            ),
             )
         elif not silent:
             if not nj:
@@ -2405,6 +2823,8 @@ class StepManualPage(QWidget):
         zoom: float,
         selected_ids: set[int] | None = None,
         on_click: Any = None,
+        *,
+        show_ocr: bool | None = None,
     ) -> QWidget:
         selected_set = self._selected_ids if selected_ids is None else selected_ids
         click_handler = self._on_tile_image_clicked if on_click is None else on_click
@@ -2436,6 +2856,14 @@ class StepManualPage(QWidget):
             f" border-radius: 6px; }}"
         )
         tile.setCursor(Qt.PointingHandCursor)
+        caption = str(item.get("_peer_caption") or "").strip()
+        if caption:
+            cap = QLabel(caption)
+            cap.setStyleSheet(
+                "border: none; background: transparent; font-size: 11px; font-weight: 700;"
+                f" color: {COLORS['accent']};"
+            )
+            lay.addWidget(cap)
 
         row = item["row"]
         pil = item["pil"]
@@ -2502,7 +2930,8 @@ class StepManualPage(QWidget):
                 f" border: none; background: transparent;"
             )
             lay.addWidget(fn)
-        if self.crop_controls.show_ocr_text():
+        ocr_on = self.crop_controls.show_ocr_text() if show_ocr is None else show_ocr
+        if ocr_on:
             ans = QLabel(str(row.get("answer_text") or ""))
             ans.setWordWrap(True)
             ans.setStyleSheet(

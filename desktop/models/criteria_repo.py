@@ -937,6 +937,38 @@ def sync_committed_grades_to_criteria(
     }
 
 
+def drop_answer_criterion_if_no_final(
+    test_id: str,
+    field_id: str,
+    answer_text: str,
+) -> bool:
+    """この表記を○△×付きで持つ答案が無くなったら、採点基準から外す。
+
+    OCRを切り分けて元の文字列から離れたあと、残った未採点へ
+    昔の判定が波及しないようにする。
+    """
+    fid = str(field_id or "").strip()
+    ans = str(answer_text or "").strip() or "なし"
+    if not fid:
+        return False
+    for row in get_all_results(test_id):
+        text = str((row.get("textMapping") or {}).get(fid, "") or "").strip() or "なし"
+        if text != ans:
+            continue
+        if normalize_judgment((row.get("judgments") or {}).get(fid, "")) in FINAL_JUDGMENTS:
+            return False
+    rules = [
+        r
+        for r in get_grading_criteria(test_id, fid)
+        if (str(r.get("answer_text") or "").strip() or "なし") != ans
+    ]
+    current = get_grading_criteria(test_id, fid)
+    if len(rules) == len(current):
+        return False
+    save_grading_criteria(test_id, fid, rules)
+    return True
+
+
 def get_field_answer_details(test_id: str, field_id: str) -> list[dict[str, Any]]:
     """記述欄ごとの生徒回答詳細（外れ値検出・画像表示用）。"""
     init_db()

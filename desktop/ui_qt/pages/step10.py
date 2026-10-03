@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from constants import MANUAL_GRADING_STEP_ID
 from models.criteria_repo import list_question_judgment_disagreements
 
 from models.domain_repo import (
@@ -41,24 +42,27 @@ class JudgmentMismatchDialog(QDialog):
 
     def __init__(self, parent: QWidget, rows: list[dict[str, Any]]) -> None:
         super().__init__(parent)
+        self._app = getattr(parent, "app", None)
         self.setWindowTitle("手動採点と自動採点の判定が食い違っています")
-        self.resize(760, 420)
+        self.resize(920, 460)
         lay = QVBoxLayout(self)
         note = QLabel(
             "両方に判定がある答案について、"
             "手動採点と自動採点（採点基準）の ○・△・× の数です。"
+            "「切り分ける」で、その問いの同じOCRの答案をまとめて比較できます。"
         )
         note.setWordWrap(True)
         lay.addWidget(note)
 
-        table = QTableWidget(len(rows), 3)
-        table.setHorizontalHeaderLabels(["問い", "手動採点", "自動採点"])
+        table = QTableWidget(len(rows), 4)
+        table.setHorizontalHeaderLabels(["問い", "手動採点", "自動採点", ""])
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         table.setSelectionMode(QTableWidget.SelectionMode.NoSelection)
         table.setWordWrap(True)
         for i, row in enumerate(rows):
             name = str(row.get("display_name") or row.get("field_id") or "")
+            fid = str(row.get("field_id") or "")
             name_item = QTableWidgetItem(
                 f"{name}\n不一致 {int(row.get('mismatch_count') or 0)} 人"
                 f" / 比較 {int(row.get('compared_count') or 0)} 人"
@@ -72,11 +76,14 @@ class JudgmentMismatchDialog(QDialog):
             table.setItem(i, 0, name_item)
             table.setItem(i, 1, manual_item)
             table.setItem(i, 2, auto_item)
+            split_btn = h.button("切り分ける", lambda _c=False, field_id=fid: self._open_split(field_id))
+            table.setCellWidget(i, 3, split_btn)
             table.setRowHeight(i, 52)
         table.resizeColumnsToContents()
-        table.horizontalHeader().setStretchLastSection(True)
+        table.horizontalHeader().setStretchLastSection(False)
         table.setColumnWidth(0, 220)
         table.setColumnWidth(1, 220)
+        table.setColumnWidth(3, 120)
         lay.addWidget(table, 1)
 
         buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok)
@@ -85,6 +92,32 @@ class JudgmentMismatchDialog(QDialog):
             ok.setText("確認")
         buttons.accepted.connect(self.accept)
         lay.addWidget(buttons)
+
+    def _open_split(self, field_id: str) -> None:
+        pages = getattr(self._app, "pages", None)
+        page = pages.get(MANUAL_GRADING_STEP_ID) if isinstance(pages, dict) else None
+        opener = getattr(page, "open_mismatch_ocr_split", None)
+        if not callable(opener):
+            h.warn(self, "切り分け", "手動採点の画面を開けません。")
+            return
+        opener(field_id, self)
+
+
+def show_judgment_mismatch_dialog(host: QWidget) -> None:
+    if not host.isVisible():
+        return
+    app = getattr(host, "app", None)
+    test_id = getattr(app, "active_test_id", None)
+    if not test_id:
+        return
+    try:
+        rows = list_question_judgment_disagreements(test_id)
+    except Exception as e:
+        h.warn(host, "判定の確認", str(e))
+        return
+    if not rows:
+        return
+    JudgmentMismatchDialog(host, rows).exec()
 
 
 class Step10Page(QWidget):
@@ -160,22 +193,7 @@ class Step10Page(QWidget):
         else:
             done_n = sum(1 for r in self._rows if complete_map.get(r["fieldId"]))
             self.status_label.setText(f"採点完了 {done_n} / {len(self._rows)} 記述欄")
-        QTimer.singleShot(0, self._notify_judgment_mismatches)
-
-    def _notify_judgment_mismatches(self) -> None:
-        if not self.isVisible():
-            return
-        test_id = self.app.active_test_id
-        if not test_id:
-            return
-        try:
-            rows = list_question_judgment_disagreements(test_id)
-        except Exception as e:
-            h.warn(self, "判定の確認", str(e))
-            return
-        if not rows:
-            return
-        JudgmentMismatchDialog(self, rows).exec()
+        QTimer.singleShot(0, lambda: show_judgment_mismatch_dialog(self))
 
     def _on_save(self) -> None:
         if not self.app.require_active_test():

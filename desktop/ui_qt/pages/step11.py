@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QCheckBox,
@@ -632,6 +632,12 @@ class Step11Page(QWidget):
                 )
             )
         self._update_roster_import_button()
+        QTimer.singleShot(0, self._notify_judgment_mismatches)
+
+    def _notify_judgment_mismatches(self) -> None:
+        from ui_qt.pages.step10 import show_judgment_mismatch_dialog
+
+        show_judgment_mismatch_dialog(self)
 
     def _update_roster_import_button(self) -> None:
         if not getattr(self, "import_roster_btn", None):
