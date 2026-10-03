@@ -836,6 +836,7 @@ def build_feedback_pdf_document(
         _draw_text_annotations_pdf(page, text_annotations)
     if ink_strokes:
         _draw_ink_strokes_pdf(page, ink_strokes)
+    finalize_feedback_pdf(doc)
     return doc
 
 
@@ -897,6 +898,7 @@ def build_original_feedback_pdf_document(
         _draw_text_annotations_mapped(page, text_annotations, matrix, orig_w, orig_h)
     if ink_strokes:
         _draw_ink_strokes_mapped(page, matrix, ink_strokes)
+    finalize_feedback_pdf(doc)
     return doc
 
 
@@ -914,8 +916,26 @@ def rasterize_pdf_bytes(pdf_bytes: bytes, *, scale: float = 2.0) -> Image.Image:
         doc.close()
 
 
+def finalize_feedback_pdf(doc: fitz.Document) -> None:
+    """埋め込んだ日本語フォントを、実際に使った文字だけにする。
+
+    Meiryo などをそのまま入れると 1 枚あたり約 9MB になる。
+    文字の見た目は変えず、ファイルサイズだけ落とす。
+    """
+    try:
+        doc.subset_fonts()
+    except Exception:
+        return
+
+
+def save_feedback_pdf(doc: fitz.Document, path: str | Path) -> None:
+    finalize_feedback_pdf(doc)
+    doc.save(str(path), deflate=True, garbage=4)
+
+
 def pdf_document_to_bytes(doc: fitz.Document) -> bytes:
-    return doc.tobytes(deflate=True, garbage=3)
+    finalize_feedback_pdf(doc)
+    return doc.tobytes(deflate=True, garbage=4)
 
 
 def build_pdf_document_from_image(
@@ -965,7 +985,7 @@ def render_feedback_pdf(
         jpeg_quality=jpeg_quality,
     )
     try:
-        doc.save(str(out_path))
+        save_feedback_pdf(doc, out_path)
     finally:
         doc.close()
     return out_path

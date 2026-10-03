@@ -16,6 +16,7 @@ from models.output_repo import (
 )
 from models.test_repo import get_all_results, list_tests, touch_progress
 from services.feedback_exporter import build_row_pdf_document, sheet_source_ready
+from services.feedback_pdf import save_feedback_pdf
 from services.feedback_renderer import (
     _load_rows_with_extras,
     build_feedback_shared_context,
@@ -288,7 +289,7 @@ def batch_export_duplex_feedback(
                 "個票_表面.pdf" if not back_test_id else DUPLEX_COMBINED_FILENAME
             )
             combined_path = out_dir / combined_name
-            master.save(str(combined_path))
+            save_feedback_pdf(master, combined_path)
         finally:
             master.close()
     else:
@@ -306,7 +307,7 @@ def batch_export_duplex_feedback(
                 out_path = out_dir / duplex_feedback_filename(
                     sid, name, front_only=only_front or not back_test_id
                 )
-                mini.save(str(out_path))
+                save_feedback_pdf(mini, out_path)
                 per_files.append(str(out_path))
                 saved_pages += added
                 saved_students += 1

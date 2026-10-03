@@ -23,6 +23,7 @@ from services.feedback_pdf import (
     build_original_feedback_pdf_document,
     pdf_document_to_bytes,
     rasterize_pdf_bytes,
+    save_feedback_pdf,
 )
 from services.feedback_renderer import (
     build_feedback_payload,
@@ -240,7 +241,7 @@ def export_feedback_row(
             test_id, row, shared=shared, image_basis=basis
         )
         try:
-            doc.save(str(out_path))
+            save_feedback_pdf(doc, out_path)
         finally:
             doc.close()
         return out_path
@@ -298,7 +299,7 @@ def export_combined_feedback_pdf(
                 else "補正画像のある行がありません"
             )
             raise ValueError(f"出力可能な個票がありません（{missing}）。")
-        master.save(str(out_path))
+        save_feedback_pdf(master, out_path)
     finally:
         master.close()
     return saved, skipped, errors
